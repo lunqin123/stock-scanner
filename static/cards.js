@@ -244,6 +244,42 @@ function renderStyledText(txt) {
     return html;
 }
 
+function renderMiniStockCards(items, pageKey) {
+    const titles = { 'scan-trend':'涨幅', 'scan-zhaban':'炸板', 'scan-dtqiaoban':'翘板' };
+    const key = titles[pageKey] || '';
+    let html = '<div class="card-list">';
+    items.forEach((item, i) => {
+        const stagger = Math.min(i + 1, 10);
+        const mainVal = item.change_pct !== undefined ? item.change_pct : 0;
+        const valColor = mainVal >= 5 ? '#34d399' : mainVal >= 3 ? '#fbbf24' : mainVal >= 0 ? '#f87171' : '#f87171';
+        const watched = typeof isWatched === 'function' ? isWatched(item.code) : false;
+
+        html += `<a href="${escapeHtml(item.url)}" target="_blank" class="stock-card stagger-${stagger}">`;
+        html += `<div class="card-header">`;
+        html += `<span class="card-rank">#${i+1}</span>`;
+        html += `<span class="card-name">${escapeHtml(item.name)}</span>`;
+        html += `<span class="card-code">${escapeHtml(item.code)}</span>`;
+        if (typeof isWatched === 'function') {
+            html += `<span class="watchlist-btn ${watched ? 'watched' : ''}" data-code="${escapeHtml(item.code)}" data-name="${escapeHtml(item.name)}" onclick="toggleWatchBtn(this);return false">${watched ? '✓' : '+'}</span>`;
+        }
+        // 右侧数值
+        if (item.change_pct !== undefined) {
+            html += `<span class="card-score" style="color:${valColor}">+${item.change_pct}%</span>`;
+        }
+        html += `</div>`;
+        // 额外信息
+        const extras = [];
+        if (item.seal_time) extras.push(`封板 ${item.seal_time.slice(0,2)}:${item.seal_time.slice(2)}`);
+        if (extras.length) {
+            html += `<div style="padding:2px 0 0;font-size:12px;color:var(--text-muted)">${extras.join(' · ')}</div>`;
+        }
+        html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
+        html += '</a>';
+    });
+    html += '</div>';
+    return html;
+}
+
 function renderTableOutput(txt) {
     // 检测是否是表格格式（含 │ 分隔符和 ── 边框）
     const lines = txt.split('\n').filter(l => l.trim());

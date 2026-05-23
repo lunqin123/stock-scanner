@@ -136,6 +136,8 @@ async function loadCardView(output, pageKey) {
             html += renderSectorCards(items);
         } else if (pageKey === 'scan-limit') {
             html += renderStockCards(items, data);
+        } else if (pageKey === 'scan-trend' || pageKey === 'scan-zhaban' || pageKey === 'scan-dtqiaoban') {
+            html += renderMiniStockCards(items, pageKey);
         } else {
             html += renderSimpleCards(items, pageKey);
         }
