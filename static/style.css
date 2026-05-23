@@ -273,15 +273,19 @@ body {
     background: var(--bg-secondary);
     color: var(--accent);
     padding: 8px 10px;
-    text-align: center;
+    text-align: left;
     border-bottom: 2px solid var(--accent);
     white-space: nowrap;
     font-weight: 600;
 }
 
+.data-table thead th.num {
+    text-align: right;
+}
+
 .data-table tbody td {
     padding: 6px 10px;
-    text-align: center;
+    text-align: left;
     border-bottom: 1px solid var(--border);
     color: var(--text-primary);
 }
@@ -289,6 +293,10 @@ body {
 .data-table tbody td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+}
+
+.data-table tbody td.center {
+    text-align: center;
 }
 
 .data-table tbody tr:hover {

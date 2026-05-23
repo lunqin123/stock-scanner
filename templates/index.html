@@ -275,21 +275,49 @@ function renderTableOutput(txt) {
     }
     if (!rows.length) return null;
 
+    // 判断哪些列是数值列（检查第一行数据，排除序号和股票代码）
+    const numCols = new Set();
+    const centerCols = new Set();
+    if (rows.length > 0) {
+        for (let i = 0; i < headers.length; i++) {
+            const val = (rows[0][i] || '').trim();
+            const h = headers[i].trim();
+            // 序号列居中
+            if (h === '#' || h === '序号') {
+                centerCols.add(i);
+                continue;
+            }
+            // 股票代码列居中
+            if (h.includes('代码')) {
+                centerCols.add(i);
+                continue;
+            }
+            // 纯数值（带符号、小数、百分比）右对齐
+            if (/^[+-]?(0|[1-9]\d*)(\.\d+)?%?$/.test(val) && val.length < 10) {
+                numCols.add(i);
+            }
+        }
+    }
+
     // 构建 HTML 表格
     let html = '<div class="table-wrap"><table class="data-table">';
     html += '<thead><tr>';
-    for (const h of headers) {
-        html += `<th>${escapeHtml(h)}</th>`;
+    for (let i = 0; i < headers.length; i++) {
+        const h = headers[i];
+        let cls = '';
+        if (numCols.has(i)) cls = 'num';
+        else if (centerCols.has(i)) cls = 'center';
+        html += cls ? `<th class="${cls}">${escapeHtml(h)}</th>` : `<th>${escapeHtml(h)}</th>`;
     }
     html += '</tr></thead><tbody>';
     for (const row of rows) {
         html += '<tr>';
         for (let i = 0; i < row.length; i++) {
             const val = row[i];
-            // 数值列右对齐
-            const isNum = /^[+-]?\d*\.?\d+%?$/.test(val.trim());
-            const cls = isNum ? ' class="num"' : '';
-            html += `<td${cls}>${escapeHtml(val)}</td>`;
+            let cls = '';
+            if (numCols.has(i)) cls = 'num';
+            else if (centerCols.has(i)) cls = 'center';
+            html += cls ? `<td class="${cls}">${escapeHtml(val)}</td>` : `<td>${escapeHtml(val)}</td>`;
         }
         html += '</tr>';
     }
