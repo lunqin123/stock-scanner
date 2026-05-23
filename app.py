@@ -396,12 +396,13 @@ def api_zhaban_cards():
 
     code_col = zb.columns[1]
     name_col = zb.columns[2]
-    seal_col = zb.columns[5] if len(zb.columns) > 5 else None
+    # 首次封板时间在第12列(index 11)
+    seal_col = '首次封板时间' if '首次封板时间' in zb.columns else zb.columns[11]
 
     items = []
     for _, row in zb.iterrows():
         code = str(row[code_col]).strip().zfill(6)
-        seal_time = str(row[seal_col])[:4] if seal_col else '?'
+        seal_time = str(row.get(seal_col, ''))[:4] if seal_col else '?'
         items.append({
             'code': code,
             'name': str(row[name_col]),
