@@ -762,6 +762,7 @@ async def api_scan_limit_up_stream():
                 if typ == "done":
                     break
                 yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+                await asyncio.sleep(0.03)
             except queue.Empty:
                 continue
 

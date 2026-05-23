@@ -332,8 +332,12 @@ async function loadCardViewStream(output, pageKey) {
     txt.textContent = '正在扫描...';
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 
-    const STEPS = ['涨停池', '过滤', '资金流', '评分', '报告'];
-    let step = 0;
+    // 各步骤加权进度（资金流占最重）
+    const STEP_PCT = { '第1步':5, '第2步':10, '第3步':40, '第4步':55, '第5步':65, '第6步':80, '第7步':90 };
+    let currentPct = 3;
+
+    // 短暂延迟让浏览器渲染进度条
+    await new Promise(r => setTimeout(r, 80));
 
     try {
         const resp = await fetch('/api/scan/limit-up/stream');
@@ -357,12 +361,17 @@ async function loadCardViewStream(output, pageKey) {
 
                         if (msg.type === 'progress') {
                             txt.textContent = msg.text;
-                            for (let i = 0; i < STEPS.length; i++) {
-                                if (msg.text.includes(STEPS[i])) {
-                                    step = Math.max(step, i + 1);
+                            // 按步骤加权估算进度
+                            for (const [kw, pct] of Object.entries(STEP_PCT)) {
+                                if (msg.text.includes(kw)) {
+                                    currentPct = Math.max(currentPct, pct);
+                                    break;
                                 }
                             }
-                            fill.style.width = Math.min(95, Math.round(step / STEPS.length * 100)) + '%';
+                            // 资金流子步骤修正
+                            if (msg.text.includes('命中本地缓存')) currentPct = Math.max(currentPct, 48);
+                            else if (msg.text.includes('同花顺资金流')) currentPct = Math.max(currentPct, 18);
+                            fill.style.width = Math.min(95, currentPct) + '%';
 
                         } else if (msg.type === 'complete') {
                             bar.style.display = 'none';
