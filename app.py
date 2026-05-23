@@ -48,7 +48,9 @@ def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
 
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(lambda: _run_limit_up_scan(today, table))
-    if err.strip():
+    # 只有包含 [运行时错误] 才算真正的错误，进度信息是 stderr 正常输出
+    has_runtime_error = "[运行时错误]" in err
+    if has_runtime_error:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out, "mode": "table" if table else "detail"}
 
@@ -69,20 +71,15 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
         print("no_data")
         return
 
-    df = score_seal_strength(df)
-    df = get_money_flow_scores(df)
-    df = get_sector_heat_scores(df)
-    df = score_tech_form(df)
+    # 各维度评分（返回 Series，不是 DataFrame）
+    seal_scores = score_seal_strength(df)
+    money_scores, raw_money = get_money_flow_scores(df)
+    sector_scores = get_sector_heat_scores(df, money_series=raw_money)
+    tech_scores = score_tech_form(df)
 
-    # 总分
-    score_cols = [c for c in df.columns if c.endswith('_score')]
-    df['total_score'] = df[score_cols].sum(axis=1)
-    df = df.sort_values('total_score', ascending=False).head(TOP_N).reset_index(drop=True)
-
-    if table_mode:
-        print(format_table_output(df))
-    else:
-        print(format_output(df))
+    fmt = format_table_output if table_mode else format_output
+    print(fmt(df, money_scores, sector_scores, seal_scores, tech_scores,
+              raw_money=raw_money))
 
 
 @app.get("/api/scan/zhaban")
@@ -91,7 +88,7 @@ def api_scan_zhaban(table: bool = Query(False)):
     from scanner import scan_zhaban
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(scan_zhaban, today, table)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 
@@ -102,7 +99,7 @@ def api_scan_trend(table: bool = Query(False)):
     from scanner import scan_trend
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(scan_trend, today, table)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 
@@ -113,7 +110,7 @@ def api_scan_sector(table: bool = Query(False)):
     from scanner import scan_sector
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(scan_sector, today, table)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 
@@ -124,7 +121,7 @@ def api_scan_dtqiaoban(table: bool = Query(False)):
     from scanner import scan_dtqiaoban
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(scan_dtqiaoban, today, table)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 
@@ -134,7 +131,7 @@ def api_backtest():
     """运行滚动回测"""
     from scanner import run_backtest
     out, err = _capture(run_backtest)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 
@@ -191,7 +188,7 @@ def api_sentiment():
     from datetime import date
     today = date.today().strftime("%Y%m%d")
     out, err = _capture(detect_market_sentiment, today)
-    if err.strip():
+    if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
     return {"ok": True, "output": out}
 

@@ -176,11 +176,13 @@ def fetch_fund_flow_data():
     try:
         fund_df = ak.stock_fund_flow_individual()
         fund_df = fund_df.copy()
+        # akshare 返回列: 序号, 股票代码, 股票简称, 最新价, 涨跌幅, 换手率, 流入资金, 流出资金, 净额, 成交额
         fund_df['_code'] = fund_df.iloc[:, 1].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
         fund_df['_price'] = fund_df.iloc[:, 3].astype(float)
-        fund_df['_net'] = fund_df.iloc[:, 6].astype(str)
-        fund_df['_super'] = fund_df.iloc[:, 7].astype(str)
-        fund_df['_big'] = fund_df.iloc[:, 8].astype(str)
+        fund_df['_net'] = fund_df.iloc[:, 8].astype(str)   # 净额 = 流入 - 流出
+        # 无超大单/大单细分，统一置空
+        fund_df['_super'] = '0'
+        fund_df['_big'] = '0'
         # 只缓存需要的列，缩小磁盘写入量
         slim = fund_df[['_code', '_price', '_net', '_super', '_big']].copy()
         _cache_put("fund_flow", slim)
@@ -233,21 +235,15 @@ def get_money_flow_scores(df: pd.DataFrame, fund_df=None):
 
     # 获取主力净流入、超大单、大单数据
     code_to_net = {}
-    code_to_super = {}
-    code_to_big = {}
     for _, row in fund_df.iterrows():
         c = row['_code']
         code_to_net[c] = parse_amount(row['_net'])
-        code_to_super[c] = parse_amount(row['_super'])
-        code_to_big[c] = parse_amount(row['_big'])
 
     scores = pd.Series(0.0, index=df.index)
     raw_values = pd.Series(0.0, index=df.index)
     for idx in df.index:
         code = str(df.loc[idx, '代码']).strip().zfill(6)
         net_val = code_to_net.get(code, 0)
-        super_val = code_to_super.get(code, 0)
-        big_val = code_to_big.get(code, 0)
         raw_values[idx] = net_val    # 入库仍为主力净流入
 
         # ── 基础分 (0-12): 基于主力净流入绝对值 ──
@@ -270,27 +266,21 @@ def get_money_flow_scores(df: pd.DataFrame, fund_df=None):
         else:
             base = 0.0
 
-        # ── 结构分 (0-5): 超大单占比（主力净流入为正时有效） ──
+        # ── 结构分 (0-5): 基于净流入质量 ──
         structure = 0.0
-        if net_val > 0 and (super_val + big_val) != 0:
-            super_ratio = super_val / (super_val + big_val) if (super_val + big_val) > 0 else 0
-            if super_ratio > 0.7:
-                structure = 5.0   # 机构主导，质量最高
-            elif super_ratio > 0.5:
+        if net_val > 0:
+            # 无超大单/大单细分（akshare 接口变更后），
+            # 用净流入大小估算资金质量
+            if net_val > 5e8:
+                structure = 5.0
+            elif net_val > 2e8:
                 structure = 4.0
-            elif super_ratio > 0.3:
+            elif net_val > 1e8:
+                structure = 3.0
+            elif net_val > 5e7:
                 structure = 2.0
             else:
-                structure = 1.0   # 大单为主，略显散乱
-        elif net_val > 0 and (super_val + big_val) == 0:
-            structure = 2.0       # 数据异常，给保守分
-        elif net_val < 0:
-            if super_val < -5e7:
-                structure = -2.0
-            elif super_val < -1e7:
-                structure = -1.0
-            else:
-                structure = 0.0
+                structure = 1.0
 
         scores[idx] = max(0, min(20, base + structure))
     return scores, raw_values
