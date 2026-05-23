@@ -292,8 +292,8 @@ function renderTableOutput(txt) {
                 centerCols.add(i);
                 continue;
             }
-            // 纯数值（带符号、小数、百分比）右对齐
-            if (/^[+-]?(0|[1-9]\d*)(\.\d+)?%?$/.test(val) && val.length < 10) {
+            // 数值列右对齐（纯数字、百分比、带亿/万单位）
+            if (/^[+-]?(0|[1-9]\d*)(\.\d+)?(%|亿|万)?$/.test(val) && val.length < 12) {
                 numCols.add(i);
             }
         }
