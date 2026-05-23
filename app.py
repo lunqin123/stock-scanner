@@ -57,29 +57,108 @@ def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
 
 def _run_limit_up_scan(today_str: str, table_mode: bool):
     """涨停池扫描核心逻辑（与 scanner.main() 逻辑一致）"""
-    from scanner import fetch_limit_up_pool, pre_filter, score_seal_strength
-    from scanner import get_money_flow_scores, get_sector_heat_scores, score_tech_form
-    from scanner import format_table_output, format_output, TOP_N
+    from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
+                         get_money_flow_scores, get_sector_heat_scores,
+                         score_tech_form, filter_by_price,
+                         fetch_fund_flow_data, detect_market_sentiment,
+                         analyze_dragon_tiger, score_stock_history,
+                         format_table_output, format_output, TOP_N)
+    import pandas as pd
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import date
 
-    df = fetch_limit_up_pool()
-    if df is None or df.empty:
+    pool = fetch_limit_up_pool()
+    if pool is None or pool.empty:
         print("no_data")
         return
 
-    df = pre_filter(df)
-    if df.empty:
+    filtered = pre_filter(pool)
+    if filtered.empty:
         print("no_data")
         return
 
-    # 各维度评分（返回 Series，不是 DataFrame）
-    seal_scores = score_seal_strength(df)
-    money_scores, raw_money = get_money_flow_scores(df)
-    sector_scores = get_sector_heat_scores(df, money_series=raw_money)
-    tech_scores = score_tech_form(df)
+    # 获取同花顺资金流（同时用于资金评分 + 股价过滤）
+    fund_df, fund_err = fetch_fund_flow_data()
+    if fund_df is None:
+        money_scores = pd.Series(0.0, index=filtered.index)
+        sector_scores = get_sector_heat_scores(filtered)
+        tech_scores = score_tech_form(filtered)
+        seal_scores = score_seal_strength(filtered)
+        fmt = format_table_output if table_mode else format_output
+        print(fmt(filtered, money_scores, sector_scores, seal_scores, tech_scores))
+        return
 
+    filtered = filter_by_price(filtered, fund_df)
+    if filtered.empty:
+        print("no_data")
+        return
+
+    seal_scores = score_seal_strength(filtered)
+    money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
+    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
+    tech_scores = score_tech_form(filtered)
+
+    # 并行获取预测评分
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {
+            ex.submit(detect_market_sentiment, today_str): "sentiment",
+            ex.submit(analyze_dragon_tiger, filtered, today_str): "lhb",
+            ex.submit(score_stock_history, filtered, today_str): "history",
+            ex.submit(score_community, filtered): "community",
+        }
+        res = {}
+        for f in as_completed(futs):
+            key = futs[f]
+            try:
+                res[key] = f.result()
+            except Exception:
+                pass
+
+    if res.get("sentiment"):
+        sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
+    else:
+        sentiment_score, sentiment_level, sentiment_detail = 5.0, "未知", {}
+
+    if res.get("lhb"):
+        lhb_bonus, _ = res["lhb"]
+    else:
+        lhb_bonus = pd.Series(0.0, index=filtered.index)
+
+    if res.get("history"):
+        history_scores, _ = res["history"]
+    else:
+        history_scores = pd.Series(2.5, index=filtered.index)
+
+    community_scores = res.get("community")
+    if community_scores is None:
+        community_scores = pd.Series(3.5, index=filtered.index)
+
+    # 龙虎榜加分并入资金质量
+    money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
+    sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
+
+    import weight_manager
+    weights = weight_manager.load_weights()
     fmt = format_table_output if table_mode else format_output
-    print(fmt(df, money_scores, sector_scores, seal_scores, tech_scores,
-              raw_money=raw_money))
+    print(fmt(filtered, money_scores, sector_scores, seal_scores, tech_scores,
+              raw_money=raw_money,
+              sentiment_score=sentiment_score,
+              sentiment_level=sentiment_level,
+              sentiment_detail=sentiment_detail,
+              history_scores=history_scores,
+              community_scores=community_scores,
+              sentiment_multiplier=sentiment_multiplier,
+              weights=weights))
+
+
+def score_community(df):
+    """简化舆情评分入口"""
+    try:
+        import community
+        return community.score_community(df)
+    except Exception:
+        import pandas as pd
+        return pd.Series(3.5, index=df.index)
 
 
 @app.get("/api/scan/zhaban")
