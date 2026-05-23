@@ -143,17 +143,17 @@ def api_community(top_n: int = Query(10, description="分析前N只股票")):
     from scanner import fetch_limit_up_pool, pre_filter
 
     out_buf = io.StringIO()
+    err = ""
     try:
         df = fetch_limit_up_pool()
         if df is None or df.empty:
-            return {"ok": False, "output": "今日无涨停数据，无法进行舆情分析", "error": ""}
+            return {"ok": True, "output": "今日无涨停数据，无法进行舆情分析", "error": ""}
 
         txt, smap = community.run(df, top_n)
-        out_buf.write(txt)
-        err = ""
+        out_buf.write(txt if txt.strip() else "暂无舆情数据")
     except Exception as e:
         err = str(e)
-        out_buf.write(f"[错误] {e}")
+        out_buf.write(f"\n[错误] {e}")
 
     return {"ok": not bool(err), "output": out_buf.getvalue(), "error": err}
 
@@ -163,6 +163,7 @@ def api_indicators():
     """运行增强指标分析（龙虎榜等）"""
     from indicators import run_enhanced
     from scanner import fetch_limit_up_pool, pre_filter
+    from datetime import date
 
     out_buf = io.StringIO()
     try:
@@ -171,7 +172,8 @@ def api_indicators():
             return {"ok": False, "output": "今日无涨停数据", "error": ""}
 
         df = pre_filter(df)
-        result = run_enhanced(df)
+        today = date.today().strftime("%Y%m%d")
+        result, _ = run_enhanced(df, today_str=today)
         out_buf.write(result)
         err = ""
     except Exception as e:
@@ -187,10 +189,16 @@ def api_sentiment():
     from scanner import detect_market_sentiment
     from datetime import date
     today = date.today().strftime("%Y%m%d")
-    out, err = _capture(detect_market_sentiment, today)
-    if "[运行时错误]" in err:
-        return JSONResponse({"ok": False, "error": err.strip(), "output": out})
-    return {"ok": True, "output": out}
+    score, level, details = detect_market_sentiment(today)
+    lines = [
+        f"市场情绪: {level}",
+        f"综合评分: {score}/10",
+    ]
+    if details and isinstance(details, dict):
+        for k, v in details.items():
+            lines.append(f"  {k}: {v}")
+    output = "\n".join(lines)
+    return {"ok": True, "output": output}
 
 
 # ═══════════════════════════════════════════
