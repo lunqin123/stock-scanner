@@ -717,10 +717,18 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 
 @app.get("/api/scan/limit-up/stream")
 async def api_scan_limit_up_stream():
-    """涨停扫描 — SSE 流式输出实时进度"""
+    """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
     today = date.today().strftime("%Y%m%d")
 
     async def _generate():
+        # 检查每日缓存
+        cached = _daily_cache_get("limit_up_cards")
+        if cached:
+            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+            await asyncio.sleep(0.03)
+            yield f"data: {json.dumps({'type':'complete','stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
+            return
+
         q = queue.Queue()
         result_holder = {"data": None, "error": None}
 
@@ -747,6 +755,19 @@ async def api_scan_limit_up_stream():
                 sys.stderr = _Capture()
                 data = _scan_limit_up_data(today)
                 result_holder["data"] = data
+                # 扫描完成后写入每日缓存
+                if data:
+                    cache_data = {
+                        "ok": True,
+                        "stocks": data['stocks'],
+                        "sentiment": {
+                            "score": data['sentiment_score'],
+                            "level": data['sentiment_level'],
+                            "multiplier": data['sentiment_multiplier'],
+                        },
+                        "date": data['date'],
+                    }
+                    _daily_cache_set("limit_up_cards", cache_data)
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
