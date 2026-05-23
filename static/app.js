@@ -1,5 +1,5 @@
-const _outputCache = {};  // 每个模块独立的输出缓存 { pageKey: htmlString }
-const _watchlistKey = 'stock_watchlist';
+let currentPage = 'scan-limit';
+const _outputCache = {};
 
 const PAGES = {
     'watchlist':    { title: '📋 自选股' },

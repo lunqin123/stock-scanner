@@ -737,7 +737,7 @@ async def api_scan_limit_up_stream():
 @app.get("/", response_class=HTMLResponse)
 def index():
     with open(os.path.join(_BASE_DIR, "templates/index.html"), "r", encoding="utf-8") as f:
-        return f.read()
+        return HTMLResponse(content=f.read(), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 # ═══════════════════════════════════════════
