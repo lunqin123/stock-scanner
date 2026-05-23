@@ -289,6 +289,156 @@ def api_scan_limit_up_cards():
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
 
 
+@app.get("/api/scan/sector/cards")
+def api_sector_cards():
+    """板块热度 — 结构化数据"""
+    import akshare as ak
+    import pandas as pd
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    try:
+        limit_df = ak.stock_zt_pool_em(date=today)
+        zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
+        dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "items": []})
+
+    industry_col = None
+    for c in limit_df.columns:
+        if '行业' in str(c):
+            industry_col = c
+            break
+    if industry_col is None:
+        return {"ok": True, "items": []}
+
+    limit_counts = limit_df[industry_col].value_counts()
+    zb_counts = zhaban_df[industry_col].value_counts() if not zhaban_df.empty else pd.Series(dtype=int)
+    dt_counts = dieting_df[industry_col].value_counts() if not dieting_df.empty else pd.Series(dtype=int)
+
+    all_industries = set(limit_counts.index)
+    items = []
+    for ind in all_industries:
+        lc = int(limit_counts.get(ind, 0))
+        zc = int(zb_counts.get(ind, 0)) if ind in zb_counts.index else 0
+        dc = int(dt_counts.get(ind, 0)) if ind in dt_counts.index else 0
+        score = min(12, 4 + lc * 2)
+        efficiency = round(lc / (lc + zc) * 100, 1) if (lc + zc) > 0 else 0
+        items.append({
+            'name': str(ind),
+            'limit_count': lc,
+            'zhaban_count': zc,
+            'dieting_count': dc,
+            'score': score,
+            'efficiency': efficiency,
+        })
+    items.sort(key=lambda x: x['score'], reverse=True)
+    return {"ok": True, "items": items[:15]}
+
+
+@app.get("/api/scan/trend/cards")
+def api_trend_cards():
+    """趋势扫描 — 结构化数据"""
+    import akshare as ak
+    import pandas as pd
+    from datetime import date, timedelta, datetime
+    today = date.today().strftime("%Y%m%d")
+    try:
+        prev = ak.stock_zt_pool_previous_em(date=today)
+    except:
+        wd = datetime.now().weekday()
+        days_back = 3 if wd == 0 else (2 if wd == 6 else 1)
+        yesterday = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+        try:
+            prev = ak.stock_zt_pool_previous_em(date=yesterday)
+        except:
+            return {"ok": True, "items": []}
+
+    if prev.empty:
+        return {"ok": True, "items": []}
+
+    # 找涨幅列和名称列
+    change_col = prev.columns[3]
+    name_col = prev.columns[2]
+    code_col = prev.columns[1]
+
+    prev['涨幅'] = prev[change_col].astype(float)
+    # 筛选 3-9% 涨幅（续强但未涨停）
+    trend = prev[(prev['涨幅'] >= 3) & (prev['涨幅'] < 9)].copy()
+    if trend.empty:
+        return {"ok": True, "items": []}
+
+    trend = trend.sort_values('涨幅', ascending=False).head(10)
+    items = []
+    for _, row in trend.iterrows():
+        code = str(row[code_col]).strip().zfill(6)
+        items.append({
+            'code': code,
+            'name': str(row[name_col]),
+            'change_pct': round(float(row['涨幅']), 1),
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+        })
+    return {"ok": True, "items": items}
+
+
+@app.get("/api/scan/zhaban/cards")
+def api_zhaban_cards():
+    """炸板分析 — 结构化数据"""
+    import akshare as ak
+    import pandas as pd
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    try:
+        zb = ak.stock_zt_pool_zbgc_em(date=today)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "items": []})
+    if zb.empty:
+        return {"ok": True, "items": []}
+
+    code_col = zb.columns[1]
+    name_col = zb.columns[2]
+    seal_col = zb.columns[5] if len(zb.columns) > 5 else None
+
+    items = []
+    for _, row in zb.iterrows():
+        code = str(row[code_col]).strip().zfill(6)
+        seal_time = str(row[seal_col])[:4] if seal_col else '?'
+        items.append({
+            'code': code,
+            'name': str(row[name_col]),
+            'seal_time': seal_time,
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+        })
+    return {"ok": True, "items": items[:10]}
+
+
+@app.get("/api/scan/dtqiaoban/cards")
+def api_dtqiaoban_cards():
+    """跌停翘板 — 结构化数据"""
+    import akshare as ak
+    import pandas as pd
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    try:
+        dt = ak.stock_zt_pool_dtgc_em(date=today)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "items": []})
+    if dt.empty:
+        return {"ok": True, "items": []}
+
+    code_col = dt.columns[1]
+    name_col = dt.columns[2]
+
+    items = []
+    for _, row in dt.iterrows():
+        code = str(row[code_col]).strip().zfill(6)
+        items.append({
+            'code': code,
+            'name': str(row[name_col]),
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+        })
+    return {"ok": True, "items": items[:10]}
+
+
 @app.get("/api/scan/zhaban")
 def api_scan_zhaban(table: bool = Query(False)):
     """炸板股反包潜力扫描"""

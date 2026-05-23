@@ -83,15 +83,15 @@
 // ═══════════════════════════════════════════
 
 const PAGES = {
-    'scan-limit':   { title: '🛡️ 涨停扫描',     api: '/api/scan/limit-up',    showMode: true },
-    'scan-trend':   { title: '📊 趋势扫描',     api: '/api/scan/trend',       showMode: true },
-    'scan-sector':  { title: '🧩 板块热度',     api: '/api/scan/sector',      showMode: true },
-    'scan-zhaban':  { title: '💥 炸板分析',     api: '/api/scan/zhaban',      showMode: true },
-    'scan-dtqiaoban':{title: '📉 跌停翘板',     api: '/api/scan/dtqiaoban',   showMode: true },
-    'indicators':   { title: '🏆 龙虎榜分析',   api: '/api/indicators',       showMode: false },
-    'community':    { title: '💬 舆情监测',     api: '/api/community',        showMode: false },
-    'sentiment':    { title: '🌡️ 市场情绪',     api: '/api/sentiment',        showMode: false },
-    'backtest':     { title: '⏱️ 回测系统',     api: '/api/backtest',         showMode: false },
+    'scan-limit':   { title: '🛡️ 涨停扫描',     api: '/api/scan/limit-up',    cardApi: '/api/scan/limit-up/cards',    showMode: true },
+    'scan-trend':   { title: '📊 趋势扫描',     api: '/api/scan/trend',       cardApi: '/api/scan/trend/cards',      showMode: true },
+    'scan-sector':  { title: '🧩 板块热度',     api: '/api/scan/sector',      cardApi: '/api/scan/sector/cards',     showMode: true },
+    'scan-zhaban':  { title: '💥 炸板分析',     api: '/api/scan/zhaban',      cardApi: '/api/scan/zhaban/cards',     showMode: true },
+    'scan-dtqiaoban':{title: '📉 跌停翘板',     api: '/api/scan/dtqiaoban',   cardApi: '/api/scan/dtqiaoban/cards',  showMode: true },
+    'indicators':   { title: '🏆 龙虎榜分析',   api: '/api/indicators',       cardApi: null, showMode: false },
+    'community':    { title: '💬 舆情监测',     api: '/api/community',        cardApi: null, showMode: false },
+    'sentiment':    { title: '🌡️ 市场情绪',     api: '/api/sentiment',        cardApi: null, showMode: false },
+    'backtest':     { title: '⏱️ 回测系统',     api: '/api/backtest',         cardApi: null, showMode: false },
 };
 
 let currentPage = 'scan-limit';
@@ -155,9 +155,9 @@ async function callApi(apiUrl, pageKey) {
     const mode = document.getElementById('output-mode').value;
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
-    // 卡片模式 — 涨停扫描专用
-    if (pageKey === 'scan-limit' && mode === 'card') {
-        await loadCardView(output);
+    // 卡片模式 — 有 cardApi 的页面使用
+    if (mode === 'card' && info.cardApi) {
+        await loadCardView(output, pageKey);
         return;
     }
 
@@ -235,101 +235,169 @@ function analyzeStock(stk) {
     return { tags, notes };
 }
 
-async function loadCardView(output) {
+async function loadCardView(output, pageKey) {
+    const info = PAGES[pageKey] || PAGES['scan-limit'];
     try {
-        const resp = await fetch('/api/scan/limit-up/cards');
+        const resp = await fetch(info.cardApi);
         const data = await resp.json();
 
-        if (!data.ok || !data.stocks || !data.stocks.length) {
+        const items = data.stocks || data.items || [];
+        if (!data.ok || !items.length) {
             output.innerHTML = '<span class="loading">暂无数据</span>';
             return;
         }
 
         const s = data.sentiment || {};
-        let html = '<div class="sentiment-banner">';
-        html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
-        if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
-        html += '</div>';
-
-        html += '<div class="card-list">';
-        for (const stk of data.stocks) {
-            const analysis = analyzeStock(stk);
-            const scoreColor = stk.total_score >= 80 ? '#34d399' :
-                               stk.total_score >= 70 ? '#fbbf24' : '#f87171';
-            const moneyColor = stk.net_money >= 0 ? '#34d399' : '#f87171';
-            const moneySign = stk.net_money >= 0 ? '+' : '';
-
-            html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card">`;
-
-            // 头部
-            html += `<div class="card-header">`;
-            html += `<span class="card-rank">#${stk.rank}</span>`;
-            html += `<span class="card-name">${escapeHtml(stk.name)}</span>`;
-            html += `<span class="card-code">${escapeHtml(stk.code)}</span>`;
-            html += `<span class="card-score" style="color:${scoreColor}">${stk.total_score}</span>`;
-            html += `</div>`;
-
-            // 主体：评分条 + 信息区
-            html += '<div class="card-body">';
-
-            // 左：评分条
-            const items = [
-                {label:'涨停强度', score:stk.seal_score, max:32},
-                {label:'资金面', score:stk.money_score, max:20},
-                {label:'板块热度', score:stk.sector_score, max:22},
-                {label:'量价关系', score:stk.tech_score, max:10},
-                {label:'历史股性', score:stk.history_score, max:5},
-                {label:'舆情评分', score:stk.community_score, max:7},
-            ];
-            html += '<div class="card-bars">';
-            for (const item of items) {
-                const pct = Math.min(100, (item.score / item.max) * 100);
-                html += `<div class="bar-row">`;
-                html += `<span class="bar-label">${item.label}</span>`;
-                html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
-                html += `<span class="bar-val">${item.score}</span>`;
-                html += `</div>`;
-            }
+        let html = '';
+        if (s.level) {
+            html += '<div class="sentiment-banner">';
+            html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
+            if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
             html += '</div>';
-
-            // 右：关键信息
-            const netPct = stk.base_score > 0 ? ((stk.total_score - stk.base_score) / stk.base_score * 100).toFixed(1) : '0';
-            html += '<div class="card-info">';
-            html += `<div class="info-row"><span class="label">基础分</span><span class="value">${stk.base_score}</span></div>`;
-            html += `<div class="info-row"><span class="label">情绪加成</span><span class="value">+${netPct}%</span></div>`;
-            html += `<div class="info-row"><span class="label">净流入</span><span class="value ${stk.net_money >= 0 ? 'green' : 'red'}">${moneySign}${escapeHtml(stk.net_money_str)}</span></div>`;
-            html += `<div class="info-row"><span class="label">换手率</span><span class="value">${escapeHtml(stk.turnover)}%</span></div>`;
-            html += `<div class="info-row"><span class="label">封板时间</span><span class="value">${stk.seal_time.slice(0,2)}:${stk.seal_time.slice(2)}</span></div>`;
-            html += '</div>';
-
-            html += '</div>'; // card-body
-
-            // 分析标签
-            html += '<div class="card-analysis">';
-            for (const tag of analysis.tags) {
-                html += `<span class="tag ${tag.cls}">${escapeHtml(tag.text)}</span>`;
-            }
-            html += '</div>';
-
-            // 评语
-            if (analysis.notes.length) {
-                html += '<div class="card-analysis" style="border-top:none;padding-top:0;margin-top:4px">';
-                for (const note of analysis.notes) {
-                    html += `<span style="font-size:12px;color:var(--text-muted)">${escapeHtml(note)}</span>`;
-                }
-                html += '</div>';
-            }
-
-            // 底部提示
-            html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
-
-            html += '</a>';
         }
-        html += '</div>';
-        output.innerHTML = html;
+
+        // 按页面类型渲染
+        if (pageKey === 'scan-sector') {
+            html += renderSectorCards(items);
+        } else if (pageKey === 'scan-limit') {
+            html += renderStockCards(items, data);
+        } else {
+            html += renderSimpleCards(items, pageKey);
+        }
     } catch (err) {
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
+}
+
+// ═══════════════════════════════════════════
+//  各页面卡片渲染
+// ═══════════════════════════════════════════
+
+function renderStockCards(stocks, data) {
+    let html = '<div class="card-list">';
+    for (const stk of stocks) {
+        const analysis = analyzeStock(stk);
+        const scoreColor = stk.total_score >= 80 ? '#34d399' :
+                           stk.total_score >= 70 ? '#fbbf24' : '#f87171';
+        const moneyColor = stk.net_money >= 0 ? '#34d399' : '#f87171';
+        const moneySign = stk.net_money >= 0 ? '+' : '';
+        const st = stk.seal_time || '0000';
+
+        html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card">`;
+        html += `<div class="card-header">`;
+        html += `<span class="card-rank">#${stk.rank}</span>`;
+        html += `<span class="card-name">${escapeHtml(stk.name)}</span>`;
+        html += `<span class="card-code">${escapeHtml(stk.code)}</span>`;
+        html += `<span class="card-score" style="color:${scoreColor}">${stk.total_score}</span>`;
+        html += `</div>`;
+        html += '<div class="card-body">';
+        html += '<div class="card-bars">';
+        const bars = [
+            {label:'涨停强度', score:stk.seal_score, max:32},
+            {label:'资金面', score:stk.money_score, max:20},
+            {label:'板块热度', score:stk.sector_score, max:22},
+            {label:'量价关系', score:stk.tech_score, max:10},
+            {label:'历史股性', score:stk.history_score, max:5},
+            {label:'舆情评分', score:stk.community_score, max:7},
+        ];
+        for (const b of bars) {
+            const pct = Math.min(100, (b.score / b.max) * 100);
+            html += `<div class="bar-row"><span class="bar-label">${b.label}</span>`;
+            html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+            html += `<span class="bar-val">${b.score}</span></div>`;
+        }
+        html += '</div>';
+        const netPct = stk.base_score > 0 ? ((stk.total_score - stk.base_score) / stk.base_score * 100).toFixed(1) : '0';
+        html += '<div class="card-info">';
+        html += `<div class="info-row"><span class="label">基础分</span><span class="value">${stk.base_score}</span></div>`;
+        html += `<div class="info-row"><span class="label">情绪加成</span><span class="value">+${netPct}%</span></div>`;
+        html += `<div class="info-row"><span class="label">净流入</span><span class="value ${stk.net_money >= 0 ? 'green' : 'red'}">${moneySign}${escapeHtml(stk.net_money_str)}</span></div>`;
+        html += `<div class="info-row"><span class="label">换手率</span><span class="value">${escapeHtml(stk.turnover)}%</span></div>`;
+        html += `<div class="info-row"><span class="label">封板时间</span><span class="value">${st.slice(0,2)}:${st.slice(2)}</span></div>`;
+        html += '</div></div>';
+        html += '<div class="card-analysis">';
+        for (const tag of analysis.tags) {
+            html += `<span class="tag ${tag.cls}">${escapeHtml(tag.text)}</span>`;
+        }
+        html += '</div>';
+        if (analysis.notes.length) {
+            html += '<div class="card-analysis" style="border-top:none;padding-top:0;margin-top:4px">';
+            for (const note of analysis.notes) {
+                html += `<span style="font-size:12px;color:var(--text-muted)">${escapeHtml(note)}</span>`;
+            }
+            html += '</div>';
+        }
+        html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
+        html += '</a>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function renderSectorCards(items) {
+    let html = '<div class="card-list">';
+    for (const item of items) {
+        const effColor = item.efficiency >= 70 ? '#34d399' : item.efficiency >= 50 ? '#fbbf24' : '#f87171';
+        html += `<div class="stock-card" style="cursor:default">`;
+        html += `<div class="card-header">`;
+        html += `<span class="card-rank">#${item.limit_count}只涨停</span>`;
+        html += `<span class="card-name">${escapeHtml(item.name)}</span>`;
+        html += `<span class="card-score" style="color:${effColor}">${item.score}</span>`;
+        html += `</div>`;
+        html += '<div class="card-body"><div class="card-bars">';
+        const bars = [
+            {label:'涨停数', score:item.limit_count, max:Math.max(1, item.limit_count*2)},
+            {label:'炸板数', score:item.zhaban_count, max:Math.max(1, item.limit_count+item.zhaban_count)},
+        ];
+        for (const b of bars) {
+            const pct = Math.min(100, (b.score / b.max) * 100);
+            html += `<div class="bar-row"><span class="bar-label">${b.label}</span>`;
+            html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+            html += `<span class="bar-val">${b.score}</span></div>`;
+        }
+        html += '</div>';
+        html += '<div class="card-info">';
+        html += `<div class="info-row"><span class="label">涨停</span><span class="value green">${item.limit_count}</span></div>`;
+        html += `<div class="info-row"><span class="label">炸板</span><span class="value yellow">${item.zhaban_count}</span></div>`;
+        html += `<div class="info-row"><span class="label">跌停</span><span class="value red">${item.dieting_count}</span></div>`;
+        html += `<div class="info-row"><span class="label">封板率</span><span class="value" style="color:${effColor}">${item.efficiency}%</span></div>`;
+        html += '</div></div>';
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function renderSimpleCards(items, pageKey) {
+    const titles = {
+        'scan-trend': '趋势动量',
+        'scan-zhaban': '炸板分析',
+        'scan-dtqiaoban': '跌停翘板',
+    };
+    const hasChange = pageKey === 'scan-trend';
+
+    let html = '<div class="card-list">';
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        html += `<a href="${escapeHtml(item.url)}" target="_blank" class="stock-card">`;
+        html += `<div class="card-header">`;
+        html += `<span class="card-rank">#${i+1}</span>`;
+        html += `<span class="card-name">${escapeHtml(item.name)}</span>`;
+        html += `<span class="card-code">${escapeHtml(item.code)}</span>`;
+        if (item.change_pct !== undefined) {
+            const chgColor = item.change_pct >= 5 ? '#34d399' : item.change_pct >= 3 ? '#fbbf24' : '#f87171';
+            html += `<span class="card-score" style="color:${chgColor}">+${item.change_pct}%</span>`;
+        }
+        html += `</div>`;
+        if (item.seal_time) {
+            const st = item.seal_time;
+            html += `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">封板时间: ${st.slice(0,2)}:${st.slice(2)}</div>`;
+        }
+        html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
+        html += '</a>';
+    }
+    html += '</div>';
+    return html;
 }
 
 // ═══════════════════════════════════════════
