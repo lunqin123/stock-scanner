@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股超短线选股扫描器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ═══ 侧边导航 ═══ -->
+<nav class="sidebar">
+    <div class="logo">
+        📈 选股扫描器
+        <small>超短线 · 首板策略</small>
+    </div>
+    <div class="nav-item active" data-page="scan-limit">
+        <span class="icon">🛡️</span> 涨停扫描
+    </div>
+    <div class="nav-item" data-page="scan-trend">
+        <span class="icon">📊</span> 趋势扫描
+    </div>
+    <div class="nav-item" data-page="scan-sector">
+        <span class="icon">🧩</span> 板块热度
+    </div>
+    <div class="nav-item" data-page="scan-zhaban">
+        <span class="icon">💥</span> 炸板分析
+    </div>
+    <div class="nav-item" data-page="scan-dtqiaoban">
+        <span class="icon">📉</span> 跌停翘板
+    </div>
+    <div class="nav-item" data-page="indicators">
+        <span class="icon">🏆</span> 龙虎榜分析
+    </div>
+    <div class="nav-item" data-page="community">
+        <span class="icon">💬</span> 舆情监测
+    </div>
+    <div class="nav-item" data-page="sentiment">
+        <span class="icon">🌡️</span> 市场情绪
+    </div>
+    <div class="nav-item" data-page="backtest">
+        <span class="icon">⏱️</span> 回测系统
+    </div>
+</nav>
+
+<!-- ═══ 主内容区 ═══ -->
+<main class="main">
+    <div class="main-header">
+        <h1 id="page-title">🛡️ 涨停扫描</h1>
+        <span class="date" id="today-display"></span>
+    </div>
+
+    <!-- 参数栏 -->
+    <div class="params" id="param-bar">
+        <label>输出格式：</label>
+        <select id="output-mode">
+            <option value="detail">详细文本</option>
+            <option value="table">表格模式</option>
+        </select>
+        <button class="btn" onclick="runCurrent()">▶ 运行</button>
+    </div>
+
+    <!-- 快捷操作 -->
+    <div class="quick-actions" id="quick-actions">
+        <button class="btn btn-green btn-sm" onclick="runAll()">⚡ 一键全扫描</button>
+        <button class="btn btn-sm" onclick="exportOutput()">📋 复制输出</button>
+        <button class="btn btn-orange btn-sm" onclick="clearOutput()">🗑️ 清空</button>
+    </div>
+
+    <!-- 输出区 -->
+    <div class="card">
+        <h2>输出结果</h2>
+        <div class="output-area" id="output">
+            <span class="loading">就绪 — 点击「运行」开始扫描</span>
+        </div>
+    </div>
+</main>
+
+<script>
+// ═══════════════════════════════════════════
+//  页面状态
+// ═══════════════════════════════════════════
+
+const PAGES = {
+    'scan-limit':   { title: '🛡️ 涨停扫描',     api: '/api/scan/limit-up',    showMode: true },
+    'scan-trend':   { title: '📊 趋势扫描',     api: '/api/scan/trend',       showMode: true },
+    'scan-sector':  { title: '🧩 板块热度',     api: '/api/scan/sector',      showMode: true },
+    'scan-zhaban':  { title: '💥 炸板分析',     api: '/api/scan/zhaban',      showMode: true },
+    'scan-dtqiaoban':{title: '📉 跌停翘板',     api: '/api/scan/dtqiaoban',   showMode: true },
+    'indicators':   { title: '🏆 龙虎榜分析',   api: '/api/indicators',       showMode: false },
+    'community':    { title: '💬 舆情监测',     api: '/api/community',        showMode: false },
+    'sentiment':    { title: '🌡️ 市场情绪',     api: '/api/sentiment',        showMode: false },
+    'backtest':     { title: '⏱️ 回测系统',     api: '/api/backtest',         showMode: false },
+};
+
+let currentPage = 'scan-limit';
+
+// ═══════════════════════════════════════════
+//  初始化
+// ═══════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('today-display').textContent =
+        '📅 ' + new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+
+    // 导航点击
+    document.querySelectorAll('.nav-item').forEach(el => {
+        el.addEventListener('click', () => {
+            const page = el.dataset.page;
+            switchPage(page);
+        });
+    });
+
+    // Enter 键触发运行
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+            runCurrent();
+        }
+    });
+});
+
+// ═══════════════════════════════════════════
+//  页面切换
+// ═══════════════════════════════════════════
+
+function switchPage(page) {
+    currentPage = page;
+    document.querySelectorAll('.nav-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.page === page);
+    });
+
+    const info = PAGES[page];
+    document.getElementById('page-title').textContent = info.title;
+
+    // 显示/隐藏模式选择
+    document.getElementById('output-mode').style.display = info.showMode ? 'inline' : 'none';
+    document.getElementById('output-mode').previousElementSibling.style.display = info.showMode ? 'inline' : 'none';
+}
+
+// ═══════════════════════════════════════════
+//  运行扫描
+// ═══════════════════════════════════════════
+
+async function runCurrent() {
+    const info = PAGES[currentPage];
+    if (!info) return;
+    await callApi(info.api, currentPage);
+}
+
+async function callApi(apiUrl, pageKey) {
+    const output = document.getElementById('output');
+    output.innerHTML = '<span class="loading">⏳ 正在扫描，请稍候...</span>';
+
+    // 构造参数
+    const params = new URLSearchParams();
+    const info = PAGES[pageKey] || PAGES['scan-limit'];
+    if (info.showMode) {
+        params.set('table', document.getElementById('output-mode').value === 'table' ? 'true' : 'false');
+    }
+
+    const url = apiUrl + (params.toString() ? '?' + params.toString() : '');
+
+    try {
+        const resp = await fetch(url);
+        const data = await resp.json();
+
+        if (data.ok === false) {
+            output.innerHTML = `<span class="error-text">❌ 错误：</span>\n${escapeHtml(data.error || '未知错误')}\n\n${escapeHtml(data.output || '')}`;
+        } else {
+            const txt = data.output || '(空)';
+            output.textContent = txt;
+        }
+    } catch (err) {
+        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+    }
+}
+
+// ═══════════════════════════════════════════
+//  一键全扫描
+// ═══════════════════════════════════════════
+
+async function runAll() {
+    const output = document.getElementById('output');
+    output.innerHTML = '<span class="loading">⏳ 正在全扫描，按顺序执行中...</span>';
+
+    const scans = [
+        { title: '=== 涨停扫描 ===', url: '/api/scan/limit-up?table=true' },
+        { title: '=== 趋势扫描 ===', url: '/api/scan/trend?table=true' },
+        { title: '=== 板块热度 ===', url: '/api/scan/sector?table=true' },
+        { title: '=== 炸板分析 ===', url: '/api/scan/zhaban?table=true' },
+        { title: '=== 跌停翘板 ===', url: '/api/scan/dtqiaoban?table=true' },
+        { title: '=== 龙虎榜分析 ===', url: '/api/indicators' },
+        { title: '=== 舆情监测 ===', url: '/api/community' },
+        { title: '=== 市场情绪 ===', url: '/api/sentiment' },
+    ];
+
+    const parts = [];
+    for (const scan of scans) {
+        parts.push(`\n${scan.title}\n` + '-'.repeat(40));
+        output.textContent = parts.join('\n') + '\n⏳ 正在请求 ' + scan.title + '...';
+
+        try {
+            const resp = await fetch(scan.url);
+            const data = await resp.json();
+            parts.push(data.output || '(空)');
+        } catch (err) {
+            parts.push(`❌ ${err.message}`);
+        }
+    }
+
+    output.textContent = parts.join('\n');
+}
+
+// ═══════════════════════════════════════════
+//  工具函数
+// ═══════════════════════════════════════════
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function clearOutput() {
+    document.getElementById('output').innerHTML = '<span class="loading">已清空</span>';
+}
+
+function exportOutput() {
+    const txt = document.getElementById('output').textContent;
+    navigator.clipboard.writeText(txt).then(() => {
+        const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
+        const orig = btn.textContent;
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => btn.textContent = orig, 1500);
+    }).catch(() => {
+        alert('复制失败，请手动选择文本复制');
+    });
+}
+</script>
+</body>
+</html>

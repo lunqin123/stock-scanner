@@ -1,0 +1,263 @@
+/* ═══════════════════════════════════════════
+   A股超短线选股扫描器 — 暗色主题
+   ═══════════════════════════════════════════ */
+
+:root {
+    --bg-primary: #0f1118;
+    --bg-secondary: #1a1d2e;
+    --bg-card: #1e2235;
+    --bg-hover: #262b44;
+    --border: #2d3250;
+    --text-primary: #e4e6f0;
+    --text-secondary: #8b8fa8;
+    --text-muted: #5a5f7a;
+    --accent: #4f8cff;
+    --accent-hover: #6ba0ff;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --radius: 8px;
+    --shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+}
+
+/* ── 侧边栏 ── */
+.sidebar {
+    width: 220px;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 24px 0;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+}
+
+.sidebar .logo {
+    font-size: 18px;
+    font-weight: 700;
+    padding: 0 20px 20px;
+    color: var(--accent);
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+
+.sidebar .logo small {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-top: 4px;
+}
+
+.nav-item {
+    padding: 10px 20px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 14px;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-left: 3px solid transparent;
+}
+
+.nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.nav-item.active {
+    background: var(--bg-hover);
+    color: var(--accent);
+    border-left-color: var(--accent);
+}
+
+.nav-item .icon {
+    width: 20px;
+    text-align: center;
+    font-size: 16px;
+}
+
+/* ── 主内容 ── */
+.main {
+    flex: 1;
+    padding: 28px 36px;
+    overflow-y: auto;
+    max-height: 100vh;
+}
+
+.main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.main-header h1 {
+    font-size: 22px;
+    font-weight: 600;
+}
+
+.main-header .date {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* ── 卡片 ── */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+}
+
+.card h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ── 参数栏 ── */
+.params {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.params label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.params select, .params input {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+}
+
+.params select:focus, .params input:focus {
+    border-color: var(--accent);
+}
+
+/* ── 按钮 ── */
+.btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-weight: 500;
+}
+
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-sm {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.btn-green {
+    background: #059669;
+}
+.btn-green:hover { background: #10b981; }
+
+.btn-orange {
+    background: #d97706;
+}
+.btn-orange:hover { background: #f59e0b; }
+
+/* ── 输出区 ── */
+.output-area {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: auto;
+    min-height: 120px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.output-area .loading {
+    color: var(--text-muted);
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+.output-area .error-text {
+    color: var(--red);
+}
+
+.output-area .ok-text {
+    color: var(--green);
+}
+
+.output-area .highlight {
+    color: var(--accent);
+}
+
+/* ── 快捷按钮行 ── */
+.quick-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+/* ── 状态标签 ── */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.badge-green { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+.badge-red { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+.badge-yellow { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
+.badge-blue { background: rgba(79, 140, 255, 0.15); color: var(--accent); }
+
+/* ── 响应式 ── */
+@media (max-width: 768px) {
+    .sidebar { display: none; }
+    .main { padding: 16px; }
+}
