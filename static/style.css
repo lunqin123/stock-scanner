@@ -916,6 +916,65 @@ body[data-page="watchlist"] #quick-actions {
 .data-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
 .data-table tbody tr:nth-child(even):hover { background: var(--bg-hover); }
 
+/* ── 文本报告美化 ── */
+.text-report {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    line-height: 1.8;
+}
+.text-report .tr-empty { height: 6px; }
+.text-report .tr-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 10px 0;
+}
+.text-report .tr-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 12px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-light);
+}
+.text-report .tr-line {
+    color: var(--text-secondary);
+    padding: 1px 0;
+}
+.text-report .tr-item-row {
+    color: var(--text-primary);
+    font-weight: 500;
+    padding: 3px 0;
+    margin: 2px 0;
+    background: rgba(79,140,255,0.04);
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+.text-report .tr-data-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 2px 0;
+    color: var(--text-secondary);
+}
+.text-report .tr-cell {
+    white-space: nowrap;
+}
+.text-report .tr-label-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 0;
+    color: var(--text-secondary);
+}
+.text-report .tr-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 60px;
+}
+.text-report .tr-value {
+    color: var(--text-primary);
+}
+
 .output-text {
     white-space: pre-wrap;
     font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;

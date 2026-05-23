@@ -11,11 +11,12 @@ import asyncio
 import threading
 import queue
 from contextlib import redirect_stdout, redirect_stderr
-from datetime import date, datetime, timezone, timedelta
+from datetime import date
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+from cache import get as cache_get, put as cache_put, daily_get, daily_set
 
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
@@ -38,75 +39,6 @@ def _capture(fn, *args, **kwargs):
     except Exception as e:
         f_err.write(f"\n[运行时错误] {e}\n")
     return f_out.getvalue(), f_err.getvalue()
-
-
-# ═══════════════════════════════════════════
-#  缓存（与 scanner.py 共用缓存目录）
-# ═══════════════════════════════════════════
-
-import os
-import time
-import pickle as _pickle
-
-_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
-_CACHE_TTL = 7200
-
-def _cache_get(name):
-    path = os.path.join(_CACHE_DIR, f"{name}.pkl")
-    try:
-        if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
-            with open(path, 'rb') as f:
-                return _pickle.load(f)
-    except Exception:
-        pass
-    return None
-
-def _cache_put(name, data):
-    try:
-        os.makedirs(_CACHE_DIR, exist_ok=True)
-        with open(os.path.join(_CACHE_DIR, f"{name}.pkl"), 'wb') as f:
-            _pickle.dump(data, f)
-    except Exception:
-        pass
-
-
-# ═══════════════════════════════════════════
-#  每日缓存（休盘后持久化，日内不重复扫描）
-# ═══════════════════════════════════════════
-
-_CST = timezone(timedelta(hours=8))
-
-def _is_market_closed() -> bool:
-    """判断 A 股是否已收盘（15:00 后或周末）"""
-    now = datetime.now(_CST)
-    if now.weekday() >= 5:
-        return True
-    return now.hour > 15 or (now.hour == 15 and now.minute >= 0)
-
-def _daily_path(key: str) -> str:
-    return os.path.join(_CACHE_DIR, f"daily_{date.today().isoformat()}_{key}.json")
-
-def _daily_cache_get(key: str):
-    """获取今日缓存，不存在返回 None"""
-    path = _daily_path(key)
-    try:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
-
-def _daily_cache_set(key: str, data):
-    """休盘后才写入缓存"""
-    if not _is_market_closed():
-        return
-    try:
-        os.makedirs(_CACHE_DIR, exist_ok=True)
-        with open(_daily_path(key), 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
-    except Exception:
-        pass
 
 
 # ═══════════════════════════════════════════
@@ -308,7 +240,7 @@ def score_community(df):
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
     if not refresh:
-        cached = _daily_cache_get("limit_up_cards")
+        cached = daily_get("limit_up_cards")
         if cached:
             return cached
 
@@ -331,7 +263,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
             },
             "date": data['date'],
         }
-        _daily_cache_set("limit_up_cards", result)
+        daily_set("limit_up_cards", result)
         return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
@@ -346,7 +278,7 @@ def api_sector_cards():
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"sector_cards_{today}"
-    cached = _cache_get(key)
+    cached = cache_get(key)
     if cached:
         print("  [板块卡片] 命中缓存", file=sys.stderr)
         return cached
@@ -392,7 +324,7 @@ def api_sector_cards():
         })
     items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:15]}
-    _cache_put(key, result)
+    cache_put(key, result)
     return result
 
 
@@ -405,7 +337,7 @@ def api_trend_cards():
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"trend_cards_{today}"
-    cached = _cache_get(key)
+    cached = cache_get(key)
     if cached:
         print("  [趋势卡片] 命中缓存", file=sys.stderr)
         return cached
@@ -446,7 +378,7 @@ def api_trend_cards():
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
     result = {"ok": True, "items": items}
-    _cache_put(key, result)
+    cache_put(key, result)
     return result
 
 
@@ -459,7 +391,7 @@ def api_zhaban_cards():
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"zhaban_cards_{today}"
-    cached = _cache_get(key)
+    cached = cache_get(key)
     if cached:
         print("  [炸板卡片] 命中缓存", file=sys.stderr)
         return cached
@@ -488,7 +420,7 @@ def api_zhaban_cards():
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
     result = {"ok": True, "items": items[:10]}
-    _cache_put(key, result)
+    cache_put(key, result)
     return result
 
 
@@ -501,7 +433,7 @@ def api_dtqiaoban_cards():
     print("  [翘板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"dtqiaoban_cards_{today}"
-    cached = _cache_get(key)
+    cached = cache_get(key)
     if cached:
         print("  [翘板卡片] 命中缓存", file=sys.stderr)
         return cached
@@ -527,7 +459,7 @@ def api_dtqiaoban_cards():
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
     result = {"ok": True, "items": items[:10]}
-    _cache_put(key, result)
+    cache_put(key, result)
     return result
 
 
@@ -659,7 +591,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
     """市场概览：情绪、涨停数、炸板/跌停汇总、热门板块"""
     # 每日缓存命中且不强制刷新 → 直接返回
     if not refresh:
-        cached = _daily_cache_get("dashboard")
+        cached = daily_get("dashboard")
         if cached:
             return cached
 
@@ -707,7 +639,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         except:
             result[key] = 0
 
-    _daily_cache_set("dashboard", result)
+    daily_set("dashboard", result)
     return result
 
 
@@ -722,7 +654,7 @@ async def api_scan_limit_up_stream():
 
     async def _generate():
         # 检查每日缓存
-        cached = _daily_cache_get("limit_up_cards")
+        cached = daily_get("limit_up_cards")
         if cached:
             yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
             await asyncio.sleep(0.03)
@@ -767,7 +699,7 @@ async def api_scan_limit_up_stream():
                         },
                         "date": data['date'],
                     }
-                    _daily_cache_set("limit_up_cards", cache_data)
+                    daily_set("limit_up_cards", cache_data)
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
