@@ -188,6 +188,53 @@ async function callApi(apiUrl, pageKey) {
     }
 }
 
+function analyzeStock(stk) {
+    const tags = [];
+    const notes = [];
+
+    // 封板时间分析
+    const st = parseInt(stk.seal_time);
+    if (st <= 0930) tags.push({text:'开盘秒板', cls:'tag-green'});
+    else if (st <= 1000) tags.push({text:'早盘板', cls:'tag-blue'});
+    else if (st <= 1100) tags.push({text:'上午板', cls:'tag-blue'});
+    else if (st <= 1400) tags.push({text:'午后板', cls:'tag-yellow'});
+    else tags.push({text:'尾盘偷袭', cls:'tag-red'});
+
+    // 资金分析
+    if (stk.net_money > 1e8) {
+        tags.push({text:'主力强', cls:'tag-green'});
+    } else if (stk.net_money > 5e7) {
+        tags.push({text:'资金正', cls:'tag-blue'});
+    } else if (stk.net_money < 0) {
+        tags.push({text:'资金流出', cls:'tag-red'});
+        notes.push('⚠️ 主力净流出，注意次日抛压');
+    }
+
+    // 换手率分析
+    const tr = parseFloat(stk.turnover);
+    if (tr > 25) {
+        tags.push({text:'爆量', cls:'tag-yellow'});
+        notes.push('⚠️ 换手过高(>' + tr + '%)，次日接力难度大');
+    } else if (tr > 15) {
+        tags.push({text:'高换手', cls:'tag-yellow'});
+    } else if (tr < 5) {
+        tags.push({text:'缩量', cls:'tag-green'});
+        notes.push('✅ 缩量涨停(' + tr + '%)，筹码锁定良好');
+    }
+
+    // 评分分析
+    if (stk.sector_score >= 10) tags.push({text:'板块龙', cls:'tag-green'});
+    if (stk.money_score >= 12) tags.push({text:'资金龙', cls:'tag-green'});
+    if (stk.seal_score >= 22) tags.push({text:'封板强', cls:'tag-green'});
+
+    // 综合评语
+    if (stk.total_score >= 80) notes.push('🔥 综合评分优秀，多因子共振');
+    else if (stk.total_score >= 70) notes.push('✅ 评分良好，关注次日竞价');
+    else notes.push('📌 评分一般，需结合板块和资金面判断');
+
+    return { tags, notes };
+}
+
 async function loadCardView(output) {
     try {
         const resp = await fetch('/api/scan/limit-up/cards');
@@ -201,18 +248,20 @@ async function loadCardView(output) {
         const s = data.sentiment || {};
         let html = '<div class="sentiment-banner">';
         html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
-        if (s.multiplier) html += ` &times;${s.multiplier}`;
+        if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
         html += '</div>';
 
-        html += '<div class="card-grid">';
+        html += '<div class="card-list">';
         for (const stk of data.stocks) {
-            const scoreColor = stk.total_score >= 75 ? '#34d399' :
-                               stk.total_score >= 65 ? '#fbbf24' : '#f87171';
+            const analysis = analyzeStock(stk);
+            const scoreColor = stk.total_score >= 80 ? '#34d399' :
+                               stk.total_score >= 70 ? '#fbbf24' : '#f87171';
             const moneyColor = stk.net_money >= 0 ? '#34d399' : '#f87171';
             const moneySign = stk.net_money >= 0 ? '+' : '';
 
-            html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card" `;
-            html += `title="点击查看同花顺详情页 — ${stk.name}(${stk.code})">`;
+            html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card">`;
+
+            // 头部
             html += `<div class="card-header">`;
             html += `<span class="card-rank">#${stk.rank}</span>`;
             html += `<span class="card-name">${escapeHtml(stk.name)}</span>`;
@@ -220,30 +269,59 @@ async function loadCardView(output) {
             html += `<span class="card-score" style="color:${scoreColor}">${stk.total_score}</span>`;
             html += `</div>`;
 
-            // 评分条
+            // 主体：评分条 + 信息区
+            html += '<div class="card-body">';
+
+            // 左：评分条
             const items = [
-                {label:'涨停', score:stk.seal_score, max:32},
-                {label:'资金', score:stk.money_score, max:20},
-                {label:'板块', score:stk.sector_score, max:22},
-                {label:'量价', score:stk.tech_score, max:10},
-                {label:'股性', score:stk.history_score, max:5},
-                {label:'舆情', score:stk.community_score, max:7},
+                {label:'涨停强度', score:stk.seal_score, max:32},
+                {label:'资金面', score:stk.money_score, max:20},
+                {label:'板块热度', score:stk.sector_score, max:22},
+                {label:'量价关系', score:stk.tech_score, max:10},
+                {label:'历史股性', score:stk.history_score, max:5},
+                {label:'舆情评分', score:stk.community_score, max:7},
             ];
             html += '<div class="card-bars">';
             for (const item of items) {
                 const pct = Math.min(100, (item.score / item.max) * 100);
-                html += `<div class="bar-row"><span class="bar-label">${item.label}</span>`;
+                html += `<div class="bar-row">`;
+                html += `<span class="bar-label">${item.label}</span>`;
                 html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
-                html += `<span class="bar-val">${item.score}</span></div>`;
+                html += `<span class="bar-val">${item.score}</span>`;
+                html += `</div>`;
             }
             html += '</div>';
 
-            // 底部信息
-            html += '<div class="card-footer">';
-            html += `<span>净流入: <strong style="color:${moneyColor}">${moneySign}${escapeHtml(stk.net_money_str)}</strong></span>`;
-            html += `<span>换手: ${escapeHtml(stk.turnover)}%</span>`;
-            html += `<span>封板: ${escapeHtml(stk.seal_time)}</span>`;
+            // 右：关键信息
+            const netPct = stk.base_score > 0 ? ((stk.total_score - stk.base_score) / stk.base_score * 100).toFixed(1) : '0';
+            html += '<div class="card-info">';
+            html += `<div class="info-row"><span class="label">基础分</span><span class="value">${stk.base_score}</span></div>`;
+            html += `<div class="info-row"><span class="label">情绪加成</span><span class="value">+${netPct}%</span></div>`;
+            html += `<div class="info-row"><span class="label">净流入</span><span class="value ${stk.net_money >= 0 ? 'green' : 'red'}">${moneySign}${escapeHtml(stk.net_money_str)}</span></div>`;
+            html += `<div class="info-row"><span class="label">换手率</span><span class="value">${escapeHtml(stk.turnover)}%</span></div>`;
+            html += `<div class="info-row"><span class="label">封板时间</span><span class="value">${stk.seal_time.slice(0,2)}:${stk.seal_time.slice(2)}</span></div>`;
             html += '</div>';
+
+            html += '</div>'; // card-body
+
+            // 分析标签
+            html += '<div class="card-analysis">';
+            for (const tag of analysis.tags) {
+                html += `<span class="tag ${tag.cls}">${escapeHtml(tag.text)}</span>`;
+            }
+            html += '</div>';
+
+            // 评语
+            if (analysis.notes.length) {
+                html += '<div class="card-analysis" style="border-top:none;padding-top:0;margin-top:4px">';
+                for (const note of analysis.notes) {
+                    html += `<span style="font-size:12px;color:var(--text-muted)">${escapeHtml(note)}</span>`;
+                }
+                html += '</div>';
+            }
+
+            // 底部提示
+            html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
 
             html += '</a>';
         }

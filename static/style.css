@@ -271,11 +271,11 @@ body {
     color: var(--accent);
 }
 
-/* ── 卡片网格 ── */
-.card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 14px;
+/* ── 卡片列表（单列） ── */
+.card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .stock-card {
@@ -283,24 +283,24 @@ body {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
+    padding: 16px 20px;
     text-decoration: none;
     color: var(--text-primary);
-    transition: all 0.2s;
+    transition: all 0.15s;
     cursor: pointer;
 }
 
 .stock-card:hover {
     border-color: var(--accent);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 20px rgba(79, 140, 255, 0.15);
+    box-shadow: 0 2px 12px rgba(79, 140, 255, 0.12);
 }
 
+/* ── 卡片头部 ── */
 .card-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
+    gap: 12px;
+    margin-bottom: 10px;
 }
 
 .card-rank {
@@ -308,34 +308,43 @@ body {
     color: var(--text-muted);
     background: var(--bg-primary);
     border-radius: 4px;
-    padding: 1px 8px;
+    padding: 2px 10px;
     font-weight: 600;
+    flex-shrink: 0;
 }
 
 .card-name {
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 600;
-    flex: 1;
 }
 
 .card-code {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-muted);
     font-family: monospace;
 }
 
 .card-score {
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 700;
     font-family: monospace;
+    margin-left: auto;
+    padding-left: 12px;
 }
 
-/* ── 评分条 ── */
+/* ── 卡片主体：评分条 + 信息区 ── */
+.card-body {
+    display: flex;
+    gap: 20px;
+    align-items: stretch;
+}
+
 .card-bars {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    margin-bottom: 12px;
+    gap: 4px;
+    min-width: 0;
 }
 
 .bar-row {
@@ -346,18 +355,20 @@ body {
 }
 
 .bar-label {
-    width: 32px;
+    width: 36px;
     color: var(--text-muted);
     text-align: right;
     flex-shrink: 0;
+    font-size: 11px;
 }
 
 .bar-track {
     flex: 1;
-    height: 6px;
+    height: 5px;
     background: var(--bg-primary);
     border-radius: 3px;
     overflow: hidden;
+    min-width: 60px;
 }
 
 .bar-fill {
@@ -368,7 +379,7 @@ body {
 }
 
 .bar-val {
-    width: 24px;
+    width: 28px;
     text-align: right;
     color: var(--text-secondary);
     font-family: monospace;
@@ -376,18 +387,74 @@ body {
     flex-shrink: 0;
 }
 
-/* ── 卡片底部 ── */
-.card-footer {
+/* ── 卡片右侧信息区 ── */
+.card-info {
+    flex-shrink: 0;
+    width: 220px;
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 6px;
     font-size: 12px;
-    color: var(--text-muted);
-    border-top: 1px solid var(--border);
-    padding-top: 10px;
+    color: var(--text-secondary);
+    border-left: 1px solid var(--border);
+    padding-left: 16px;
 }
 
-.card-footer strong {
-    font-weight: 600;
+.card-info .info-row {
+    display: flex;
+    justify-content: space-between;
+}
+
+.card-info .info-row .label {
+    color: var(--text-muted);
+}
+
+.card-info .info-row .value {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.card-info .info-row .value.green { color: var(--green); }
+.card-info .info-row .value.red { color: var(--red); }
+.card-info .info-row .value.yellow { color: var(--yellow); }
+
+/* ── 分析评语 ── */
+.card-analysis {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.card-analysis .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.tag-green { background: rgba(52, 211, 153, 0.12); color: var(--green); }
+.tag-red { background: rgba(248, 113, 113, 0.12); color: var(--red); }
+.tag-yellow { background: rgba(251, 191, 36, 0.12); color: var(--yellow); }
+.tag-blue { background: rgba(79, 140, 255, 0.12); color: var(--accent); }
+.tag-gray { background: rgba(139, 143, 168, 0.12); color: var(--text-secondary); }
+
+/* ── 底部链接提示 ── */
+.card-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.card-hint span {
+    opacity: 0.6;
 }
 
 /* ── 数据表格 ── */
