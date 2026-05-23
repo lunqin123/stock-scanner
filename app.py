@@ -95,27 +95,37 @@ def _scan_limit_up_data(today_str: str):
     import pandas as pd
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    print("  [涨停卡片] 第1步: 获取涨停池...", file=sys.stderr)
     pool = fetch_limit_up_pool()
     if pool is None or pool.empty:
+        print("  [涨停卡片] 无涨停数据", file=sys.stderr)
         return None
 
+    print(f"  [涨停卡片] 共 {len(pool)} 只, 第2步: 前置过滤...", file=sys.stderr)
     filtered = pre_filter(pool)
     if filtered.empty:
+        print("  [涨停卡片] 过滤后为空", file=sys.stderr)
         return None
 
+    print(f"  [涨停卡片] 剩余 {len(filtered)} 只, 第3步: 获取资金流...", file=sys.stderr)
     fund_df, _ = fetch_fund_flow_data()
     if fund_df is None:
+        print("  [涨停卡片] 资金流不可用", file=sys.stderr)
         return None
 
+    print("  [涨停卡片] 第4步: 股价过滤...", file=sys.stderr)
     filtered = filter_by_price(filtered, fund_df)
     if filtered.empty:
+        print("  [涨停卡片] 过滤后为空", file=sys.stderr)
         return None
 
+    print(f"  [涨停卡片] 剩余 {len(filtered)} 只, 第5步: 计算各维度评分...", file=sys.stderr)
     seal_scores = score_seal_strength(filtered)
     money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
     sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
     tech_scores = score_tech_form(filtered)
 
+    print("  [涨停卡片] 第6步: 并行获取预测评分...", file=sys.stderr)
     with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             ex.submit(detect_market_sentiment, today_str): "sentiment",
@@ -149,6 +159,7 @@ def _scan_limit_up_data(today_str: str):
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
     sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
 
+    print("  [涨停卡片] 第7步: 生成评分报告...", file=sys.stderr)
     import weight_manager
     weights = weight_manager.load_weights()
     base_totals = weight_manager.apply_weights(
@@ -300,11 +311,14 @@ def score_community(df):
 def api_scan_limit_up_cards():
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
     from datetime import date
+    print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     try:
         data = _scan_limit_up_data(today)
         if data is None:
+            print("  [涨停卡片] 无数据", file=sys.stderr)
             return {"ok": True, "stocks": [], "sentiment": {}}
+        print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
         return {
             "ok": True,
             "stocks": data['stocks'],
@@ -325,16 +339,23 @@ def api_sector_cards():
     import akshare as ak
     import pandas as pd
     from datetime import date
+    print("  [板块卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"sector_cards_{today}"
     cached = _cache_get(key)
     if cached:
+        print("  [板块卡片] 命中缓存", file=sys.stderr)
         return cached
+    print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
     try:
         limit_df = ak.stock_zt_pool_em(date=today)
+        print(f"  [板块卡片] 涨停 {len(limit_df)} 只, 拉取炸板池...", file=sys.stderr)
         zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
+        print(f"  [板块卡片] 炸板 {len(zhaban_df)} 只, 拉取跌停池...", file=sys.stderr)
         dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
+        print(f"  [板块卡片] 跌停 {len(dieting_df)} 只, 计算板块得分...", file=sys.stderr)
     except Exception as e:
+        print(f"  [板块卡片] 错误: {e}", file=sys.stderr)
         return JSONResponse({"ok": False, "error": str(e), "items": []})
 
     industry_col = None
@@ -377,20 +398,25 @@ def api_trend_cards():
     import akshare as ak
     import pandas as pd
     from datetime import date, timedelta, datetime
+    print("  [趋势卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"trend_cards_{today}"
     cached = _cache_get(key)
     if cached:
+        print("  [趋势卡片] 命中缓存", file=sys.stderr)
         return cached
+    print("  [趋势卡片] 拉取昨日涨停数据...", file=sys.stderr)
     try:
         prev = ak.stock_zt_pool_previous_em(date=today)
     except:
         wd = datetime.now().weekday()
         days_back = 3 if wd == 0 else (2 if wd == 6 else 1)
         yesterday = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+        print(f"  [趋势卡片] 今日无数据, 尝试 {yesterday}...", file=sys.stderr)
         try:
             prev = ak.stock_zt_pool_previous_em(date=yesterday)
-        except:
+        except Exception as e:
+            print(f"  [趋势卡片] 失败: {e}", file=sys.stderr)
             return {"ok": True, "items": []}
 
     if prev.empty:
@@ -426,14 +452,19 @@ def api_zhaban_cards():
     import akshare as ak
     import pandas as pd
     from datetime import date
+    print("  [炸板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"zhaban_cards_{today}"
     cached = _cache_get(key)
     if cached:
+        print("  [炸板卡片] 命中缓存", file=sys.stderr)
         return cached
+    print("  [炸板卡片] 拉取炸板数据...", file=sys.stderr)
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=today)
+        print(f"  [炸板卡片] 获取 {len(zb)} 只", file=sys.stderr)
     except Exception as e:
+        print(f"  [炸板卡片] 错误: {e}", file=sys.stderr)
         return JSONResponse({"ok": False, "error": str(e), "items": []})
     if zb.empty:
         return {"ok": True, "items": []}
@@ -463,14 +494,19 @@ def api_dtqiaoban_cards():
     import akshare as ak
     import pandas as pd
     from datetime import date
+    print("  [翘板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"dtqiaoban_cards_{today}"
     cached = _cache_get(key)
     if cached:
+        print("  [翘板卡片] 命中缓存", file=sys.stderr)
         return cached
+    print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=today)
+        print(f"  [翘板卡片] 获取 {len(dt)} 只", file=sys.stderr)
     except Exception as e:
+        print(f"  [翘板卡片] 错误: {e}", file=sys.stderr)
         return JSONResponse({"ok": False, "error": str(e), "items": []})
     if dt.empty:
         return {"ok": True, "items": []}
