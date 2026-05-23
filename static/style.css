@@ -283,6 +283,10 @@ body {
     text-align: right;
 }
 
+.data-table thead th.center {
+    text-align: center;
+}
+
 .data-table tbody td {
     padding: 6px 10px;
     text-align: left;
