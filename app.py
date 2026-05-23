@@ -36,6 +36,36 @@ def _capture(fn, *args, **kwargs):
 
 
 # ═══════════════════════════════════════════
+#  缓存（与 scanner.py 共用缓存目录）
+# ═══════════════════════════════════════════
+
+import os
+import time
+import pickle as _pickle
+
+_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache")
+_CACHE_TTL = 7200
+
+def _cache_get(name):
+    path = os.path.join(_CACHE_DIR, f"{name}.pkl")
+    try:
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
+            with open(path, 'rb') as f:
+                return _pickle.load(f)
+    except Exception:
+        pass
+    return None
+
+def _cache_put(name, data):
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(os.path.join(_CACHE_DIR, f"{name}.pkl"), 'wb') as f:
+            _pickle.dump(data, f)
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════
 #  API 端点
 # ═══════════════════════════════════════════
 
@@ -296,6 +326,10 @@ def api_sector_cards():
     import pandas as pd
     from datetime import date
     today = date.today().strftime("%Y%m%d")
+    key = f"sector_cards_{today}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
     try:
         limit_df = ak.stock_zt_pool_em(date=today)
         zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
@@ -332,7 +366,9 @@ def api_sector_cards():
             'efficiency': efficiency,
         })
     items.sort(key=lambda x: x['score'], reverse=True)
-    return {"ok": True, "items": items[:15]}
+    result = {"ok": True, "items": items[:15]}
+    _cache_put(key, result)
+    return result
 
 
 @app.get("/api/scan/trend/cards")
@@ -342,6 +378,10 @@ def api_trend_cards():
     import pandas as pd
     from datetime import date, timedelta, datetime
     today = date.today().strftime("%Y%m%d")
+    key = f"trend_cards_{today}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
     try:
         prev = ak.stock_zt_pool_previous_em(date=today)
     except:
@@ -356,13 +396,11 @@ def api_trend_cards():
     if prev.empty:
         return {"ok": True, "items": []}
 
-    # 找涨幅列和名称列
     change_col = prev.columns[3]
     name_col = prev.columns[2]
     code_col = prev.columns[1]
 
     prev['涨幅'] = prev[change_col].astype(float)
-    # 筛选 3-9% 涨幅（续强但未涨停）
     trend = prev[(prev['涨幅'] >= 3) & (prev['涨幅'] < 9)].copy()
     if trend.empty:
         return {"ok": True, "items": []}
@@ -377,7 +415,9 @@ def api_trend_cards():
             'change_pct': round(float(row['涨幅']), 1),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
-    return {"ok": True, "items": items}
+    result = {"ok": True, "items": items}
+    _cache_put(key, result)
+    return result
 
 
 @app.get("/api/scan/zhaban/cards")
@@ -387,6 +427,10 @@ def api_zhaban_cards():
     import pandas as pd
     from datetime import date
     today = date.today().strftime("%Y%m%d")
+    key = f"zhaban_cards_{today}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=today)
     except Exception as e:
@@ -396,7 +440,6 @@ def api_zhaban_cards():
 
     code_col = zb.columns[1]
     name_col = zb.columns[2]
-    # 首次封板时间在第12列(index 11)
     seal_col = '首次封板时间' if '首次封板时间' in zb.columns else zb.columns[11]
 
     items = []
@@ -409,7 +452,9 @@ def api_zhaban_cards():
             'seal_time': seal_time,
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
-    return {"ok": True, "items": items[:10]}
+    result = {"ok": True, "items": items[:10]}
+    _cache_put(key, result)
+    return result
 
 
 @app.get("/api/scan/dtqiaoban/cards")
@@ -419,6 +464,10 @@ def api_dtqiaoban_cards():
     import pandas as pd
     from datetime import date
     today = date.today().strftime("%Y%m%d")
+    key = f"dtqiaoban_cards_{today}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=today)
     except Exception as e:
@@ -437,7 +486,9 @@ def api_dtqiaoban_cards():
             'name': str(row[name_col]),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
-    return {"ok": True, "items": items[:10]}
+    result = {"ok": True, "items": items[:10]}
+    _cache_put(key, result)
+    return result
 
 
 @app.get("/api/scan/zhaban")
