@@ -14,7 +14,7 @@ except ImportError:
     ak = None
 
 # ─── 本地缓存（日内数据不常变，避免重复拉取） ───
-_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache")
+_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
 _CACHE_TTL = 7200  # 2小时
 
 def _cache_get(key):

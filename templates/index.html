@@ -41,40 +41,59 @@
     <div class="nav-item" data-page="backtest">
         <span class="icon">⏱️</span> 回测系统
     </div>
+    <div style="flex:1"></div>
+    <div style="padding:8px 20px 4px;font-size:11px;color:var(--text-muted);letter-spacing:0.5px">🎨 背景主题</div>
+    <div class="bg-presets">
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#0c1220,#1a2744)" onclick="setBgPreset('linear-gradient(135deg,#0c1220 0%,#1a2744 50%,#0d1b2a 100%)')" title="深海蓝"></div>
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#0f0c29,#302b63)" onclick="setBgPreset('linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%)')" title="极光紫"></div>
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#0b1d1a,#1a3a32)" onclick="setBgPreset('linear-gradient(135deg,#0b1d1a 0%,#1a3a32 50%,#0d2018 100%)')" title="墨玉绿"></div>
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#1a0c0c,#3a1a1a)" onclick="setBgPreset('linear-gradient(135deg,#1a0c0c 0%,#3a1a1a 50%,#2a0d0d 100%)')" title="暗夜红"></div>
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#1a140c,#3a2a1a)" onclick="setBgPreset('linear-gradient(135deg,#1a140c 0%,#3a2a1a 50%,#2a1a0d 100%)')" title="暖阳橙"></div>
+        <div class="bg-swatch" style="background:linear-gradient(135deg,#0f1115,#1e2230)" onclick="setBgPreset('linear-gradient(135deg,#0f1115 0%,#1e2230 50%,#12141a 100%)')" title="星空灰"></div>
+        <div class="bg-swatch bg-swatch-upload" onclick="document.getElementById('bg-input').click()" title="自定义图片">📁</div>
+    </div>
+    <div class="nav-item" onclick="clearBackground()" title="恢复默认背景">
+        <span class="icon">🗑️</span> 清除背景
+    </div>
+    <input type="file" id="bg-input" accept="image/*" style="display:none" onchange="setBackground(this)">
 </nav>
 
 <!-- ═══ 主内容区 ═══ -->
 <main class="main">
-    <div class="main-header">
-        <h1 id="page-title">🛡️ 涨停扫描</h1>
-        <span class="date" id="today-display"></span>
+    <!-- ═══ 市场概览 Dashboard ═══ -->
+    <div class="dashboard-bar" id="dashboard">
+        <div class="dash-loading">📊 加载今日市场数据...</div>
     </div>
 
-    <!-- 参数栏 -->
-    <div class="params" id="param-bar">
-        <label>输出格式：</label>
-        <select id="output-mode">
-            <option value="card">📇 卡片视图</option>
-            <option value="table">表格模式</option>
-            <option value="detail">详细文本</option>
-        </select>
-        <button class="btn" onclick="runCurrent()">▶ 运行</button>
-    </div>
+    <!-- ═══ 当前模块 ═══ -->
+    <div class="module-page">
+        <div class="main-header">
+            <h1 id="page-title">🛡️ 涨停扫描</h1>
+        </div>
+
+    <!-- 输出区（与操作按钮在同一卡片） -->
+    <div class="card">
+        <div class="card-header-bar">
+            <button class="btn" onclick="runCurrent()">▶ 运行</button>
+        </div>
 
     <!-- 快捷操作 -->
     <div class="quick-actions" id="quick-actions">
-        <button class="btn btn-green btn-sm" onclick="runAll()">⚡ 一键全扫描</button>
         <button class="btn btn-sm" onclick="exportOutput()">📋 复制输出</button>
         <button class="btn btn-orange btn-sm" onclick="clearOutput()">🗑️ 清空</button>
     </div>
-
-    <!-- 输出区 -->
-    <div class="card">
-        <h2>输出结果</h2>
+        <!-- 进度条 -->
+        <div class="progress-container" id="progress-bar" style="display:none">
+            <div class="progress-track">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-status" id="progress-text">就绪</div>
+        </div>
         <div class="output-area" id="output">
             <span class="loading">就绪 — 点击「运行」开始扫描</span>
         </div>
-    </div>
+    </div> <!-- /card -->
+    </div> <!-- /module-page -->
 </main>
 
 <script>
@@ -83,34 +102,52 @@
 // ═══════════════════════════════════════════
 
 const PAGES = {
-    'scan-limit':   { title: '🛡️ 涨停扫描',     api: '/api/scan/limit-up',    cardApi: '/api/scan/limit-up/cards',    showMode: true },
-    'scan-trend':   { title: '📊 趋势扫描',     api: '/api/scan/trend',       cardApi: '/api/scan/trend/cards',      showMode: true },
-    'scan-sector':  { title: '🧩 板块热度',     api: '/api/scan/sector',      cardApi: '/api/scan/sector/cards',     showMode: true },
-    'scan-zhaban':  { title: '💥 炸板分析',     api: '/api/scan/zhaban',      cardApi: '/api/scan/zhaban/cards',     showMode: true },
-    'scan-dtqiaoban':{title: '📉 跌停翘板',     api: '/api/scan/dtqiaoban',   cardApi: '/api/scan/dtqiaoban/cards',  showMode: true },
-    'indicators':   { title: '🏆 龙虎榜分析',   api: '/api/indicators',       cardApi: null, showMode: false },
-    'community':    { title: '💬 舆情监测',     api: '/api/community',        cardApi: null, showMode: false },
-    'sentiment':    { title: '🌡️ 市场情绪',     api: '/api/sentiment',        cardApi: null, showMode: false },
-    'backtest':     { title: '⏱️ 回测系统',     api: '/api/backtest',         cardApi: null, showMode: false },
+    'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
+    'scan-trend':   { title: '📊 趋势扫描',   api: '/api/scan/trend/cards',   textApi: '/api/scan/trend' },
+    'scan-sector':  { title: '🧩 板块热度',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
+    'scan-zhaban':  { title: '💥 炸板分析',   api: '/api/scan/zhaban/cards',  textApi: '/api/scan/zhaban' },
+    'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
+    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators' },
+    'community':    { title: '💬 舆情监测',   api: '/api/community' },
+    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment' },
+    'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
 };
 
 let currentPage = 'scan-limit';
+const _outputCache = {};  // 每个模块独立的输出缓存 { pageKey: htmlString }
 
 // ═══════════════════════════════════════════
 //  初始化
 // ═══════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('today-display').textContent =
-        '📅 ' + new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+    // 自定义背景
+    setupBackground();
+    // 加载 Dashboard
+    loadDashboard();
 
-    // 导航点击
+    // 导航点击 + hash 路由
     document.querySelectorAll('.nav-item').forEach(el => {
         el.addEventListener('click', () => {
-            const page = el.dataset.page;
-            switchPage(page);
+            location.hash = el.dataset.page;
         });
     });
+
+    // 监听 hash 变化
+    function onHash() {
+        const page = location.hash.slice(1) || 'scan-limit';
+        if (PAGES[page]) switchPage(page);
+    }
+    window.addEventListener('hashchange', onHash);
+    // 初始加载按 hash 定位
+    const initPage = location.hash.slice(1) || 'scan-limit';
+    if (PAGES[initPage]) {
+        // 标记激活
+        document.querySelectorAll('.nav-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.page === initPage);
+        });
+        switchPage(initPage);
+    }
 
     // Enter 键触发运行
     document.addEventListener('keydown', e => {
@@ -125,6 +162,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════
 
 function switchPage(page) {
+    const outputEl = document.getElementById('output');
+    if (currentPage && outputEl) {
+        _outputCache[currentPage] = outputEl.innerHTML;
+    }
+
     currentPage = page;
     document.querySelectorAll('.nav-item').forEach(el => {
         el.classList.toggle('active', el.dataset.page === page);
@@ -133,9 +175,17 @@ function switchPage(page) {
     const info = PAGES[page];
     document.getElementById('page-title').textContent = info.title;
 
-    // 显示/隐藏模式选择
-    document.getElementById('output-mode').style.display = info.showMode ? 'inline' : 'none';
-    document.getElementById('output-mode').previousElementSibling.style.display = info.showMode ? 'inline' : 'none';
+    // 恢复缓存 + fade-in 动画
+    const modulePage = document.querySelector('.module-page');
+    modulePage.style.animation = 'none';
+    void modulePage.offsetHeight;
+    modulePage.style.animation = 'fadeInUp 0.3s ease both';
+
+    if (_outputCache[page]) {
+        outputEl.innerHTML = _outputCache[page];
+    } else {
+        outputEl.innerHTML = '<span class="loading">输出结果</span>';
+    }
 }
 
 // ═══════════════════════════════════════════
@@ -145,43 +195,37 @@ function switchPage(page) {
 async function runCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
+    delete _outputCache[currentPage];
     await callApi(info.api, currentPage);
 }
 
 async function callApi(apiUrl, pageKey) {
     const output = document.getElementById('output');
-    output.innerHTML = '<span class="loading">⏳ 正在扫描，请稍候...</span>';
+    output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
+    delete _outputCache[pageKey];
 
-    const mode = document.getElementById('output-mode').value;
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
-    // 卡片模式 — 有 cardApi 的页面使用
-    if (mode === 'card' && info.cardApi) {
+    if (info.textApi) {
+        // 有卡片 API → 卡片视图
         await loadCardView(output, pageKey);
-        return;
+    } else {
+        // 文本型页面
+        await loadTextView(output, pageKey);
     }
+    _outputCache[pageKey] = document.getElementById('output').innerHTML;
+}
 
-    // 普通模式
-    const params = new URLSearchParams();
-    if (info.showMode) {
-        params.set('table', mode === 'table' ? 'true' : 'false');
-    }
-    const url = apiUrl + (params.toString() ? '?' + params.toString() : '');
-
+async function loadTextView(output, pageKey) {
+    const info = PAGES[pageKey];
     try {
-        const resp = await fetch(url);
+        const resp = await fetch(info.api);
         const data = await resp.json();
-
         if (data.ok === false) {
             output.innerHTML = `<span class="error-text">❌ 错误：</span>\n${escapeHtml(data.error || '未知错误')}\n\n${escapeHtml(data.output || '')}`;
         } else {
             const txt = data.output || '(空)';
-            const html = renderTableOutput(txt);
-            if (html) {
-                output.innerHTML = html;
-            } else {
-                output.textContent = txt;
-            }
+            output.textContent = txt;
         }
     } catch (err) {
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
@@ -237,8 +281,16 @@ function analyzeStock(stk) {
 
 async function loadCardView(output, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
+
+    // 涨停扫描使用流式进度
+    if (pageKey === 'scan-limit') {
+        await loadCardViewStream(output, pageKey);
+        return;
+    }
+
+    // 其他卡片页面
     try {
-        const resp = await fetch(info.cardApi);
+        const resp = await fetch(info.api);
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
@@ -256,7 +308,6 @@ async function loadCardView(output, pageKey) {
             html += '</div>';
         }
 
-        // 按页面类型渲染
         if (pageKey === 'scan-sector') {
             html += renderSectorCards(items);
         } else if (pageKey === 'scan-limit') {
@@ -264,7 +315,85 @@ async function loadCardView(output, pageKey) {
         } else {
             html += renderSimpleCards(items, pageKey);
         }
+        output.innerHTML = html;
     } catch (err) {
+        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+    }
+    _outputCache[pageKey] = output.innerHTML;
+}
+
+async function loadCardViewStream(output, pageKey) {
+    const bar = document.getElementById('progress-bar');
+    const fill = document.getElementById('progress-fill');
+    const txt = document.getElementById('progress-text');
+
+    bar.style.display = 'block';
+    fill.style.width = '3%';
+    txt.textContent = '正在扫描...';
+    output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
+
+    const STEPS = ['涨停池', '过滤', '资金流', '评分', '报告'];
+    let step = 0;
+
+    try {
+        const resp = await fetch('/api/scan/limit-up/stream');
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+
+            buf += dec.decode(value, {stream: true});
+            const parts = buf.split('\n\n');
+            buf = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const msg = JSON.parse(line.slice(6));
+
+                        if (msg.type === 'progress') {
+                            txt.textContent = msg.text;
+                            for (let i = 0; i < STEPS.length; i++) {
+                                if (msg.text.includes(STEPS[i])) {
+                                    step = Math.max(step, i + 1);
+                                }
+                            }
+                            fill.style.width = Math.min(95, Math.round(step / STEPS.length * 100)) + '%';
+
+                        } else if (msg.type === 'complete') {
+                            bar.style.display = 'none';
+                            const s = msg.sentiment || {};
+                            let html = '';
+                            if (s.level) {
+                                html += '<div class="sentiment-banner">';
+                                html += `📊 市场情绪: <strong>${escapeHtml(s.level)}</strong>`;
+                                if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
+                                html += '</div>';
+                            }
+                            html += renderStockCards(msg.stocks, msg);
+                            output.innerHTML = html;
+                            _outputCache[pageKey] = output.innerHTML;
+                            return;
+
+                        } else if (msg.type === 'error') {
+                            bar.style.display = 'none';
+                            output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
+                            _outputCache[pageKey] = output.innerHTML;
+                            return;
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+        bar.style.display = 'none';
+        output.innerHTML = '<span class="loading">连接中断</span>';
+
+    } catch (err) {
+        bar.style.display = 'none';
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
 }
@@ -273,22 +402,40 @@ async function loadCardView(output, pageKey) {
 //  各页面卡片渲染
 // ═══════════════════════════════════════════
 
+function barColorClass(pct) {
+    if (pct >= 70) return 'high';
+    if (pct >= 40) return 'mid';
+    return 'low';
+}
+
+function scoreRingColor(score) {
+    if (score >= 80) return '#34d399';
+    if (score >= 70) return '#fbbf24';
+    if (score >= 55) return '#fb923c';
+    return '#f87171';
+}
+
 function renderStockCards(stocks, data) {
     let html = '<div class="card-list">';
-    for (const stk of stocks) {
+    stocks.forEach((stk, i) => {
         const analysis = analyzeStock(stk);
-        const scoreColor = stk.total_score >= 80 ? '#34d399' :
-                           stk.total_score >= 70 ? '#fbbf24' : '#f87171';
-        const moneyColor = stk.net_money >= 0 ? '#34d399' : '#f87171';
+        const ringCol = scoreRingColor(stk.total_score);
+        const ringPct = Math.min(100, Math.max(0, stk.total_score));
+        const circ = 100; // circumference for r=15.9155 in a 36x36 viewBox
+        const dash = (ringPct / 100) * circ;
         const moneySign = stk.net_money >= 0 ? '+' : '';
         const st = stk.seal_time || '0000';
+        const stagger = Math.min(i + 1, 10);
 
-        html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card">`;
+        html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card stagger-${stagger}">`;
         html += `<div class="card-header">`;
         html += `<span class="card-rank">#${stk.rank}</span>`;
         html += `<span class="card-name">${escapeHtml(stk.name)}</span>`;
         html += `<span class="card-code">${escapeHtml(stk.code)}</span>`;
-        html += `<span class="card-score" style="color:${scoreColor}">${stk.total_score}</span>`;
+        html += `<div class="score-ring-wrapper"><svg class="score-ring" viewBox="0 0 36 36">`;
+        html += `<path class="score-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>`;
+        html += `<path class="score-ring-fill" stroke="${ringCol}" stroke-dasharray="${dash} ${circ}" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>`;
+        html += `<text class="score-ring-text" x="18" y="18">${stk.total_score}</text></svg></div>`;
         html += `</div>`;
         html += '<div class="card-body">';
         html += '<div class="card-bars">';
@@ -302,8 +449,9 @@ function renderStockCards(stocks, data) {
         ];
         for (const b of bars) {
             const pct = Math.min(100, (b.score / b.max) * 100);
+            const cls = barColorClass(pct);
             html += `<div class="bar-row"><span class="bar-label">${b.label}</span>`;
-            html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+            html += `<div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>`;
             html += `<span class="bar-val">${b.score}</span></div>`;
         }
         html += '</div>';
@@ -329,7 +477,7 @@ function renderStockCards(stocks, data) {
         }
         html += '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>';
         html += '</a>';
-    }
+    });
     html += '</div>';
     return html;
 }
@@ -401,49 +549,151 @@ function renderSimpleCards(items, pageKey) {
 }
 
 // ═══════════════════════════════════════════
+//  Dashboard 市场概览
+// ═══════════════════════════════════════════
+
+function animateCount(el, target, duration) {
+    const start = performance.now();
+    function step(now) {
+        const p = Math.min((now - start) / (duration || 800), 1);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = Math.round(target * eased);
+        if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+}
+
+async function loadDashboard() {
+    const bar = document.getElementById('dashboard');
+    try {
+        const resp = await fetch('/api/dashboard');
+        const d = await resp.json();
+        if (!d.ok) throw new Error('no data');
+
+        const s = d.sentiment || {};
+        const lvMap = {
+            '高潮': {cls:'sentiment-hot', icon:'🔥'},
+            '活跃': {cls:'sentiment-active', icon:'⚡'},
+            '正常': {cls:'sentiment-normal', icon:'✅'},
+            '低迷': {cls:'sentiment-low', icon:'⚠️'},
+            '冰点': {cls:'sentiment-ice', icon:'❄️'},
+        };
+        const lv = lvMap[s.level] || {cls:'', icon:'📊'};
+        const sectors = (d.hot_sectors || []).slice(0, 5);
+        const sntCls = lv.cls;
+
+        const weekdays = ['日','一','二','三','四','五','六'];
+        const wd = weekdays[new Date().getDay()];
+
+        bar.innerHTML = `
+            <div class="dash-stat-card animate-fade-up stagger-1" onclick="location.hash=\'#scan-limit\'" title="点击查看涨停扫描">
+                <div class="dash-stat-icon">📅</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value accent">${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6)}</div>
+                    <div class="dash-stat-sub">星期${wd}</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-2 ${sntCls}" onclick="location.hash=\'#sentiment\'" title="点击查看情绪详情">
+                <div class="dash-stat-icon">${lv.icon}</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="color:${lv.cls.includes('hot')?'#ef4444':lv.cls.includes('active')?'#fbbf24':lv.cls.includes('normal')?'#34d399':lv.cls.includes('low')?'#94a3b8':'#60a5fa'}">${s.level}</div>
+                    <div class="dash-stat-sub">${s.score}/10 · 市场情绪</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-3" onclick="location.hash=\'#scan-limit\'" title="点击查看涨停列表">
+                <div class="dash-stat-icon">📈</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value green"><span class="dash-count" data-target="${d.limit_up_count||0}">0</span></div>
+                    <div class="dash-stat-label">涨停</div>
+                    <div class="dash-stat-sub">昨 ${d.prev_limit_count||'?'} 只</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-4" onclick="location.hash=\'#scan-dtqiaoban\'" title="点击查看跌停翘板">
+                <div class="dash-stat-icon">💥</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value"><span class="dash-count" data-target="${(d.zhaban_count||0)+(d.dieting_count||0)}">0</span></div>
+                    <div class="dash-stat-label">炸板 ${d.zhaban_count||0} · 跌停 ${d.dieting_count||0}</div>
+                    <div class="dash-stat-sub">溢价 ${d.avg_premium != null ? d.avg_premium + '%' : '?'} · 晋级 ${d.promotion_rate != null ? Math.round(d.promotion_rate*100) + '%' : '?'}</div>
+                </div>
+            </div>
+            <div class="dash-stat-card sectors-card animate-fade-up stagger-5" onclick="location.hash=\'#scan-sector\'" title="点击查看板块热度">
+                <div class="dash-stat-icon" style="font-size:18px">🔥</div>
+                <div class="dash-stat-body" style="flex:1">
+                    <div class="dash-sectors-wrap">
+                        ${sectors.map(s => `<span class="sector-tag">${s.name} <em>${s.count}</em></span>`).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 触发数字滚动
+        bar.querySelectorAll('.dash-count').forEach(el => {
+            animateCount(el, parseInt(el.dataset.target), 800);
+        });
+
+    } catch (e) {
+        bar.innerHTML = '<div class="dash-loading">⚠️ 市场数据加载失败</div>';
+    }
+}
+
+// ═══════════════════════════════════════════
 //  一键全扫描
 // ═══════════════════════════════════════════
 
 async function runAll() {
-    const output = document.getElementById('output');
-    output.innerHTML = '<span class="loading">⏳ 正在全扫描，按顺序执行中...</span>';
-
-    const scans = [
-        { title: '=== 涨停扫描 ===', url: '/api/scan/limit-up?table=true' },
-        { title: '=== 趋势扫描 ===', url: '/api/scan/trend?table=true' },
-        { title: '=== 板块热度 ===', url: '/api/scan/sector?table=true' },
-        { title: '=== 炸板分析 ===', url: '/api/scan/zhaban?table=true' },
-        { title: '=== 跌停翘板 ===', url: '/api/scan/dtqiaoban?table=true' },
-        { title: '=== 龙虎榜分析 ===', url: '/api/indicators' },
-        { title: '=== 舆情监测 ===', url: '/api/community' },
-        { title: '=== 市场情绪 ===', url: '/api/sentiment' },
-    ];
-
-    const parts = [];
-    for (const scan of scans) {
-        parts.push(`\n${scan.title}\n` + '-'.repeat(40));
-        output.textContent = parts.join('\n') + '\n⏳ 正在请求 ' + scan.title + '...';
-
-        try {
-            const resp = await fetch(scan.url);
-            const data = await resp.json();
-            parts.push(data.output || '(空)');
-        } catch (err) {
-            parts.push(`❌ ${err.message}`);
-        }
+    // 遍历所有页面依次运行
+    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment'];
+    for (const key of pages) {
+        location.hash = key;
+        await new Promise(r => setTimeout(r, 100));
+        await runCurrent();
+        await new Promise(r => setTimeout(r, 300));
     }
+}
 
-    // 整体渲染：文本段落 + 表格混合
-    let fullHtml = '';
-    for (const part of parts) {
-        const tbl = renderTableOutput(part);
-        if (tbl) {
-            fullHtml += tbl;
-        } else {
-            fullHtml += '<div class="output-text">' + escapeHtml(part) + '</div>';
-        }
+// ═══════════════════════════════════════════
+//  自定义背景
+// ═══════════════════════════════════════════
+
+function setupBackground() {
+    const saved = localStorage.getItem('customBg');
+    if (saved) applyBg(saved);
+}
+
+function setBgPreset(gradient) {
+    localStorage.setItem('customBg', gradient);
+    applyBg(gradient);
+}
+
+function setBackground(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        const dataUrl = e.target.result;
+        localStorage.setItem('customBg', dataUrl);
+        applyBg(dataUrl);
+    };
+    reader.readAsDataURL(file);
+    input.value = '';
+}
+
+function clearBackground() {
+    localStorage.removeItem('customBg');
+    document.body.style.background = '';
+    document.body.classList.remove('has-bg');
+}
+
+function applyBg(val) {
+    if (val.startsWith('linear-gradient')) {
+        document.body.style.background = val;
+    } else {
+        document.body.style.backgroundImage = `url(${val})`;
+        document.body.style.backgroundSize = 'cover';
+        document.body.style.backgroundPosition = 'center';
+        document.body.style.backgroundAttachment = 'fixed';
     }
-    output.innerHTML = fullHtml || escapeHtml(parts.join('\n'));
+    document.body.classList.add('has-bg');
 }
 
 // ═══════════════════════════════════════════
@@ -546,7 +796,9 @@ function renderTableOutput(txt) {
 }
 
 function clearOutput() {
-    document.getElementById('output').innerHTML = '<span class="loading">已清空</span>';
+    const el = document.getElementById('output');
+    el.innerHTML = '<span class="loading">输出结果</span>';
+    delete _outputCache[currentPage];
 }
 
 function exportOutput() {

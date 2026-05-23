@@ -4,19 +4,24 @@ A股超短线选股扫描器 — Web 交互界面
 FastAPI 后端，封装各扫描功能为 REST API
 """
 import io
+import os
 import sys
 import json
+import asyncio
+import threading
+import queue
 from contextlib import redirect_stdout, redirect_stderr
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
 # ── 挂载静态文件 ──
-app.mount("/static", StaticFiles(directory="static"), name="static")
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app.mount("/static", StaticFiles(directory=os.path.join(_BASE_DIR, "static")), name="static")
 
 
 # ═══════════════════════════════════════════
@@ -43,7 +48,7 @@ import os
 import time
 import pickle as _pickle
 
-_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache")
+_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
 _CACHE_TTL = 7200
 
 def _cache_get(name):
@@ -61,6 +66,45 @@ def _cache_put(name, data):
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(os.path.join(_CACHE_DIR, f"{name}.pkl"), 'wb') as f:
             _pickle.dump(data, f)
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════
+#  每日缓存（休盘后持久化，日内不重复扫描）
+# ═══════════════════════════════════════════
+
+_CST = timezone(timedelta(hours=8))
+
+def _is_market_closed() -> bool:
+    """判断 A 股是否已收盘（15:00 后或周末）"""
+    now = datetime.now(_CST)
+    if now.weekday() >= 5:
+        return True
+    return now.hour > 15 or (now.hour == 15 and now.minute >= 0)
+
+def _daily_path(key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"daily_{date.today().isoformat()}_{key}.json")
+
+def _daily_cache_get(key: str):
+    """获取今日缓存，不存在返回 None"""
+    path = _daily_path(key)
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _daily_cache_set(key: str, data):
+    """休盘后才写入缓存"""
+    if not _is_market_closed():
+        return
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_daily_path(key), 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
     except Exception:
         pass
 
@@ -95,37 +139,41 @@ def _scan_limit_up_data(today_str: str):
     import pandas as pd
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    print("  [涨停卡片] 第1步: 获取涨停池...", file=sys.stderr)
+    print("  [扫描] 第1步: 获取涨停池...", file=sys.stderr)
     pool = fetch_limit_up_pool()
     if pool is None or pool.empty:
-        print("  [涨停卡片] 无涨停数据", file=sys.stderr)
+        print("  [扫描] 无涨停数据", file=sys.stderr)
         return None
 
-    print(f"  [涨停卡片] 共 {len(pool)} 只, 第2步: 前置过滤...", file=sys.stderr)
+    print(f"  [扫描] 共 {len(pool)} 只, 第2步: 前置过滤...", file=sys.stderr)
     filtered = pre_filter(pool)
     if filtered.empty:
-        print("  [涨停卡片] 过滤后为空", file=sys.stderr)
+        print("  [扫描] 过滤后为空", file=sys.stderr)
         return None
 
-    print(f"  [涨停卡片] 剩余 {len(filtered)} 只, 第3步: 获取资金流...", file=sys.stderr)
+    print(f"  [扫描] 剩余 {len(filtered)} 只, 第3步: 获取资金流...", file=sys.stderr)
     fund_df, _ = fetch_fund_flow_data()
-    if fund_df is None:
-        print("  [涨停卡片] 资金流不可用", file=sys.stderr)
-        return None
+    degraded = fund_df is None
 
-    print("  [涨停卡片] 第4步: 股价过滤...", file=sys.stderr)
-    filtered = filter_by_price(filtered, fund_df)
-    if filtered.empty:
-        print("  [涨停卡片] 过滤后为空", file=sys.stderr)
-        return None
+    if not degraded:
+        print("  [扫描] 第4步: 股价过滤...", file=sys.stderr)
+        filtered = filter_by_price(filtered, fund_df)
+        if filtered.empty:
+            print("  [扫描] 过滤后为空", file=sys.stderr)
+            return None
 
-    print(f"  [涨停卡片] 剩余 {len(filtered)} 只, 第5步: 计算各维度评分...", file=sys.stderr)
+    print(f"  [扫描] 剩余 {len(filtered)} 只, 第5步: 计算各维度评分...", file=sys.stderr)
     seal_scores = score_seal_strength(filtered)
-    money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
-    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
+    if not degraded:
+        money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
+    else:
+        print("  [扫描] ⚠ 资金流不可用，降级评分", file=sys.stderr)
+        money_scores = pd.Series(0.0, index=filtered.index)
+        raw_money = pd.Series(0.0, index=filtered.index)
+    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
     tech_scores = score_tech_form(filtered)
 
-    print("  [涨停卡片] 第6步: 并行获取预测评分...", file=sys.stderr)
+    print("  [扫描] 第6步: 并行获取预测评分...", file=sys.stderr)
     with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             ex.submit(detect_market_sentiment, today_str): "sentiment",
@@ -159,7 +207,7 @@ def _scan_limit_up_data(today_str: str):
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
     sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
 
-    print("  [涨停卡片] 第7步: 生成评分报告...", file=sys.stderr)
+    print("  [扫描] 第7步: 生成评分报告...", file=sys.stderr)
     import weight_manager
     weights = weight_manager.load_weights()
     base_totals = weight_manager.apply_weights(
@@ -205,96 +253,45 @@ def _scan_limit_up_data(today_str: str):
 
     return {
         'stocks': stocks,
+        'df': filtered,
+        'seal_scores': seal_scores,
+        'money_scores': money_scores,
+        'raw_money': raw_money,
+        'sector_scores': sector_scores,
+        'tech_scores': tech_scores,
+        'history_scores': history_scores,
+        'community_scores': community_scores,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
         'sentiment_multiplier': sentiment_multiplier,
         'sentiment_detail': sentiment_detail,
+        'weights': weights,
         'date': today_str,
     }
 
 
 def _run_limit_up_scan(today_str: str, table_mode: bool):
-    """涨停池扫描 — 文本输出（兼容原接口）"""
-    from scanner import (format_table_output, format_output, TOP_N)
-    import pandas as pd
+    """涨停池扫描 — 文本输出（复用 _scan_limit_up_data 的结果）"""
+    from scanner import format_table_output, format_output
 
     data = _scan_limit_up_data(today_str)
-    if data is None:
+    if data is None or not data['stocks']:
         print("no_data")
         return
 
-    # 重建 DataFrame 和 Series 用于 format 函数
-    stocks = data['stocks']
-    if not stocks:
-        print("no_data")
-        return
-
-    # 重新组织数据回 format 函数需要的格式
-    from scanner import fetch_limit_up_pool, pre_filter, filter_by_price, fetch_fund_flow_data
-    pool = fetch_limit_up_pool()
-    filtered = pre_filter(pool)
-    fund_df, _ = fetch_fund_flow_data()
-    if fund_df is not None:
-        filtered = filter_by_price(filtered, fund_df)
-
-    if filtered.empty:
-        print("no_data")
-        return
-
-    # 重新计算一遍 Series（轻量，因为有缓存所以很快）
-    from scanner import (score_seal_strength, get_money_flow_scores,
-                         get_sector_heat_scores, score_tech_form,
-                         analyze_dragon_tiger, score_stock_history,
-                         detect_market_sentiment)
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    seal_scores = score_seal_strength(filtered)
-    money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
-    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
-    tech_scores = score_tech_form(filtered)
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {
-            ex.submit(detect_market_sentiment, today_str): "sentiment",
-            ex.submit(analyze_dragon_tiger, filtered, today_str): "lhb",
-            ex.submit(score_stock_history, filtered, today_str): "history",
-            ex.submit(score_community, filtered): "community",
-        }
-        res = {}
-        for f in as_completed(futs):
-            key = futs[f]
-            try:
-                res[key] = f.result()
-            except Exception:
-                pass
-
-    sentiment_score, sentiment_level, sentiment_detail = 5.0, "未知", {}
-    if res.get("sentiment"):
-        sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
-
-    lhb_bonus = res.get("lhb")
-    lhb_bonus = lhb_bonus[0] if lhb_bonus else pd.Series(0.0, index=filtered.index)
-    history_scores = res.get("history")
-    history_scores = history_scores[0] if history_scores else pd.Series(2.5, index=filtered.index)
-    community_scores = res.get("community")
-    if community_scores is None:
-        community_scores = pd.Series(3.5, index=filtered.index)
-
-    money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
-    sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
-
-    import weight_manager
-    weights = weight_manager.load_weights()
     fmt = format_table_output if table_mode else format_output
-    print(fmt(filtered, money_scores, sector_scores, seal_scores, tech_scores,
-              raw_money=raw_money,
-              sentiment_score=sentiment_score,
-              sentiment_level=sentiment_level,
-              sentiment_detail=sentiment_detail,
-              history_scores=history_scores,
-              community_scores=community_scores,
-              sentiment_multiplier=sentiment_multiplier,
-              weights=weights))
+    print(fmt(
+        data['df'], data['money_scores'], data['sector_scores'],
+        data['seal_scores'], data['tech_scores'],
+        raw_money=data['raw_money'],
+        sentiment_score=data['sentiment_score'],
+        sentiment_level=data['sentiment_level'],
+        sentiment_detail=data['sentiment_detail'],
+        history_scores=data['history_scores'],
+        community_scores=data['community_scores'],
+        sentiment_multiplier=data['sentiment_multiplier'],
+        weights=data['weights'],
+    ))
 
 
 def score_community(df):
@@ -308,8 +305,13 @@ def score_community(df):
 
 
 @app.get("/api/scan/limit-up/cards")
-def api_scan_limit_up_cards():
+def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
+    if not refresh:
+        cached = _daily_cache_get("limit_up_cards")
+        if cached:
+            return cached
+
     from datetime import date
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
@@ -319,7 +321,7 @@ def api_scan_limit_up_cards():
             print("  [涨停卡片] 无数据", file=sys.stderr)
             return {"ok": True, "stocks": [], "sentiment": {}}
         print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
-        return {
+        result = {
             "ok": True,
             "stocks": data['stocks'],
             "sentiment": {
@@ -329,6 +331,8 @@ def api_scan_limit_up_cards():
             },
             "date": data['date'],
         }
+        _daily_cache_set("limit_up_cards", result)
+        return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
 
@@ -647,12 +651,138 @@ def api_sentiment():
 
 
 # ═══════════════════════════════════════════
+#  市场概览 Dashboard
+# ═══════════════════════════════════════════
+
+@app.get("/api/dashboard")
+def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
+    """市场概览：情绪、涨停数、炸板/跌停汇总、热门板块"""
+    # 每日缓存命中且不强制刷新 → 直接返回
+    if not refresh:
+        cached = _daily_cache_get("dashboard")
+        if cached:
+            return cached
+
+    import akshare as ak
+    import pandas as pd
+    from scanner import fetch_limit_up_pool, detect_market_sentiment
+    today = date.today().strftime("%Y%m%d")
+    result = {"ok": True, "date": today}
+
+    # 市场情绪
+    try:
+        score, level, detail = detect_market_sentiment(today)
+        result["sentiment"] = {"score": score, "level": level}
+        if detail:
+            for k, v in detail.items():
+                if k not in ("zhaban_count", "dieting_count"):
+                    result[k] = v
+    except:
+        result["sentiment"] = {"score": 0, "level": "未知"}
+
+    # 涨停池 + 行业分布
+    try:
+        pool = fetch_limit_up_pool()
+        if pool is not None and not pool.empty:
+            result["limit_up_count"] = len(pool)
+            ind_col = '所属行业' if '所属行业' in pool.columns else pool.columns[15]
+            top5 = pool[ind_col].value_counts().head(5)
+            result["hot_sectors"] = [
+                {"name": str(name), "count": int(cnt)}
+                for name, cnt in top5.items()
+            ]
+        else:
+            result["limit_up_count"] = 0
+            result["hot_sectors"] = []
+    except:
+        result["limit_up_count"] = 0
+        result["hot_sectors"] = []
+
+    # 炸板/跌停
+    for api_name, key in [("stock_zt_pool_zbgc_em", "zhaban_count"),
+                           ("stock_zt_pool_dtgc_em", "dieting_count")]:
+        try:
+            df = getattr(ak, api_name)(date=today)
+            result[key] = len(df) if df is not None and not df.empty else 0
+        except:
+            result[key] = 0
+
+    _daily_cache_set("dashboard", result)
+    return result
+
+
+# ═══════════════════════════════════════════
+#  流式扫描端点 — SSE 实时进度
+# ═══════════════════════════════════════════
+
+@app.get("/api/scan/limit-up/stream")
+async def api_scan_limit_up_stream():
+    """涨停扫描 — SSE 流式输出实时进度"""
+    today = date.today().strftime("%Y%m%d")
+
+    async def _generate():
+        q = queue.Queue()
+        result_holder = {"data": None, "error": None}
+
+        class _Capture:
+            """拦截 print(..., file=stderr) 的每一行，实时推入队列"""
+            def __init__(self):
+                self._buf = ""
+            def write(self, text):
+                self._buf += text
+                while '\n' in self._buf:
+                    idx = self._buf.index('\n')
+                    line = self._buf[:idx].strip('\r').strip()
+                    self._buf = self._buf[idx+1:]
+                    if line and not line.startswith('\r'):
+                        q.put(("progress", line))
+            def flush(self):
+                pass
+            def reconfigure(self, **kwargs):
+                pass  # 兼容 akshare/scanner 中 sys.stderr.reconfigure() 调用
+
+        def _run():
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = _Capture()
+                data = _scan_limit_up_data(today)
+                result_holder["data"] = data
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                sys.stderr = old_stderr
+                q.put(("done", None))
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+        while True:
+            try:
+                typ, val = q.get(timeout=0.2)
+                if typ == "done":
+                    break
+                yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+            except queue.Empty:
+                continue
+
+        data = result_holder["data"]
+        if data:
+            yield f"data: {json.dumps({'type':'complete','stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level'],'multiplier':data['sentiment_multiplier']},'date':data['date']})}\n\n"
+        elif result_holder["error"]:
+            yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
+        else:
+            yield f"data: {json.dumps({'type':'error','text':'无数据'})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+# ═══════════════════════════════════════════
 #  前端页面
 # ═══════════════════════════════════════════
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    with open("templates/index.html", "r", encoding="utf-8") as f:
+    with open(os.path.join(_BASE_DIR, "templates/index.html"), "r", encoding="utf-8") as f:
         return f.read()
 
 

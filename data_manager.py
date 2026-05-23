@@ -9,8 +9,6 @@ from datetime import date, timedelta
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SUMMARY_FILE = os.path.join(DATA_DIR, "daily_summary.md")
 
-os.makedirs(DATA_DIR, exist_ok=True)
-
 def ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
