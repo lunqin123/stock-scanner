@@ -55,50 +55,37 @@ def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
     return {"ok": True, "output": out, "mode": "table" if table else "detail"}
 
 
-def _run_limit_up_scan(today_str: str, table_mode: bool):
-    """涨停池扫描核心逻辑（与 scanner.main() 逻辑一致）"""
+def _scan_limit_up_data(today_str: str):
+    """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
     from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
                          get_money_flow_scores, get_sector_heat_scores,
                          score_tech_form, filter_by_price,
                          fetch_fund_flow_data, detect_market_sentiment,
-                         analyze_dragon_tiger, score_stock_history,
-                         format_table_output, format_output, TOP_N)
+                         analyze_dragon_tiger, score_stock_history, TOP_N)
     import pandas as pd
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from datetime import date
 
     pool = fetch_limit_up_pool()
     if pool is None or pool.empty:
-        print("no_data")
-        return
+        return None
 
     filtered = pre_filter(pool)
     if filtered.empty:
-        print("no_data")
-        return
+        return None
 
-    # 获取同花顺资金流（同时用于资金评分 + 股价过滤）
-    fund_df, fund_err = fetch_fund_flow_data()
+    fund_df, _ = fetch_fund_flow_data()
     if fund_df is None:
-        money_scores = pd.Series(0.0, index=filtered.index)
-        sector_scores = get_sector_heat_scores(filtered)
-        tech_scores = score_tech_form(filtered)
-        seal_scores = score_seal_strength(filtered)
-        fmt = format_table_output if table_mode else format_output
-        print(fmt(filtered, money_scores, sector_scores, seal_scores, tech_scores))
-        return
+        return None
 
     filtered = filter_by_price(filtered, fund_df)
     if filtered.empty:
-        print("no_data")
-        return
+        return None
 
     seal_scores = score_seal_strength(filtered)
     money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
     sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
     tech_scores = score_tech_form(filtered)
 
-    # 并行获取预测评分
     with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             ex.submit(detect_market_sentiment, today_str): "sentiment",
@@ -114,26 +101,144 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
             except Exception:
                 pass
 
+    sentiment_score, sentiment_level = 5.0, "未知"
+    sentiment_detail = {}
     if res.get("sentiment"):
         sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
-    else:
-        sentiment_score, sentiment_level, sentiment_detail = 5.0, "未知", {}
 
-    if res.get("lhb"):
-        lhb_bonus, _ = res["lhb"]
-    else:
-        lhb_bonus = pd.Series(0.0, index=filtered.index)
+    lhb_bonus = res.get("lhb")
+    lhb_bonus = lhb_bonus[0] if lhb_bonus else pd.Series(0.0, index=filtered.index)
 
-    if res.get("history"):
-        history_scores, _ = res["history"]
-    else:
-        history_scores = pd.Series(2.5, index=filtered.index)
+    history_scores = res.get("history")
+    history_scores = history_scores[0] if history_scores is not None else pd.Series(2.5, index=filtered.index)
 
     community_scores = res.get("community")
     if community_scores is None:
         community_scores = pd.Series(3.5, index=filtered.index)
 
-    # 龙虎榜加分并入资金质量
+    money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
+    sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
+
+    import weight_manager
+    weights = weight_manager.load_weights()
+    base_totals = weight_manager.apply_weights(
+        seal_scores, money_scores, sector_scores, tech_scores,
+        history_scores, community_scores, weights)
+    total_scores = base_totals * sentiment_multiplier
+
+    # 取 TOP_N
+    top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
+
+    def _money_str(val):
+        try:
+            v = float(val)
+            if abs(v) >= 1e8: return f"{v/1e8:.2f}亿"
+            if abs(v) >= 1e4: return f"{v/1e4:.0f}万"
+            return f"{v:.0f}"
+        except: return str(val)
+
+    stocks = []
+    for rank, idx in enumerate(top_indices, 1):
+        row = filtered.loc[idx]
+        code = str(row.get('代码', '')).strip().zfill(6)
+        name = str(row.get('名称', ''))
+        net = float(raw_money.get(idx, 0))
+        stocks.append({
+            'rank': rank,
+            'code': code,
+            'name': name,
+            'total_score': round(float(total_scores[idx]), 1),
+            'base_score': round(float(base_totals[idx]), 1),
+            'seal_score': round(float(seal_scores.get(idx, 0)), 1),
+            'money_score': round(float(money_scores.get(idx, 0)), 1),
+            'sector_score': round(float(sector_scores.get(idx, 0)), 1),
+            'tech_score': round(float(tech_scores.get(idx, 0)), 1),
+            'history_score': round(float(history_scores.get(idx, 0)), 1),
+            'community_score': round(float(community_scores.get(idx, 0)), 1),
+            'net_money': net,
+            'net_money_str': _money_str(net),
+            'turnover': f"{float(row.get('换手率', 0)):.1f}",
+            'seal_time': str(row.get('首次封板时间', ''))[:4],
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+        })
+
+    return {
+        'stocks': stocks,
+        'sentiment_score': sentiment_score,
+        'sentiment_level': sentiment_level,
+        'sentiment_multiplier': sentiment_multiplier,
+        'sentiment_detail': sentiment_detail,
+        'date': today_str,
+    }
+
+
+def _run_limit_up_scan(today_str: str, table_mode: bool):
+    """涨停池扫描 — 文本输出（兼容原接口）"""
+    from scanner import (format_table_output, format_output, TOP_N)
+    import pandas as pd
+
+    data = _scan_limit_up_data(today_str)
+    if data is None:
+        print("no_data")
+        return
+
+    # 重建 DataFrame 和 Series 用于 format 函数
+    stocks = data['stocks']
+    if not stocks:
+        print("no_data")
+        return
+
+    # 重新组织数据回 format 函数需要的格式
+    from scanner import fetch_limit_up_pool, pre_filter, filter_by_price, fetch_fund_flow_data
+    pool = fetch_limit_up_pool()
+    filtered = pre_filter(pool)
+    fund_df, _ = fetch_fund_flow_data()
+    if fund_df is not None:
+        filtered = filter_by_price(filtered, fund_df)
+
+    if filtered.empty:
+        print("no_data")
+        return
+
+    # 重新计算一遍 Series（轻量，因为有缓存所以很快）
+    from scanner import (score_seal_strength, get_money_flow_scores,
+                         get_sector_heat_scores, score_tech_form,
+                         analyze_dragon_tiger, score_stock_history,
+                         detect_market_sentiment)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    seal_scores = score_seal_strength(filtered)
+    money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
+    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
+    tech_scores = score_tech_form(filtered)
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {
+            ex.submit(detect_market_sentiment, today_str): "sentiment",
+            ex.submit(analyze_dragon_tiger, filtered, today_str): "lhb",
+            ex.submit(score_stock_history, filtered, today_str): "history",
+            ex.submit(score_community, filtered): "community",
+        }
+        res = {}
+        for f in as_completed(futs):
+            key = futs[f]
+            try:
+                res[key] = f.result()
+            except Exception:
+                pass
+
+    sentiment_score, sentiment_level, sentiment_detail = 5.0, "未知", {}
+    if res.get("sentiment"):
+        sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
+
+    lhb_bonus = res.get("lhb")
+    lhb_bonus = lhb_bonus[0] if lhb_bonus else pd.Series(0.0, index=filtered.index)
+    history_scores = res.get("history")
+    history_scores = history_scores[0] if history_scores else pd.Series(2.5, index=filtered.index)
+    community_scores = res.get("community")
+    if community_scores is None:
+        community_scores = pd.Series(3.5, index=filtered.index)
+
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
     sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
 
@@ -159,6 +264,29 @@ def score_community(df):
     except Exception:
         import pandas as pd
         return pd.Series(3.5, index=df.index)
+
+
+@app.get("/api/scan/limit-up/cards")
+def api_scan_limit_up_cards():
+    """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    try:
+        data = _scan_limit_up_data(today)
+        if data is None:
+            return {"ok": True, "stocks": [], "sentiment": {}}
+        return {
+            "ok": True,
+            "stocks": data['stocks'],
+            "sentiment": {
+                "score": data['sentiment_score'],
+                "level": data['sentiment_level'],
+                "multiplier": data['sentiment_multiplier'],
+            },
+            "date": data['date'],
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "stocks": []})
 
 
 @app.get("/api/scan/zhaban")

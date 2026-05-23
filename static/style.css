@@ -256,6 +256,140 @@ body {
 .badge-yellow { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
 .badge-blue { background: rgba(79, 140, 255, 0.15); color: var(--accent); }
 
+/* ── 情绪横幅 ── */
+.sentiment-banner {
+    background: var(--bg-secondary);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.sentiment-banner strong {
+    color: var(--accent);
+}
+
+/* ── 卡片网格 ── */
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.stock-card {
+    display: block;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-decoration: none;
+    color: var(--text-primary);
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.stock-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(79, 140, 255, 0.15);
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.card-rank {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-weight: 600;
+}
+
+.card-name {
+    font-size: 16px;
+    font-weight: 600;
+    flex: 1;
+}
+
+.card-code {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.card-score {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: monospace;
+}
+
+/* ── 评分条 ── */
+.card-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 12px;
+}
+
+.bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.bar-label {
+    width: 32px;
+    color: var(--text-muted);
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.bar-track {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-primary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+.bar-val {
+    width: 24px;
+    text-align: right;
+    color: var(--text-secondary);
+    font-family: monospace;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+/* ── 卡片底部 ── */
+.card-footer {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
+
+.card-footer strong {
+    font-weight: 600;
+}
+
 /* ── 数据表格 ── */
 .table-wrap {
     overflow-x: auto;

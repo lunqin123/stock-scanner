@@ -54,8 +54,9 @@
     <div class="params" id="param-bar">
         <label>输出格式：</label>
         <select id="output-mode">
-            <option value="detail">详细文本</option>
+            <option value="card">📇 卡片视图</option>
             <option value="table">表格模式</option>
+            <option value="detail">详细文本</option>
         </select>
         <button class="btn" onclick="runCurrent()">▶ 运行</button>
     </div>
@@ -151,13 +152,20 @@ async function callApi(apiUrl, pageKey) {
     const output = document.getElementById('output');
     output.innerHTML = '<span class="loading">⏳ 正在扫描，请稍候...</span>';
 
-    // 构造参数
-    const params = new URLSearchParams();
+    const mode = document.getElementById('output-mode').value;
     const info = PAGES[pageKey] || PAGES['scan-limit'];
-    if (info.showMode) {
-        params.set('table', document.getElementById('output-mode').value === 'table' ? 'true' : 'false');
+
+    // 卡片模式 — 涨停扫描专用
+    if (pageKey === 'scan-limit' && mode === 'card') {
+        await loadCardView(output);
+        return;
     }
 
+    // 普通模式
+    const params = new URLSearchParams();
+    if (info.showMode) {
+        params.set('table', mode === 'table' ? 'true' : 'false');
+    }
     const url = apiUrl + (params.toString() ? '?' + params.toString() : '');
 
     try {
@@ -175,6 +183,72 @@ async function callApi(apiUrl, pageKey) {
                 output.textContent = txt;
             }
         }
+    } catch (err) {
+        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+    }
+}
+
+async function loadCardView(output) {
+    try {
+        const resp = await fetch('/api/scan/limit-up/cards');
+        const data = await resp.json();
+
+        if (!data.ok || !data.stocks || !data.stocks.length) {
+            output.innerHTML = '<span class="loading">暂无数据</span>';
+            return;
+        }
+
+        const s = data.sentiment || {};
+        let html = '<div class="sentiment-banner">';
+        html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
+        if (s.multiplier) html += ` &times;${s.multiplier}`;
+        html += '</div>';
+
+        html += '<div class="card-grid">';
+        for (const stk of data.stocks) {
+            const scoreColor = stk.total_score >= 75 ? '#34d399' :
+                               stk.total_score >= 65 ? '#fbbf24' : '#f87171';
+            const moneyColor = stk.net_money >= 0 ? '#34d399' : '#f87171';
+            const moneySign = stk.net_money >= 0 ? '+' : '';
+
+            html += `<a href="${escapeHtml(stk.url)}" target="_blank" class="stock-card" `;
+            html += `title="点击查看同花顺详情页 — ${stk.name}(${stk.code})">`;
+            html += `<div class="card-header">`;
+            html += `<span class="card-rank">#${stk.rank}</span>`;
+            html += `<span class="card-name">${escapeHtml(stk.name)}</span>`;
+            html += `<span class="card-code">${escapeHtml(stk.code)}</span>`;
+            html += `<span class="card-score" style="color:${scoreColor}">${stk.total_score}</span>`;
+            html += `</div>`;
+
+            // 评分条
+            const items = [
+                {label:'涨停', score:stk.seal_score, max:32},
+                {label:'资金', score:stk.money_score, max:20},
+                {label:'板块', score:stk.sector_score, max:22},
+                {label:'量价', score:stk.tech_score, max:10},
+                {label:'股性', score:stk.history_score, max:5},
+                {label:'舆情', score:stk.community_score, max:7},
+            ];
+            html += '<div class="card-bars">';
+            for (const item of items) {
+                const pct = Math.min(100, (item.score / item.max) * 100);
+                html += `<div class="bar-row"><span class="bar-label">${item.label}</span>`;
+                html += `<div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+                html += `<span class="bar-val">${item.score}</span></div>`;
+            }
+            html += '</div>';
+
+            // 底部信息
+            html += '<div class="card-footer">';
+            html += `<span>净流入: <strong style="color:${moneyColor}">${moneySign}${escapeHtml(stk.net_money_str)}</strong></span>`;
+            html += `<span>换手: ${escapeHtml(stk.turnover)}%</span>`;
+            html += `<span>封板: ${escapeHtml(stk.seal_time)}</span>`;
+            html += '</div>';
+
+            html += '</a>';
+        }
+        html += '</div>';
+        output.innerHTML = html;
     } catch (err) {
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
