@@ -659,9 +659,18 @@ def detect_market_sentiment(today_str: str):
     yesterday = (today_dt - timedelta(days=days_back)).strftime('%Y%m%d')
 
     try:
+        print("  [情绪] 第1步: 获取昨日涨停数据...", file=sys.stderr)
         prev_limit = ak.stock_zt_pool_previous_em(date=yesterday)
         if prev_limit.empty:
             return 5.0, "未知(无昨日数据)", {"note": "no previous data"}
+        print(f"  [情绪] 昨日涨停 {len(prev_limit)} 只", file=sys.stderr)
+
+        print("  [情绪] 第2步: 获取炸板/跌停数据...", file=sys.stderr)
+        zb_df = ak.stock_zt_pool_zbgc_em(date=yesterday)
+        dt_df = ak.stock_zt_pool_dtgc_em(date=yesterday)
+        print(f"  [情绪] 炸板 {len(zb_df) if zb_df is not None else 0} 只, 跌停 {len(dt_df) if dt_df is not None else 0} 只", file=sys.stderr)
+
+        print("  [情绪] 第3步: 计算评分...", file=sys.stderr)
 
         zb_df = ak.stock_zt_pool_zbgc_em(date=yesterday)
         dt_df = ak.stock_zt_pool_dtgc_em(date=yesterday)

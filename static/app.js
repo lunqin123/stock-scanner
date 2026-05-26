@@ -28,7 +28,7 @@ const PAGES = {
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
     'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators/cards', textApi: '/api/indicators', streamApi: '/api/indicators/stream' },
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
-    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
+    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment', streamApi: '/api/sentiment/stream' },
     'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
 };
 
@@ -214,6 +214,11 @@ async function loadCardView(output, pageKey) {
         return;
     }
 
+    if (pageKey === 'sentiment') {
+        await loadCardViewStream(output, pageKey);
+        return;
+    }
+
     try {
         const resp = await fetch(info.api);
         const data = await resp.json();
@@ -302,7 +307,9 @@ async function loadCardViewStream(output, pageKey) {
     await new Promise(r => setTimeout(r, 40));  // 给浏览器一点时间渲染初始状态
 
     try {
-        const resp = await fetch('/api/scan/limit-up/stream');
+        var streamUrl = '/api/scan/limit-up/stream';
+        if (pageKey === 'sentiment') streamUrl = '/api/sentiment/stream';
+        const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
