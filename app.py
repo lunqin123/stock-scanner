@@ -1252,6 +1252,33 @@ def _comment_score_note(score):
 
 
 # ═══════════════════════════════════════════
+#  市场状态检测
+# ═══════════════════════════════════════════
+
+from datetime import datetime, timedelta
+
+_MARKET_CST = timezone(timedelta(hours=8))
+
+def get_market_status():
+    """返回当前市场状态: 'trading' / 'closed' / 'weekend'"""
+    now = datetime.now(_MARKET_CST)
+    wd = now.weekday()
+    if wd >= 5:
+        return "weekend"
+    minute_of_day = now.hour * 60 + now.minute
+    # 交易时段 9:30-11:30, 13:00-15:00
+    if (570 <= minute_of_day < 690) or (780 <= minute_of_day < 900):
+        return "trading"
+    return "closed"
+
+
+@app.get("/api/market-status")
+def api_market_status():
+    status = get_market_status()
+    return {"ok": True, "status": status}
+
+
+# ═══════════════════════════════════════════
 #  GitHub Webhook — 自动部署
 # ═══════════════════════════════════════════
 

@@ -413,6 +413,46 @@ async function runAll() {
     }
 }
 
+// ─── 市场模式 ───
+var _marketStatus = 'closed';
+var _marketLabels = {
+    'trading': { icon: '⚡', text: '盘中', cls: 'mode-trading' },
+    'closed': { icon: '🌙', text: '盘后', cls: 'mode-closed' },
+    'weekend': { icon: '🎉', text: '休市', cls: 'mode-weekend' },
+};
+
+async function loadMarketStatus() {
+    try {
+        var resp = await fetch('/api/market-status');
+        var d = await resp.json();
+        if (d.ok) _marketStatus = d.status;
+    } catch(e) {}
+    updateMarketUI();
+}
+
+function updateMarketUI() {
+    var info = _marketLabels[_marketStatus] || _marketLabels['closed'];
+    var modeEl = document.getElementById('market-mode');
+    if (!modeEl) {
+        modeEl = document.createElement('div');
+        modeEl.id = 'market-mode';
+        modeEl.style.cssText = 'padding:6px 20px;font-size:11px;display:flex;align-items:center;gap:6px;border-top:1px solid var(--border-light)';
+        document.querySelector('.sidebar').appendChild(modeEl);
+    }
+    modeEl.innerHTML = '<span>' + info.icon + '</span><span>' + info.text + '</span>';
+
+    // 盘中模式：隐藏盘中不相关的页面
+    var hiddenInTrading = { 'scan-trend': true, 'indicators': true, 'backtest': true };
+    document.querySelectorAll('.nav-item[data-page]').forEach(function(el) {
+        var page = el.dataset.page;
+        if (_marketStatus === 'trading' && hiddenInTrading[page]) {
+            el.style.display = 'none';
+        } else {
+            el.style.display = '';
+        }
+    });
+}
+
 // ─── 移动端侧边栏 ───
 function toggleSidebar() {
     document.querySelector('.sidebar').classList.toggle('open');
@@ -427,6 +467,7 @@ function closeSidebar() {
 document.addEventListener('DOMContentLoaded', () => {
     setupBackground();
     updateWatchlistBadge();
+    loadMarketStatus();
     loadDashboard();
 
     document.querySelectorAll('.nav-item').forEach(el => {
