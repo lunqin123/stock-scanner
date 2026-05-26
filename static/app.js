@@ -28,7 +28,7 @@ const PAGES = {
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
     'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators/cards', textApi: '/api/indicators', streamApi: '/api/indicators/stream' },
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
-    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment', streamApi: '/api/sentiment/stream' },
+    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
 };
 
@@ -224,7 +224,10 @@ async function loadCardView(output, pageKey) {
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
-        if (!data.ok || !items.length) {
+        // 市场情绪数据结构特殊（无 items，有 score/level）
+        if (pageKey === 'sentiment' && data.score !== undefined) {
+            // handled below
+        } else if (!data.ok || !items.length) {
             output.innerHTML = '<span class="loading">暂无数据</span>';
             return;
         }
