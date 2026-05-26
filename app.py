@@ -11,7 +11,7 @@ import asyncio
 import threading
 import queue
 from contextlib import redirect_stdout, redirect_stderr
-from datetime import date
+from datetime import date, timezone
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -258,7 +258,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
         if cached:
             return cached
 
-    from datetime import date
+    from datetime import date, timezone
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     try:
@@ -290,7 +290,7 @@ def api_sector_cards():
     """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）"""
     import akshare as ak
     import pandas as pd
-    from datetime import date
+    from datetime import date, timezone
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"sector_cards_{today}"
@@ -378,7 +378,7 @@ def api_trend_cards():
     """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
     import akshare as ak
     import pandas as pd
-    from datetime import date, timedelta, datetime
+    from datetime import date, timezone, timedelta, datetime
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"trend_cards_{today}"
@@ -472,7 +472,7 @@ def api_zhaban_cards():
     """炸板分析 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
-    from datetime import date
+    from datetime import date, timezone
     import numpy as np
     from scanner import fetch_fund_flow_data, get_money_flow_scores
     print("  [炸板卡片] 开始...", file=sys.stderr)
@@ -617,7 +617,7 @@ def api_dtqiaoban_cards():
     """跌停翘板 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
-    from datetime import date
+    from datetime import date, timezone
     print("  [翘板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"dtqiaoban_cards_{today}"
@@ -813,7 +813,7 @@ def api_community(top_n: int = Query(10, description="分析前N只股票")):
 def api_indicators_cards():
     from indicators import run_enhanced, calc_seal_ratio, calc_sector_leadership, calc_sector_leader_label
     from scanner import fetch_limit_up_pool, pre_filter
-    from datetime import date
+    from datetime import date, timezone
     import pandas as pd
     today = date.today().strftime("%Y%m%d")
     df = fetch_limit_up_pool()
@@ -874,7 +874,7 @@ def api_indicators():
     """运行增强指标分析（龙虎榜等）"""
     from indicators import run_enhanced
     from scanner import fetch_limit_up_pool, pre_filter
-    from datetime import date
+    from datetime import date, timezone
 
     out_buf = io.StringIO()
     try:
@@ -898,7 +898,7 @@ def api_indicators():
 def api_sentiment():
     """市场情绪检测"""
     from scanner import detect_market_sentiment
-    from datetime import date
+    from datetime import date, timezone
     today = date.today().strftime("%Y%m%d")
     score, level, details = detect_market_sentiment(today)
     lines = [
@@ -1132,7 +1132,7 @@ def _cached_stream(gen):
 
 @app.get("/api/indicators/stream")
 def api_indicators_stream():
-    from datetime import date
+    from datetime import date, timezone
     today = date.today().strftime("%Y%m%d")
     cached = daily_get("indicators")
     if cached:
@@ -1173,7 +1173,7 @@ def api_community_stream():
 @app.get("/api/community/cards")
 def api_community_cards():
     """舆情监测 — 结构化卡片数据（含评分解析、行情背景）"""
-    from datetime import date
+    from datetime import date, timezone
     import community as comm
     import pandas as pd
     from scanner import fetch_limit_up_pool
@@ -1255,7 +1255,7 @@ def _comment_score_note(score):
 #  市场状态检测
 # ═══════════════════════════════════════════
 
-from datetime import datetime, timedelta
+from datetime import timezone, timedelta, datetime
 
 _MARKET_CST = timezone(timedelta(hours=8))
 
