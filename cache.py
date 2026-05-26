@@ -36,8 +36,24 @@ def put(name, data):
 
 _CST = timezone(timedelta(hours=8))
 
+def _trading_date() -> str:
+    """返回当前交易日的日期：凌晨0点到9:30开盘前归为上一个交易日"""
+    now = datetime.now(_CST)
+    if now.weekday() >= 5:
+        # 周末：归到上周五
+        days_to_friday = now.weekday() - 4
+        return (now - timedelta(days=days_to_friday)).strftime("%Y-%m-%d")
+    # 工作日的 0:00-9:30 之间，归为上一个交易日
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    if now < market_open:
+        yesterday = now - timedelta(days=1)
+        while yesterday.weekday() >= 5:
+            yesterday -= timedelta(days=1)
+        return yesterday.strftime("%Y-%m-%d")
+    return now.strftime("%Y-%m-%d")
+
 def _daily_path(key: str) -> str:
-    return os.path.join(_CACHE_DIR, f"daily_{date.today().isoformat()}_{key}.json")
+    return os.path.join(_CACHE_DIR, f"daily_{_trading_date()}_{key}.json")
 
 def daily_get(key: str):
     path = _daily_path(key)
