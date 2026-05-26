@@ -66,7 +66,7 @@ async function loadDashboard() {
                 <div class="dash-stat-icon" style="font-size:18px">🔥</div>
                 <div class="dash-stat-body" style="flex:1">
                     <div class="dash-sectors-wrap">
-                        ${sectors.map(s => `<span class="sector-tag">${s.name} <em>${s.count}</em></span>`).join('')}
+                        ${sectors.map(s => `<a href="${esc(s.url||'#')}" target="_blank" class="sector-tag" title="点击查看同花顺板块详情">${s.name} <em>${s.count}</em></a>`).join('')}
                     </div>
                 </div>
             </div>

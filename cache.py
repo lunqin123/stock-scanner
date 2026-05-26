@@ -32,15 +32,9 @@ def put(name, data):
         pass
 
 
-# ─── 每日缓存（休盘后持久化，日内不重复扫描） ───
+# ─── 每日缓存（日内持久化，避免重复扫描；按日期自动隔离） ───
 
 _CST = timezone(timedelta(hours=8))
-
-def is_market_closed() -> bool:
-    now = datetime.now(_CST)
-    if now.weekday() >= 5:
-        return True
-    return now.hour > 15 or (now.hour == 15 and now.minute >= 0)
 
 def _daily_path(key: str) -> str:
     return os.path.join(_CACHE_DIR, f"daily_{date.today().isoformat()}_{key}.json")
@@ -56,8 +50,7 @@ def daily_get(key: str):
     return None
 
 def daily_set(key: str, data):
-    if not is_market_closed():
-        return
+    # 文件名含日期，自然隔离：当日首次写入后，刷新直接命中缓存
     try:
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(_daily_path(key), 'w', encoding='utf-8') as f:

@@ -5,6 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A股超短线选股扫描器</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+// 全局错误捕获：将 JS 错误显示在页面上，避免静默崩溃
+window.addEventListener('error', function(e) {
+    var errEl = document.getElementById('js-error');
+    if (!errEl) {
+        errEl = document.createElement('div');
+        errEl.id = 'js-error';
+        errEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f87171;color:#fff;padding:12px 20px;font-size:13px;font-family:monospace;text-align:center';
+        document.body.prepend(errEl);
+    }
+    errEl.textContent = '⚠️ JS Error: ' + (e.message || e.error || 'unknown') + ' (at ' + (e.filename || '') + ':' + (e.lineno || '') + ')';
+    console.error('[Global Error]', e);
+});
+window.addEventListener('unhandledrejection', function(e) {
+    var errEl = document.getElementById('js-error');
+    if (!errEl) {
+        errEl = document.createElement('div');
+        errEl.id = 'js-error';
+        errEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f87171;color:#fff;padding:12px 20px;font-size:13px;font-family:monospace;text-align:center';
+        document.body.prepend(errEl);
+    }
+    errEl.textContent = '⚠️ Promise Error: ' + (e.reason ? e.reason.message || e.reason : 'unknown');
+    console.error('[Unhandled Rejection]', e.reason);
+});
+</script>
 </head>
 <body>
 
@@ -62,8 +87,14 @@
     <input type="file" id="bg-input" accept="image/*" style="display:none" onchange="setBackground(this)">
 </nav>
 
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
 <!-- ═══ 主内容区 ═══ -->
 <main class="main">
+    <div class="mobile-header">
+        <button class="hamburger" onclick="toggleSidebar()" aria-label="菜单">☰</button>
+        <span class="mobile-title">选股扫描器</span>
+    </div>
     <!-- ═══ 市场概览 Dashboard ═══ -->
     <div class="dashboard-bar" id="dashboard">
         <div class="dash-loading">📊 加载今日市场数据...</div>
@@ -101,9 +132,9 @@
     </div> <!-- /module-page -->
 </main>
 
-<script src="/static/watchlist.js"></script>
-<script src="/static/cards.js"></script>
-<script src="/static/dashboard.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/watchlist.js?v=20260526"></script>
+<script src="/static/cards.js?v=20260526"></script>
+<script src="/static/dashboard.js?v=20260526"></script>
+<script src="/static/app.js?v=20260526"></script>
 </body>
 </html>

@@ -1,4 +1,22 @@
-let currentPage = 'scan-limit';
+/* ═══════════════════════════════════════
+   选股扫描器 — 主应用逻辑（性能优化版）
+   ═══════════════════════════════════════ */
+
+// ─── DOM 引用缓存（避免重复查询） ───
+const $ = (id) => document.getElementById(id);
+const _dom = {
+    output: () => $('output'),
+    progress: () => $('progress-bar'),
+    fill: () => $('progress-fill'),
+    txt: () => $('progress-text'),
+    pageTitle: () => $('page-title'),
+    modulePage: () => document.querySelector('.module-page'),
+    watchlistCount: () => $('watchlist-count'),
+    addAllBtn: () => $('btn-add-all'),
+};
+const _navItems = () => document.querySelectorAll('.nav-item');
+
+let currentPage = '';
 const _outputCache = {};
 
 const PAGES = {
@@ -8,60 +26,67 @@ const PAGES = {
     'scan-sector':  { title: '🧩 板块热度',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
     'scan-zhaban':  { title: '💥 炸板分析',   api: '/api/scan/zhaban/cards',  textApi: '/api/scan/zhaban' },
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
-    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators' },
-    'community':    { title: '💬 舆情监测',   api: '/api/community' },
+    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators', streamApi: '/api/indicators/stream' },
+    'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
     'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
 };
 
 function showProgress(text, pct) {
-    const bar = document.getElementById('progress-bar');
-    const fill = document.getElementById('progress-fill');
-    const txt = document.getElementById('progress-text');
+    const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
+    if (!bar || !fill || !txt) return;
     bar.style.display = 'block';
     fill.style.width = (pct || 10) + '%';
     txt.textContent = text || '加载中...';
 }
 
 function hideProgress() {
-    document.getElementById('progress-bar').style.display = 'none';
+    const bar = _dom.progress();
+    if (bar) bar.style.display = 'none';
 }
 
 function switchPage(page) {
-    const outputEl = document.getElementById('output');
-    if (currentPage && outputEl) {
-        _outputCache[currentPage] = outputEl.innerHTML;
-    }
+    try {
+        const outputEl = _dom.output();
+        if (currentPage && outputEl) {
+            _outputCache[currentPage] = outputEl.innerHTML;
+        }
 
-    currentPage = page;
-    document.querySelectorAll('.nav-item').forEach(el => {
-        el.classList.toggle('active', el.dataset.page === page);
-    });
+        currentPage = page;
+        _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === page));
 
-    const info = PAGES[page];
-    document.getElementById('page-title').textContent = info.title;
+        const info = PAGES[page];
+        if (!info) return;
+        _dom.pageTitle().textContent = info.title;
+        document.body.dataset.page = page;
 
-    // 自选股页面通过 CSS 隐藏操作按钮
-    document.body.dataset.page = page;
+        // 页面切换动画（用 opacity 避免 layout）
+        const mp = _dom.modulePage();
+        if (mp) {
+            mp.style.opacity = '0';
+            requestAnimationFrame(() => {
+                mp.style.transition = 'opacity 0.2s ease';
+                mp.style.opacity = '1';
+                setTimeout(() => mp.style.transition = '', 250);
+            });
+        }
 
-    // 恢复缓存 + fade-in 动画
-    const modulePage = document.querySelector('.module-page');
-    modulePage.style.animation = 'none';
-    void modulePage.offsetHeight;
-    modulePage.style.animation = 'fadeInUp 0.3s ease both';
-
-    if (page === 'watchlist') {
+        if (page === 'watchlist') {
         renderWatchlistPage();
-        _outputCache[page] = document.getElementById('output').innerHTML;
+        _outputCache[page] = outputEl.innerHTML;
     } else if (_outputCache[page]) {
         outputEl.innerHTML = _outputCache[page];
-    } else if (info.textApi) {
-        // 扫描页面 → 显示进度条并自动加载
+    } else if (info.api) {
         showProgress('正在加载...', 20);
         outputEl.innerHTML = '';
         setTimeout(() => runCurrent(), 80);
     } else {
         outputEl.innerHTML = '<span class="loading">输出结果</span>';
+    }
+    } catch (e) {
+        console.error('[switchPage error]', e);
+        const out = _dom.output();
+        if (out) out.innerHTML = `<span class="error-text">⚠️ 页面切换错误: ${e.message}</span>`;
     }
 }
 
@@ -73,46 +98,122 @@ async function runCurrent() {
 }
 
 async function callApi(apiUrl, pageKey) {
-    const output = document.getElementById('output');
-    output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
+    const output = _dom.output();
     delete _outputCache[pageKey];
 
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
     if (info.textApi) {
         await loadCardView(output, pageKey);
+    } else if (info.streamApi) {
+        await loadTextViewStream(output, pageKey);
     } else {
         await loadTextView(output, pageKey);
     }
-    _outputCache[pageKey] = document.getElementById('output').innerHTML;
+    _outputCache[pageKey] = output.innerHTML;
 }
 
 async function loadTextView(output, pageKey) {
     const info = PAGES[pageKey];
+    // 显示进度条动画（非流式页面用估算进度）
+    showProgress('正在加载...', 15);
+    let estPct = 15;
+    const estInterval = setInterval(() => {
+        estPct = Math.min(85, estPct + Math.random() * 8);
+        const fill = _dom.fill();
+        if (fill) fill.style.width = estPct + '%';
+    }, 300);
+
     try {
         const resp = await fetch(info.api);
         const data = await resp.json();
+        clearInterval(estInterval);
+        showProgress('加载完成', 100);
         if (data.ok === false) {
             output.innerHTML = `<span class="error-text">❌ 错误：</span>\n${escapeHtml(data.error || '未知错误')}\n\n${escapeHtml(data.output || '')}`;
         } else {
             output.innerHTML = renderStyledText(data.output);
         }
     } catch (err) {
+        clearInterval(estInterval);
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
     hideProgress();
 }
 
+// ─── 文本流式加载（龙虎榜/舆情，SSE 实时进度） ───
+async function loadTextViewStream(output, pageKey) {
+    const info = PAGES[pageKey];
+    const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
+    if (bar) bar.style.display = 'block';
+    if (fill) fill.style.width = '10%';
+    if (txt) txt.textContent = '正在加载...';
+    output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
+
+    await new Promise(r => setTimeout(r, 40));
+
+    try {
+        const resp = await fetch(info.streamApi);
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+
+            buf += dec.decode(value, {stream: true});
+            const parts = buf.split('\n\n');
+            buf = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const msg = JSON.parse(line.slice(6));
+
+                        if (msg.type === 'progress') {
+                            if (txt) txt.textContent = msg.text;
+                            // 进度条逐步推进：每收到一条 progress，涨 2-5%
+                            const curW = parseFloat(fill ? fill.style.width : '10') || 10;
+                            const step = msg.text.includes('第5步') || msg.text.includes('评分') ? 8 :
+                                         msg.text.includes('第4步') || msg.text.includes('资金') ? 6 : 3;
+                            const newW = Math.min(90, curW + step);
+                            if (fill) fill.style.width = newW + '%';
+                        } else if (msg.type === 'complete') {
+                            if (bar) bar.style.display = 'none';
+                            output.innerHTML = msg.output
+                                ? renderStyledText(msg.output)
+                                : '<span class="loading">暂无数据</span>';
+                            _outputCache[pageKey] = output.innerHTML;
+                            return;
+                        } else if (msg.type === 'error') {
+                            if (bar) bar.style.display = 'none';
+                            output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
+                            _outputCache[pageKey] = output.innerHTML;
+                            return;
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+        if (bar) bar.style.display = 'none';
+        output.innerHTML = '<span class="loading">连接中断</span>';
+
+    } catch (err) {
+        if (bar) bar.style.display = 'none';
+        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+    }
+}
+
 async function loadCardView(output, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
-    // 涨停扫描使用流式进度
     if (pageKey === 'scan-limit') {
         await loadCardViewStream(output, pageKey);
         return;
     }
 
-    // 其他卡片页面
     try {
         const resp = await fetch(info.api);
         const data = await resp.json();
@@ -132,14 +233,20 @@ async function loadCardView(output, pageKey) {
             html += '</div>';
         }
 
-        if (pageKey === 'scan-sector') {
-            html += renderSectorCards(items);
-        } else if (pageKey === 'scan-limit') {
-            html += renderStockCards(items, data);
-        } else if (pageKey === 'scan-trend' || pageKey === 'scan-zhaban' || pageKey === 'scan-dtqiaoban') {
-            html += renderMiniStockCards(items, pageKey);
-        } else {
-            html += renderSimpleCards(items, pageKey);
+        try {
+            if (pageKey === 'scan-sector') {
+                html += renderSectorCards(items);
+            } else if (pageKey === 'scan-limit') {
+                html += renderStockCards(items, data);
+            } else if (pageKey === 'community') {
+                html += renderCommunityCards(items);
+            } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items);
+            } else {
+                html += renderSimpleCards(items, pageKey);
+            }
+        } catch (renderErr) {
+            html += `<div class="error-text">❌ 渲染错误: ${renderErr.message}</div>`;
+            console.error('[Render Error]', pageKey, renderErr);
         }
         output.innerHTML = html;
     } catch (err) {
@@ -150,22 +257,49 @@ async function loadCardView(output, pageKey) {
     showAddAllBtn();
 }
 
+// ─── SSE 流式加载（防抖 + RAF 优化） ───
 async function loadCardViewStream(output, pageKey) {
-    const bar = document.getElementById('progress-bar');
-    const fill = document.getElementById('progress-fill');
-    const txt = document.getElementById('progress-text');
+    const bar = _dom.progress();
+    const fill = _dom.fill();
+    const txt = _dom.txt();
 
     bar.style.display = 'block';
     fill.style.width = '3%';
     txt.textContent = '正在扫描...';
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 
-    // 各步骤加权进度（资金流占最重）
     const STEP_PCT = { '第1步':5, '第2步':10, '第3步':40, '第4步':55, '第5步':65, '第6步':80, '第7步':90 };
     let currentPct = 3;
 
-    // 短暂延迟让浏览器渲染进度条
-    await new Promise(r => setTimeout(r, 80));
+    // 防抖累积：在下一个 RAF 中一次性应用
+    let _pendingUpdate = null;
+    const flushProgress = () => {
+        if (_pendingUpdate) {
+            txt.textContent = _pendingUpdate;
+            _pendingUpdate = null;
+        }
+    };
+    const scheduleProgress = (text) => {
+        _pendingUpdate = text;
+        if (!window._rafScheduled) {
+            window._rafScheduled = true;
+            requestAnimationFrame(() => {
+                window._rafScheduled = false;
+                flushProgress();
+
+                // 同时更新进度条
+                for (const [kw, pct] of Object.entries(STEP_PCT)) {
+                    if (txt.textContent.includes(kw)) {
+                        currentPct = Math.max(currentPct, pct);
+                        break;
+                    }
+                }
+                fill.style.width = Math.min(95, currentPct) + '%';
+            });
+        }
+    };
+
+    await new Promise(r => setTimeout(r, 40));  // 给浏览器一点时间渲染初始状态
 
     try {
         const resp = await fetch('/api/scan/limit-up/stream');
@@ -188,21 +322,16 @@ async function loadCardViewStream(output, pageKey) {
                         const msg = JSON.parse(line.slice(6));
 
                         if (msg.type === 'progress') {
-                            txt.textContent = msg.text;
-                            // 按步骤加权估算进度
-                            for (const [kw, pct] of Object.entries(STEP_PCT)) {
-                                if (msg.text.includes(kw)) {
-                                    currentPct = Math.max(currentPct, pct);
-                                    break;
-                                }
-                            }
-                            // 资金流子步骤修正
+                            scheduleProgress(msg.text);
                             if (msg.text.includes('命中本地缓存')) currentPct = Math.max(currentPct, 48);
                             else if (msg.text.includes('同花顺资金流')) currentPct = Math.max(currentPct, 18);
-                            fill.style.width = Math.min(95, currentPct) + '%';
 
                         } else if (msg.type === 'complete') {
+                            // 先 flush 剩余进度更新
+                            flushProgress();
                             bar.style.display = 'none';
+
+                            // 使用 RAF 批量渲染卡片
                             const s = msg.sentiment || {};
                             let html = '';
                             if (s.level) {
@@ -212,10 +341,14 @@ async function loadCardViewStream(output, pageKey) {
                                 html += '</div>';
                             }
                             html += renderStockCards(msg.stocks, msg);
-                            output.innerHTML = html;
-                            _outputCache[pageKey] = output.innerHTML;
-                            updateWatchlistBadge();
-                            showAddAllBtn();
+
+                            // 用 requestAnimationFrame + 微任务分离 DOM 操作和渲染
+                            requestAnimationFrame(() => {
+                                output.innerHTML = html;
+                                _outputCache[pageKey] = output.innerHTML;
+                                updateWatchlistBadge();
+                                showAddAllBtn();
+                            });
                             return;
 
                         } else if (msg.type === 'error') {
@@ -237,110 +370,83 @@ async function loadCardViewStream(output, pageKey) {
     }
 }
 
-async function runAll() {
-    // 遍历所有页面依次运行
-    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment'];
-    for (const key of pages) {
-        location.hash = key;
-        await new Promise(r => setTimeout(r, 100));
-        await runCurrent();
-        await new Promise(r => setTimeout(r, 300));
-    }
+// ─── 工具函数 ───
+function showAddAllBtn() {
+    const el = _dom.addAllBtn();
+    if (el) el.style.display = document.querySelectorAll('#output .watchlist-btn').length ? '' : 'none';
 }
 
-function setupBackground() {
-    const saved = localStorage.getItem('customBg');
-    if (saved) applyBg(saved);
-}
 
-function setBgPreset(gradient) {
-    localStorage.setItem('customBg', gradient);
-    applyBg(gradient);
-}
 
+// ─── 背景管理 ───
+function setupBackground() { const s = localStorage.getItem('customBg'); if (s) applyBg(s); }
+function setBgPreset(gradient) { localStorage.setItem('customBg', gradient); applyBg(gradient); }
 function setBackground(input) {
     const file = input.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = e => {
-        const dataUrl = e.target.result;
-        localStorage.setItem('customBg', dataUrl);
-        applyBg(dataUrl);
-    };
+    reader.onload = e => { const r = e.target.result; localStorage.setItem('customBg', r); applyBg(r); };
     reader.readAsDataURL(file);
     input.value = '';
 }
-
-function clearBackground() {
-    localStorage.removeItem('customBg');
-    document.body.style.background = '';
-    document.body.classList.remove('has-bg');
-}
-
+function clearBackground() { localStorage.removeItem('customBg'); document.body.style.background = ''; document.body.classList.remove('has-bg'); }
 function applyBg(val) {
-    if (val.startsWith('linear-gradient')) {
-        document.body.style.background = val;
-    } else {
-        document.body.style.backgroundImage = `url(${val})`;
-        document.body.style.backgroundSize = 'cover';
-        document.body.style.backgroundPosition = 'center';
-        document.body.style.backgroundAttachment = 'fixed';
-    }
+    if (val.startsWith('linear-gradient')) document.body.style.background = val;
+    else { document.body.style.backgroundImage = `url(${val})`; document.body.style.backgroundSize = 'cover'; document.body.style.backgroundPosition = 'center'; document.body.style.backgroundAttachment = 'fixed'; }
     document.body.classList.add('has-bg');
 }
-
-function clearOutput() {
-    const el = document.getElementById('output');
-    el.innerHTML = '<span class="loading">输出结果</span>';
-    delete _outputCache[currentPage];
-}
-
+function clearOutput() { const el = _dom.output(); el.innerHTML = '<span class="loading">输出结果</span>'; delete _outputCache[currentPage]; }
 function exportOutput() {
-    const txt = document.getElementById('output').textContent;
+    const txt = _dom.output().textContent;
     navigator.clipboard.writeText(txt).then(() => {
         const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
         const orig = btn.textContent;
         btn.textContent = '✅ 已复制';
         setTimeout(() => btn.textContent = orig, 1500);
-    }).catch(() => {
-        alert('复制失败，请手动选择文本复制');
-    });
+    }).catch(() => alert('复制失败'));
+}
+async function runAll() {
+    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment'];
+    for (const key of pages) {
+        location.hash = key;
+        await new Promise(r => setTimeout(r, 500));
+    }
 }
 
+// ─── 移动端侧边栏 ───
+function toggleSidebar() {
+    document.querySelector('.sidebar').classList.toggle('open');
+    document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+    document.querySelector('.sidebar').classList.remove('open');
+    document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
+// ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
-    // 自定义背景
     setupBackground();
-    // 自选股徽章
     updateWatchlistBadge();
-    // 加载 Dashboard
     loadDashboard();
 
-    // 导航点击 + hash 路由
     document.querySelectorAll('.nav-item').forEach(el => {
-        el.addEventListener('click', () => {
-            location.hash = el.dataset.page;
-        });
+        el.addEventListener('click', () => { location.hash = el.dataset.page; closeSidebar(); });
     });
 
-    // 监听 hash 变化
     function onHash() {
         const page = location.hash.slice(1) || 'scan-limit';
         if (PAGES[page]) switchPage(page);
     }
     window.addEventListener('hashchange', onHash);
-    // 初始加载按 hash 定位
+
     const initPage = location.hash.slice(1) || 'scan-limit';
     if (PAGES[initPage]) {
-        document.querySelectorAll('.nav-item').forEach(el => {
-            el.classList.toggle('active', el.dataset.page === initPage);
-        });
+        _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === initPage));
         switchPage(initPage);
     }
 
-    // Enter 键触发运行
     document.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+        if (e.key === 'Enter' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT')
             runCurrent();
-        }
     });
 });

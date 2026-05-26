@@ -123,8 +123,21 @@ def _scan_limit_up_data(today_str: str):
 
     sentiment_score, sentiment_level = 5.0, "未知"
     sentiment_detail = {}
+    sentiment_ok = False  # 标记情绪是否成功获取，用于缓存决策
     if res.get("sentiment"):
         sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
+        sentiment_ok = True
+    else:
+        # 第一次失败，重试一次（同步，避免本次请求缓存错误的"未知"）
+        print("  [扫描] ⚠ 市场情绪首次获取失败，重试中...", file=sys.stderr)
+        try:
+            retry = detect_market_sentiment(today_str)
+            if retry:
+                sentiment_score, sentiment_level, sentiment_detail = retry
+                sentiment_ok = True
+                print(f"  [扫描] ✅ 重试成功: {sentiment_level}", file=sys.stderr)
+        except Exception as e2:
+            print(f"  [扫描] ❌ 重试仍失败: {e2}", file=sys.stderr)
 
     lhb_bonus = res.get("lhb")
     lhb_bonus = lhb_bonus[0] if lhb_bonus else pd.Series(0.0, index=filtered.index)
@@ -197,6 +210,7 @@ def _scan_limit_up_data(today_str: str):
         'sentiment_level': sentiment_level,
         'sentiment_multiplier': sentiment_multiplier,
         'sentiment_detail': sentiment_detail,
+        'sentiment_ok': sentiment_ok,
         'weights': weights,
         'date': today_str,
     }
@@ -263,7 +277,9 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
             },
             "date": data['date'],
         }
-        daily_set("limit_up_cards", result)
+        # 仅情绪成功才缓存，避免"未知"被反复命中
+        if data.get('sentiment_ok'):
+            daily_set("limit_up_cards", result)
         return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
@@ -271,7 +287,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 
 @app.get("/api/scan/sector/cards")
 def api_sector_cards():
-    """板块热度 — 结构化数据"""
+    """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）"""
     import akshare as ak
     import pandas as pd
     from datetime import date
@@ -302,9 +318,22 @@ def api_sector_cards():
     if industry_col is None:
         return {"ok": True, "items": []}
 
+    zb_industry_col = None
+    if not zhaban_df.empty:
+        for c in zhaban_df.columns:
+            if '行业' in str(c):
+                zb_industry_col = c
+                break
+    dt_industry_col = None
+    if not dieting_df.empty:
+        for c in dieting_df.columns:
+            if '行业' in str(c):
+                dt_industry_col = c
+                break
+
     limit_counts = limit_df[industry_col].value_counts()
-    zb_counts = zhaban_df[industry_col].value_counts() if not zhaban_df.empty else pd.Series(dtype=int)
-    dt_counts = dieting_df[industry_col].value_counts() if not dieting_df.empty else pd.Series(dtype=int)
+    zb_counts = zhaban_df[zb_industry_col].value_counts() if not zhaban_df.empty and zb_industry_col else pd.Series(dtype=int)
+    dt_counts = dieting_df[dt_industry_col].value_counts() if not dieting_df.empty and dt_industry_col else pd.Series(dtype=int)
 
     all_industries = set(limit_counts.index)
     items = []
@@ -314,13 +343,29 @@ def api_sector_cards():
         dc = int(dt_counts.get(ind, 0)) if ind in dt_counts.index else 0
         score = min(12, 4 + lc * 2)
         efficiency = round(lc / (lc + zc) * 100, 1) if (lc + zc) > 0 else 0
+
+        # 收集该板块的涨停成分股
+        sector_stocks = limit_df[limit_df[industry_col] == ind]
+        stock_list = []
+        for _, r in sector_stocks.iterrows():
+            stock_list.append({
+                'code': str(r.iloc[1]).strip().zfill(6),
+                'name': str(r.iloc[2]),
+                'turnover': float(r.iloc[8]) if str(r.iloc[8]) != '--' else 0,
+                'seal_time': str(int(float(r.iloc[10]))) if pd.notna(r.iloc[10]) and r.iloc[10] != '--' else '0000',
+                'seal_fund': float(r.iloc[9]) if str(r.iloc[9]) != '--' else 0,
+            })
+
         items.append({
             'name': str(ind),
+            'url': f"https://www.10jqka.com.cn/#/search/{str(ind)}",
             'limit_count': lc,
             'zhaban_count': zc,
             'dieting_count': dc,
             'score': score,
             'efficiency': efficiency,
+            'stocks': stock_list[:6],
+            'sector_code': '',
         })
     items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:15]}
@@ -330,7 +375,7 @@ def api_sector_cards():
 
 @app.get("/api/scan/trend/cards")
 def api_trend_cards():
-    """趋势扫描 — 结构化数据"""
+    """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
     import akshare as ak
     import pandas as pd
     from datetime import date, timedelta, datetime
@@ -342,40 +387,80 @@ def api_trend_cards():
         print("  [趋势卡片] 命中缓存", file=sys.stderr)
         return cached
     print("  [趋势卡片] 拉取昨日涨停数据...", file=sys.stderr)
-    try:
-        prev = ak.stock_zt_pool_previous_em(date=today)
-    except:
-        wd = datetime.now().weekday()
-        days_back = 3 if wd == 0 else (2 if wd == 6 else 1)
-        yesterday = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
-        print(f"  [趋势卡片] 今日无数据, 尝试 {yesterday}...", file=sys.stderr)
+    def _fetch(d):
+        return ak.stock_zt_pool_previous_em(date=d)
+    prev = pd.DataFrame()
+    for attempt in [today, None]:
         try:
-            prev = ak.stock_zt_pool_previous_em(date=yesterday)
-        except Exception as e:
-            print(f"  [趋势卡片] 失败: {e}", file=sys.stderr)
-            return {"ok": True, "items": []}
-
+            if attempt is None:
+                wd = datetime.now().weekday()
+                db = 3 if wd == 0 else (2 if wd == 6 else 1)
+                attempt = (datetime.now() - timedelta(days=db)).strftime("%Y%m%d")
+            prev = _fetch(attempt)
+            if not prev.empty: break
+        except: continue
     if prev.empty:
         return {"ok": True, "items": []}
 
-    change_col = prev.columns[3]
+    chg_col = prev.columns[3]
     name_col = prev.columns[2]
     code_col = prev.columns[1]
+    price_col = prev.columns[4]
+    turnover_col = prev.columns[9]
+    vol_col = prev.columns[6]
+    seal_stat_col = prev.columns[14] if len(prev.columns) > 14 else None
+    industry_col = prev.columns[15] if len(prev.columns) > 15 else None
 
-    prev['涨幅'] = prev[change_col].astype(float)
+    prev['涨幅'] = prev[chg_col].astype(float)
     trend = prev[(prev['涨幅'] >= 3) & (prev['涨幅'] < 9)].copy()
     if trend.empty:
         return {"ok": True, "items": []}
-
     trend = trend.sort_values('涨幅', ascending=False).head(10)
+
     items = []
     for _, row in trend.iterrows():
         code = str(row[code_col]).strip().zfill(6)
+        chg = round(float(row['涨幅']), 1)
+        price = float(row[price_col])
+        turnover = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+        volume = float(row[vol_col]) if pd.notna(row[vol_col]) else 0
+        industry = str(row[industry_col]) if industry_col and pd.notna(row[industry_col]) else ''
+        seal_stat = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
+        consecutive = 0
+        if '/' in seal_stat:
+            try: consecutive = int(seal_stat.split('/')[1])
+            except: pass
+
+        # 量价分析
+        signals = []
+        if chg >= 7: signals.append("强势续涨")
+        elif chg >= 5: signals.append("量价齐升")
+        else: signals.append("温和上涨")
+        if turnover > 15: signals.append("高换手活跃")
+        elif turnover > 8: signals.append("放量健康")
+        elif turnover > 3: signals.append("温和放量")
+        else: signals.append("缩量整理")
+        if consecutive >= 2: signals.append(f"{consecutive}连板")
+
+        # 策略
+        if chg >= 7: advice = "沿5日线持有，破5日线止盈"
+        elif chg >= 5: advice = "趋势良好，持有为主"
+        elif chg >= 3: advice = "观察持续性，放量可加仓"
+        else: advice = "动能偏弱，等待放量确认"
+
         items.append({
             'code': code,
             'name': str(row[name_col]),
-            'change_pct': round(float(row['涨幅']), 1),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'change_pct': chg,
+            'price': price,
+            'turnover': round(turnover, 1),
+            'volume': round(volume / 1e8, 2) if volume > 1e8 else round(volume / 1e4, 0),
+            'volume_unit': '亿' if volume > 1e8 else '万',
+            'industry': industry,
+            'consecutive': consecutive,
+            'signals': signals,
+            'advice': advice,
         })
     result = {"ok": True, "items": items}
     cache_put(key, result)
@@ -384,10 +469,12 @@ def api_trend_cards():
 
 @app.get("/api/scan/zhaban/cards")
 def api_zhaban_cards():
-    """炸板分析 — 结构化数据"""
+    """炸板分析 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
     from datetime import date
+    import numpy as np
+    from scanner import fetch_fund_flow_data, get_money_flow_scores
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"zhaban_cards_{today}"
@@ -405,20 +492,121 @@ def api_zhaban_cards():
     if zb.empty:
         return {"ok": True, "items": []}
 
-    code_col = zb.columns[1]
-    name_col = zb.columns[2]
-    seal_col = '首次封板时间' if '首次封板时间' in zb.columns else zb.columns[11]
+    df = zb.copy()
+    # 过滤 ST/688/8xx
+    name_col = df.columns[2]
+    mask = ~df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
+    df = df[mask]
+    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
+
+    # 过滤市值/股价
+    if '流通市值' in df.columns:
+        df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+    price_col = df.columns[4]
+    df = df[df[price_col].astype(float) <= 60]
+
+    if df.empty:
+        return {"ok": True, "items": []}
+
+    # 评分
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
+    zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
+    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
+    industry_col = '所属行业' if '所属行业' in df.columns else df.columns[15]
+
+    def _time_score(t):
+        t = str(t).strip()
+        try:
+            if len(t) < 4: return 5
+            h, m = int(t[:2]), int(t[2:4])
+            minutes = h * 60 + m
+            raw = 1.0 - (minutes - 570) / 300.0
+            return max(0, min(10, raw * 10))
+        except: return 5
+
+    # 资金面
+    fund_df, _ = fetch_fund_flow_data()
+    money_scores = pd.Series(0.0, index=df.index)
+    raw_money = pd.Series(0.0, index=df.index)
+    if fund_df is not None:
+        money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df)
 
     items = []
-    for _, row in zb.iterrows():
-        code = str(row[code_col]).strip().zfill(6)
-        seal_time = str(row.get(seal_col, ''))[:4] if seal_col else '?'
+    for idx in df.index:
+        row = df.loc[idx]
+        code = str(row.iloc[1]).strip().zfill(6)
+        name = str(row.iloc[2])
+
+        seal_time = str(row.get(seal_time_col, ''))[:4]
+        seal_fund = float(row.get(seal_fund_col, 0)) if pd.notna(row.get(seal_fund_col, None)) else 0
+        zb_times = int(float(row.get(zhaban_count_col, 0))) if pd.notna(row.get(zhaban_count_col, None)) else 0
+        turnover = float(row.get(turnover_col, 0)) if pd.notna(row.get(turnover_col, None)) else 0
+        industry = str(row.get(industry_col, ''))
+        price = float(row.iloc[4])
+
+        # 封板质量 (0-25)
+        seal_quality = _time_score(seal_time)
+        fund_score = min(10, seal_fund / 1e8 * 2)
+        zb_penalty = max(0, 5 - zb_times * 2)
+        seal_total = min(25, seal_quality + fund_score + zb_penalty)
+
+        # 资金承接 (0-20)
+        money_val = float(raw_money.get(idx, 0))
+        money_scaled = min(20, max(0, float(money_scores.get(idx, 0))))
+        total_score = seal_total + money_scaled
+
+        # 换手评分 (0-10)
+        if turnover > 20: turn_score = 8
+        elif turnover > 10: turn_score = 10
+        elif turnover > 5: turn_score = 7
+        elif turnover > 2: turn_score = 4
+        else: turn_score = 2
+        total_score += turn_score
+
+        # 板块热度 (0-12)
+        sector_score = 6
+        total_score += sector_score
+
+        total_score = min(100, total_score)
+
+        # 信号标签
+        signals = []
+        if seal_time:
+            h = int(seal_time[:2])
+            if h < 10: signals.append("早盘封板")
+            elif h < 11: signals.append("上午封板")
+            else: signals.append("午后封板")
+        signals.append(f"炸板{zb_times}次")
+        if money_val > 1e8: signals.append("资金承接强")
+        elif money_val > 1e7: signals.append("有资金承接")
+        else: signals.append("资金流出")
+        if turnover > 15: signals.append("高换手")
+        elif turnover > 8: signals.append("换手适中")
+
+        # 策略
+        if total_score >= 70: advice = "反包潜力高，竞价高开放量可参与"
+        elif total_score >= 50: advice = "竞价观察，高开放量可博弈反包"
+        elif total_score >= 35: advice = "仅观望，需竞价放量确认"
+        else: advice = "不建议参与，资金面偏弱"
+
         items.append({
             'code': code,
-            'name': str(row[name_col]),
-            'seal_time': seal_time,
+            'name': name,
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'score': int(total_score),
+            'price': price,
+            'seal_time': seal_time,
+            'seal_fund': seal_fund,
+            'zhaban_times': zb_times,
+            'turnover': round(turnover, 1),
+            'industry': industry,
+            'net_money': round(money_val, 0),
+            'signals': signals,
+            'advice': advice,
         })
+
+    items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:10]}
     cache_put(key, result)
     return result
@@ -426,7 +614,7 @@ def api_zhaban_cards():
 
 @app.get("/api/scan/dtqiaoban/cards")
 def api_dtqiaoban_cards():
-    """跌停翘板 — 结构化数据"""
+    """跌停翘板 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
     from datetime import date
@@ -447,17 +635,99 @@ def api_dtqiaoban_cards():
     if dt.empty:
         return {"ok": True, "items": []}
 
-    code_col = dt.columns[1]
-    name_col = dt.columns[2]
+    # 列索引
+    code_col = 1; name_col = 2; change_col = 3; price_col = 4
+    turnover_col = 9 if len(dt.columns) > 9 else None
+    seal_fund_col = 10 if len(dt.columns) > 10 else None
+    seal_time_col = 11 if len(dt.columns) > 11 else None
+    deal_col = 12 if len(dt.columns) > 12 else None
+    cont_col = 13 if len(dt.columns) > 13 else None
+
+    def safe_float(v, default=0):
+        try: return float(v) if pd.notna(v) and v != '--' else default
+        except: return default
 
     items = []
     for _, row in dt.iterrows():
-        code = str(row[code_col]).strip().zfill(6)
+        code = str(row.iloc[code_col]).strip().zfill(6)
+        name = str(row.iloc[name_col])
+
+        # 过滤 ST/688/8xx
+        if name.startswith(('ST', '*ST')) or code.startswith(('68', '8')): continue
+        if safe_float(row.iloc[6] if len(row) > 6 else 0) > 200 * 1e8: continue
+
+        deal_val = safe_float(row.iloc[deal_col]) if deal_col else 0
+        seal_val = safe_float(row.iloc[seal_fund_col]) if seal_fund_col else 0
+        cont_val = int(safe_float(row.iloc[cont_col])) if cont_col else 0
+        turn_val = safe_float(row.iloc[turnover_col]) if turnover_col else 0
+
+        # 评分
+        total = 0
+        signals = []
+
+        # 放量信号 (0-25)
+        if deal_val > 5000e4: total += 25; signals.append("巨量翘板")
+        elif deal_val > 1000e4: total += 20; signals.append("放量翘板")
+        elif deal_val > 100e4: total += 12; signals.append("微量翘板")
+        else: total += 5; signals.append("无量跌停")
+
+        # 封单变化 (0-25)
+        if seal_val < 100e4: total += 25; signals.append("封单极小")
+        elif seal_val < 1000e4: total += 20; signals.append("封单偏小")
+        elif seal_val < 5000e4: total += 10; signals.append("封单适中")
+        else: total += 3; signals.append("封单巨大")
+
+        # 连续跌停 (0-25)
+        if cont_val >= 3: total += 25; signals.append(f"N{cont_val}板超跌")
+        elif cont_val == 2: total += 18; signals.append(f"连跌{cont_val}板")
+        elif cont_val == 1: total += 10; signals.append("首板跌停")
+        else: total += 5
+
+        # 换手 (0-15)
+        if turn_val > 10: total += 15; signals.append("高换手承接")
+        elif turn_val > 5: total += 10; signals.append("有换手")
+        elif turn_val > 1: total += 5; signals.append("少量换手")
+        else: total += 2
+
+        # 跌停时间 (0-10)
+        st = ''
+        if seal_time_col:
+            raw_t = row.iloc[seal_time_col]
+            if pd.notna(raw_t):
+                st = str(raw_t).strip()
+                try:
+                    h, m = int(st[:2]), int(st[2:4])
+                    mins = h * 60 + m
+                    if mins >= 840: total += 10; signals.append("尾盘跌停")
+                    elif mins >= 600: total += 7; signals.append("午后跌停")
+                    elif mins >= 330: total += 3; signals.append("早盘跌停")
+                    else: total += 1; signals.append("开盘跌停")
+                except: total += 5
+
+        total = min(100, total)
+
+        # 策略建议
+        if total >= 70: advice = "竞价关注，放量高开可博弈反抽，目标+3%~+5%"
+        elif total >= 50: advice = "竞价观察，需放量确认，否则观望"
+        elif total >= 35: advice = "仅观望，需竞价放量确认方向"
+        else: advice = "无量封死，不建议参与"
+
         items.append({
             'code': code,
-            'name': str(row[name_col]),
+            'name': name,
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'score': total,
+            'price': safe_float(row.iloc[price_col]),
+            'change': safe_float(row.iloc[change_col]),
+            'turnover': round(turn_val, 1),
+            'seal_fund': seal_val,
+            'consecutive': cont_val,
+            'seal_time': st,
+            'signals': signals,
+            'advice': advice,
         })
+
+    items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:10]}
     cache_put(key, result)
     return result
@@ -620,7 +890,11 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             ind_col = '所属行业' if '所属行业' in pool.columns else pool.columns[15]
             top5 = pool[ind_col].value_counts().head(5)
             result["hot_sectors"] = [
-                {"name": str(name), "count": int(cnt)}
+                {
+                    "name": str(name),
+                    "count": int(cnt),
+                    "url": f"https://www.10jqka.com.cn/#/search/{str(name)}"
+                }
                 for name, cnt in top5.items()
             ]
         else:
@@ -682,13 +956,15 @@ async def api_scan_limit_up_stream():
                 pass  # 兼容 akshare/scanner 中 sys.stderr.reconfigure() 调用
 
         def _run():
+            cap = _Capture()
             old_stderr = sys.stderr
+            old_stdout = sys.stdout
             try:
-                sys.stderr = _Capture()
+                sys.stderr = cap
+                sys.stdout = cap
                 data = _scan_limit_up_data(today)
                 result_holder["data"] = data
-                # 扫描完成后写入每日缓存
-                if data:
+                if data and data.get('sentiment_ok'):
                     cache_data = {
                         "ok": True,
                         "stocks": data['stocks'],
@@ -704,6 +980,7 @@ async def api_scan_limit_up_stream():
                 result_holder["error"] = str(e)
             finally:
                 sys.stderr = old_stderr
+                sys.stdout = old_stdout
                 q.put(("done", None))
 
         t = threading.Thread(target=_run, daemon=True)
@@ -728,6 +1005,190 @@ async def api_scan_limit_up_stream():
             yield f"data: {json.dumps({'type':'error','text':'无数据'})}\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+# ═══════════════════════════════════════════
+#  龙虎榜分析 + 舆情监测 — SSE 流式进度
+# ═══════════════════════════════════════════
+
+def _stream_scan_generic(run_fn, complete_fn, on_success=None):
+    q = queue.Queue()
+    result_holder = {"data": None, "error": None}
+
+    class _Capture:
+        def __init__(self):
+            self._buf = ""
+        def write(self, text):
+            self._buf += text
+            while '\n' in self._buf:
+                idx = self._buf.index('\n')
+                line = self._buf[:idx].strip('\r').strip()
+                self._buf = self._buf[idx+1:]
+                if line and not line.startswith('\r'):
+                    q.put(("progress", line))
+        def flush(self): pass
+        def reconfigure(self, **kwargs): pass
+
+    def _run():
+        cap = _Capture()
+        old_stderr = sys.stderr
+        old_stdout = sys.stdout
+        try:
+            sys.stderr = cap
+            sys.stdout = cap
+            data = run_fn()
+            result_holder["data"] = data
+            if data and on_success:
+                try: on_success(data)
+                except: pass
+        except Exception as e:
+            result_holder["error"] = str(e)
+        finally:
+            sys.stderr = old_stderr
+            q.put(("done", None))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    while True:
+        try:
+            typ, val = q.get(timeout=0.2)
+            if typ == "done": break
+            yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+        except queue.Empty: continue
+    data = result_holder["data"]
+    if data:
+        yield f"data: {json.dumps({'type':'complete', **complete_fn(data)})}\n\n"
+    elif result_holder["error"]:
+        yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
+    else:
+        yield f"data: {json.dumps({'type':'error','text':'无数据'})}\n\n"
+
+
+def _cached_stream(gen):
+    """边 yield 边输出（缓存由 on_success 在线程内完成）"""
+    for event in gen:
+        yield event
+
+
+@app.get("/api/indicators/stream")
+def api_indicators_stream():
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    cached = daily_get("indicators")
+    if cached:
+        async def _cached():
+            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+            yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
+        return StreamingResponse(_cached(), media_type="text/event-stream")
+    from indicators import run_enhanced
+    from scanner import fetch_limit_up_pool, pre_filter
+    def run():
+        df = fetch_limit_up_pool()
+        if df is None or df.empty: return {"ok": False, "output": "今日无涨停数据"}
+        df = pre_filter(df)
+        result, _ = run_enhanced(df, today_str=today)
+        return {"ok": True, "output": result}
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("indicators", d))), media_type="text/event-stream")
+
+
+@app.get("/api/community/stream")
+def api_community_stream():
+    today = date.today().strftime("%Y%m%d")
+    cached = daily_get("community")
+    if cached:
+        async def _cached():
+            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+            yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
+        return StreamingResponse(_cached(), media_type="text/event-stream")
+    import community
+    from scanner import fetch_limit_up_pool
+    def run():
+        df = fetch_limit_up_pool()
+        if df is None or df.empty: return {"ok": True, "output": "今日无涨停数据"}
+        txt, _ = community.run(df, top_n=10)
+        return {"ok": True, "output": txt if txt.strip() else "暂无舆情数据"}
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("community", d))), media_type="text/event-stream")
+
+
+@app.get("/api/community/cards")
+def api_community_cards():
+    """舆情监测 — 结构化卡片数据（含评分解析、行情背景）"""
+    from datetime import date
+    import community as comm
+    import pandas as pd
+    from scanner import fetch_limit_up_pool
+    today = date.today().strftime("%Y%m%d")
+    df = fetch_limit_up_pool()
+    if df is None or df.empty:
+        return {"ok": True, "items": []}
+    _, smap = comm.run(df, top_n=10)
+    # 从涨停池取行情上下文
+    ctx = {}
+    if not df.empty:
+        for _, r in df.iterrows():
+            code = str(r.iloc[1]).strip().zfill(6)
+            ctx[code] = {
+                'ind': str(r.iloc[15]) if len(r) > 15 else '',
+                'changes': float(r.iloc[3]) if r.iloc[3] != '--' else 0,
+                'turnover': float(r.iloc[8]) if r.iloc[8] != '--' else 0,
+                'seal_time': str(int(float(r.iloc[10]))) if pd.notna(r.iloc[10]) and r.iloc[10] != '--' else '',
+                'consecutive': int(r.iloc[14]) if pd.notna(r.iloc[14]) and r.iloc[14] != '--' else 0,
+            }
+    items = []
+    for code, info in smap.items():
+        news = info.get('news', [])
+        c = ctx.get(code, {})
+        cs = info.get('comment_score') or 0
+        inst = info.get('机构参与度') or 0
+        attn = info.get('关注指数') or 0
+
+        # 分析原因标签
+        reasons = []
+        if c.get('consecutive', 0) >= 2:
+            reasons.append(f'{c["consecutive"]}连板')
+        if c.get('ind'):
+            reasons.append(f'所属{c["ind"]}板块')
+        if inst and inst > 0.5:
+            reasons.append('机构高参与')
+        if cs >= 80:
+            reasons.append('基本面优秀')
+        elif cs >= 70:
+            reasons.append('基本面良好')
+        if news:
+            reasons.append('近期有催化新闻')
+        if attn > 0:
+            reasons.append(f'关注度{attn}分')
+
+        items.append({
+            'code': code,
+            'name': info.get('name', ''),
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'comment_score': round(cs, 2),
+            'guba_rank': info.get('guba_rank'),
+            'institution': round(inst, 2) if inst else None,
+            'attention': round(attn, 1) if attn else None,
+            'news': [{'title': n.get('title', ''), 'source': n.get('source', ''), 'url': n.get('url', '')}
+                     for n in (news or [])[:3]],
+            'context': {
+                'industry': c.get('ind', ''),
+                'consecutive': c.get('consecutive', 0),
+                'turnover': c.get('turnover', 0),
+                'seal_time': c.get('seal_time', ''),
+            },
+            'reasons': reasons,
+            'score_note': _comment_score_note(cs),
+        })
+    items.sort(key=lambda x: x.get('comment_score') or 0, reverse=True)
+    return {"ok": True, "items": items[:10]}
+
+
+def _comment_score_note(score):
+    if score >= 85: return '🔥 综合评分极高，基本面+市场情绪共振'
+    if score >= 80: return '✅ 评分优秀，基本面扎实，机构关注度高'
+    if score >= 70: return '📊 评分良好，多数维度表现稳定'
+    if score >= 60: return '📌 评分一般，部分维度有待改善'
+    if score >= 50: return '⚠️ 评分偏低，需关注基本面变化'
+    return '❌ 评分较差，谨慎对待'  
 
 
 # ═══════════════════════════════════════════
