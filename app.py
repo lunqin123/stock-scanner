@@ -12,7 +12,7 @@ import threading
 import queue
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import date
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -1189,6 +1189,45 @@ def _comment_score_note(score):
     if score >= 60: return '📌 评分一般，部分维度有待改善'
     if score >= 50: return '⚠️ 评分偏低，需关注基本面变化'
     return '❌ 评分较差，谨慎对待'  
+
+
+# ═══════════════════════════════════════════
+#  GitHub Webhook — 自动部署
+# ═══════════════════════════════════════════
+
+import hashlib
+import hmac
+import subprocess
+
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "changeme")
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """GitHub webhook: 收到 push 事件后自动拉取代码并重启服务"""
+    # 验证签名（如果设置了 secret）
+    body = await request.body()
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if WEBHOOK_SECRET != "changeme" and sig:
+        expected = "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return JSONResponse({"ok": False, "error": "signature mismatch"}, status_code=403)
+
+    event = request.headers.get("X-GitHub-Event", "")
+    if event != "push":
+        return {"ok": True, "event": event, "action": "ignored"}
+
+    # 后台拉取并重启
+    def _deploy():
+        try:
+            os.chdir("/home/ubuntu/stock-scanner")
+            subprocess.run(["git", "pull"], capture_output=True, timeout=30)
+            subprocess.run(["sudo", "systemctl", "restart", "stock-scanner"], capture_output=True, timeout=30)
+        except Exception as e:
+            print(f"[Webhook] 部署失败: {e}", file=sys.stderr)
+
+    threading.Thread(target=_deploy, daemon=True).start()
+    return {"ok": True, "event": "push", "action": "deploying"}
 
 
 # ═══════════════════════════════════════════
