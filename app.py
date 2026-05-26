@@ -1241,6 +1241,60 @@ def api_community_cards():
     items.sort(key=lambda x: x.get('comment_score') or 0, reverse=True)
     return {"ok": True, "items": items[:10]}
 
+@app.get("/api/sentiment/cards")
+def api_sentiment_cards():
+    """Market sentiment - structured card data with cache"""
+    from scanner import detect_market_sentiment
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    cached = daily_get("sentiment_cards")
+    if cached:
+        return cached
+    score, level, details = detect_market_sentiment(today)
+    if details is None:
+        details = {}
+    icons = {"高潮":"🔥","活跃":"⚡","正常":"✅","低迷":"⚠️","冰点":"❄️"}
+    icon = icons.get(level, "📊")
+    result = {"ok": True, "score": score, "level": level, "icon": icon,
+              "prev_limit_count": details.get("prev_limit_count", 0),
+              "zhaban_count": details.get("zhaban_count", 0),
+              "dieting_count": details.get("dieting_count", 0),
+              "avg_premium": details.get("avg_premium", 0),
+              "promotion_rate": details.get("promotion_rate", 0),
+              "zhaban_rate": details.get("zhaban_rate", 0)}
+    daily_set("sentiment_cards", result)
+    return result
+
+
+@app.get("/api/sentiment/stream")
+def api_sentiment_stream():
+    """Market sentiment - SSE streaming with real-time progress"""
+    from datetime import date
+    today = date.today().strftime("%Y%m%d")
+    cached = daily_get("sentiment_cards")
+    if cached:
+        async def _cached():
+            yield "data: " + json.dumps({"type":"progress","text":"use cache..."}) + chr(10) + chr(10)
+            yield "data: " + json.dumps({"type":"complete","ok": True, **cached}) + chr(10) + chr(10)
+        return StreamingResponse(_cached(), media_type="text/event-stream")
+    from scanner import detect_market_sentiment
+    def run():
+        score, level, details = detect_market_sentiment(today)
+        if details is None:
+            details = {}
+        icons = {"高潮":"🔥","活跃":"⚡","正常":"✅","低迷":"⚠️","冰点":"❄️"}
+        icon = icons.get(level, "📊")
+        return {"ok": True, "score": score, "level": level, "icon": icon,
+                "prev_limit_count": details.get("prev_limit_count", 0),
+                "zhaban_count": details.get("zhaban_count", 0),
+                "dieting_count": details.get("dieting_count", 0),
+                "avg_premium": details.get("avg_premium", 0),
+                "promotion_rate": details.get("promotion_rate", 0),
+                "zhaban_rate": details.get("zhaban_rate", 0)}
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("sentiment_cards", d))), media_type="text/event-stream")
+
+
+
 
 def _comment_score_note(score):
     if score >= 85: return '🔥 综合评分极高，基本面+市场情绪共振'
