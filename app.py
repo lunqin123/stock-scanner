@@ -827,17 +827,13 @@ def api_indicators_cards():
     pos_types = details.get('pos_types', {})
     lhb_data = details.get('lhb_data', {})
     items = []
-    for code in seal_ratios:
-        name = ''
-        for _, r in df.iterrows():
-            c = str(r.iloc[1]).strip().zfill(6)
-            if c == code:
-                name = str(r.iloc[2])
-                break
-        sr = seal_ratios.get(code, 0)
-        lead = leadership.get(code, '')
-        vol = vol_ratios.get(code, {})
-        pos = pos_types.get(code, '')
+    for idx in df.index:
+        code = str(df.loc[idx, df.columns[1]]).strip().zfill(6)
+        name = str(df.loc[idx, df.columns[2]])
+        sr = float(seal_ratios.get(idx, 0))
+        lead = str(leadership.get(idx, ''))
+        vol = vol_ratios.get(idx, {}) if isinstance(vol_ratios.get(idx), dict) else {}
+        pos = str(pos_types.get(idx, ''))
         lhb = lhb_data.get(code, {})
         sigs = []
         if sr is not None:
