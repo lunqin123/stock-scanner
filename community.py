@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+import pandas as pd
 
 try:
     import akshare as ak
@@ -297,7 +298,7 @@ def compute_community_scores(comments: dict, guba: dict, df):
     return scores.round(1)
 
 
-def score_community(df: pd.DataFrame) -> pd.Series:
+def score_community(df):
     """
     舆情评分入口：对候选股池计算每只标的的舆情评分 (0-7)。
     返回与 df.index 对齐的 Series。
