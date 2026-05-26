@@ -1267,7 +1267,7 @@ def api_sentiment_cards():
 
 
 @app.get("/api/sentiment/stream")
-def api_sentiment_stream():
+async def api_sentiment_stream():
     """Market sentiment - SSE streaming with real-time progress"""
     from datetime import date
     today = date.today().strftime("%Y%m%d")
