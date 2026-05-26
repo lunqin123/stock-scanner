@@ -193,7 +193,7 @@ def _scan_limit_up_data(today_str: str):
             'net_money_str': _money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
             'seal_time': str(row.get('首次封板时间', ''))[:4],
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
         })
 
     return {
@@ -451,7 +451,7 @@ def api_trend_cards():
         items.append({
             'code': code,
             'name': str(row[name_col]),
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
             'change_pct': chg,
             'price': price,
             'turnover': round(turnover, 1),
@@ -593,7 +593,7 @@ def api_zhaban_cards():
         items.append({
             'code': code,
             'name': name,
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
             'score': int(total_score),
             'price': price,
             'seal_time': seal_time,
@@ -715,7 +715,7 @@ def api_dtqiaoban_cards():
         items.append({
             'code': code,
             'name': name,
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
             'score': total,
             'price': safe_float(row.iloc[price_col]),
             'change': safe_float(row.iloc[change_col]),
@@ -855,7 +855,7 @@ def api_indicators_cards():
         items.append({
             'code': code,
             'name': name,
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
             'seal_ratio': round(sr, 2) if sr is not None else None,
             'leadership': lead,
             'vol_ratio': vol,
@@ -1222,7 +1222,7 @@ def api_community_cards():
         items.append({
             'code': code,
             'name': info.get('name', ''),
-            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
             'comment_score': round(cs, 2),
             'guba_rank': info.get('guba_rank'),
             'institution': round(inst, 2) if inst else None,
