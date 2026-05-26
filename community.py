@@ -240,7 +240,7 @@ def format_output(smap, global_news):
     return "\n".join(lines)
 
 
-def compute_community_scores(comments: dict, guba: dict, df: pd.DataFrame) -> pd.Series:
+def compute_community_scores(comments: dict, guba: dict, df):
     """
     将舆情数据量化为 0-7 分，按每只标的。
     - 千股千评综合得分 (0-3): ≥80→3, ≥70→2, ≥60→1, ≥50→0.5

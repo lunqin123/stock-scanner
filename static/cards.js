@@ -348,6 +348,54 @@ function renderDtqiaobanCards(items) {
 
 
 
+
+// ─── 龙虎榜分析卡片（含封成比 + 板块角色 + 信号） ───
+function renderIndicatorsCards(items) {
+    const parts = ['<div class="card-list">'];
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var sr = item.seal_ratio || 0;
+        var col = sr >= 1.5 ? RING_COLORS.high : sr >= 0.5 ? RING_COLORS.mid : RING_COLORS.poor;
+        var sig = item.signals || [];
+
+        var tags = [];
+        if (sr >= 1.5) tags.push(['强封','tag-green']);
+        else if (sr >= 0.5) tags.push(['封板一般','tag-blue']);
+        else tags.push(['弱封','tag-yellow']);
+        if (item.lhb_level == 'warn') tags.push(['龙虎榜预警','tag-red']);
+        if (item.leadership) tags.push([esc(item.leadership), 'tag-blue']);
+
+        var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
+        if (item.lhb_net_str) {
+            var netColor = item.lhb_net >= 0 ? 'var(--green)' : 'var(--red)';
+            infoHtml += '💰 主力净<span style="color:' + netColor + '">' + (item.lhb_net >= 0 ? '+' : '') + esc(item.lhb_net_str) + '</span>  ';
+        }
+        if (item.position) infoHtml += '📊 ' + esc(item.position) + '  ';
+        if (item.lhb_detail) infoHtml += '📋 ' + esc(item.lhb_detail);
+        infoHtml += '</div>';
+
+        var srPct = Math.min(100, sr * 60);
+        parts.push(
+            '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
+            '<div class="card-header">',
+            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-name">' + esc(item.name) + '</span>',
+            '<span class="card-score" style="color:' + col + '">' + (sr ? sr.toFixed(2) : '-') + '</span>',
+            '</div>',
+            '<div class="card-body"><div class="card-bars">',
+            '<div class="bar-row"><span class="bar-label">封成比</span><div class="bar-track"><div class="bar-fill ' + (sr >= 1.5 ? 'high' : sr >= 0.5 ? 'mid' : 'low') + '" style="width:' + srPct + '%"></div></div><span class="bar-val" style="color:' + col + '">' + (sr ? sr.toFixed(2) : '-') + '</span></div>',
+            '<div class="bar-row"><span class="bar-label">资金</span><div class="bar-track"><div class="bar-fill ' + (item.lhb_net >= 0 ? 'high' : 'low') + '" style="width:' + Math.min(100, Math.abs(item.lhb_net || 0) / 2e8 * 100) + '%"></div></div><span class="bar-val ' + (item.lhb_net >= 0 ? 'green' : 'red') + '">' + esc(item.lhb_net_str || '-') + '</span></div>',
+            '</div></div>',
+            infoHtml,
+            '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
+            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
+            '</a>'
+        );
+    }
+    parts.push('</div>');
+    return parts.join('');
+}
+
 // ─── 趋势动量卡片（含趋势分析 + 量价 + 策略） ───
 function renderTrendCards(items) {
     const parts = ['<div class="card-list">'];

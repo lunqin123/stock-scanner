@@ -26,7 +26,7 @@ const PAGES = {
     'scan-sector':  { title: '🧩 板块热度',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
     'scan-zhaban':  { title: '💥 炸板分析',   api: '/api/scan/zhaban/cards',  textApi: '/api/scan/zhaban' },
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
-    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators', streamApi: '/api/indicators/stream' },
+    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators/cards', textApi: '/api/indicators', streamApi: '/api/indicators/stream' },
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
     'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
@@ -238,7 +238,7 @@ async function loadCardView(output, pageKey) {
                 html += renderSectorCards(items);
             } else if (pageKey === 'scan-limit') {
                 html += renderStockCards(items, data);
-            } else if (pageKey === 'community') {
+            } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items);
             } else {

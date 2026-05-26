@@ -809,6 +809,70 @@ def api_community(top_n: int = Query(10, description="分析前N只股票")):
     return {"ok": not bool(err), "output": out_buf.getvalue(), "error": err}
 
 
+@app.get("/api/indicators/cards")
+def api_indicators_cards():
+    from indicators import run_enhanced, calc_seal_ratio, calc_sector_leadership, calc_sector_leader_label
+    from scanner import fetch_limit_up_pool, pre_filter
+    from datetime import date
+    import pandas as pd
+    today = date.today().strftime("%Y%m%d")
+    df = fetch_limit_up_pool()
+    if df is None or df.empty:
+        return {"ok": True, "items": []}
+    df = pre_filter(df)
+    result, details = run_enhanced(df, today_str=today)
+    seal_ratios = details.get('seal_ratios', {})
+    leadership = details.get('leadership', {})
+    vol_ratios = details.get('vol_ratios', {})
+    pos_types = details.get('pos_types', {})
+    lhb_data = details.get('lhb_data', {})
+    items = []
+    for code in seal_ratios:
+        name = ''
+        for _, r in df.iterrows():
+            c = str(r.iloc[1]).strip().zfill(6)
+            if c == code:
+                name = str(r.iloc[2])
+                break
+        sr = seal_ratios.get(code, 0)
+        lead = leadership.get(code, '')
+        vol = vol_ratios.get(code, {})
+        pos = pos_types.get(code, '')
+        lhb = lhb_data.get(code, {})
+        sigs = []
+        if sr is not None:
+            sigs.append(f"封成比{sr:.1f}")
+        if lead: sigs.append(lead)
+        if pos: sigs.append(f"仓位:{pos}")
+        if lhb.get('level') == 'warn': sigs.append("龙虎榜预警")
+        money = 0
+        money_str = ''
+        try:
+            money = float(lhb.get('net', 0))
+            if abs(money) >= 1e8:
+                money_str = f"{money/1e8:.2f}亿"
+            elif abs(money) >= 1e4:
+                money_str = f"{money/1e4:.0f}万"
+            else:
+                money_str = str(int(money))
+        except: pass
+        items.append({
+            'code': code,
+            'name': name,
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
+            'seal_ratio': round(sr, 2) if sr is not None else None,
+            'leadership': lead,
+            'vol_ratio': vol,
+            'position': pos,
+            'lhb_net': money,
+            'lhb_net_str': money_str,
+            'lhb_level': lhb.get('level', ''),
+            'lhb_detail': lhb.get('text', ''),
+            'signals': sigs,
+        })
+    items.sort(key=lambda x: x.get('seal_ratio') or 0, reverse=True)
+    return {"ok": True, "items": items[:10]}
+
 @app.get("/api/indicators")
 def api_indicators():
     """运行增强指标分析（龙虎榜等）"""
