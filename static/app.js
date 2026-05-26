@@ -419,6 +419,7 @@ var _marketLabels = {
     'trading': { icon: '⚡', text: '盘中', cls: 'mode-trading' },
     'closed': { icon: '🌙', text: '盘后', cls: 'mode-closed' },
     'weekend': { icon: '🎉', text: '休市', cls: 'mode-weekend' },
+    'lunch': { icon: '☕', text: '午休', cls: 'mode-lunch' },
 };
 
 async function loadMarketStatus() {
@@ -449,9 +450,10 @@ function updateMarketUI() {
 
     // 盘中模式：隐藏盘中不相关的页面
     var hiddenInTrading = { 'scan-trend': true, 'indicators': true, 'backtest': true };
+    var hiddenInLunch = { 'scan-trend': true, 'indicators': true, 'backtest': true };
     document.querySelectorAll('.nav-item[data-page]').forEach(function(el) {
         var page = el.dataset.page;
-        if (_marketStatus === 'trading' && hiddenInTrading[page]) {
+        if ((_marketStatus === 'trading' && hiddenInTrading[page]) || (_marketStatus === 'lunch' && hiddenInLunch[page])) {
             el.style.display = 'none';
         } else {
             el.style.display = '';

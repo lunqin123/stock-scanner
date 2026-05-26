@@ -1269,6 +1269,8 @@ def get_market_status():
     # 交易时段 9:30-11:30, 13:00-15:00
     if (570 <= minute_of_day < 690) or (780 <= minute_of_day < 900):
         return "trading"
+    if (690 <= minute_of_day < 780):
+        return "lunch"
     return "closed"
 
 
