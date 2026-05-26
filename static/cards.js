@@ -349,7 +349,52 @@ function renderDtqiaobanCards(items) {
 
 
 
-// ─── 龙虎榜分析卡片（含封成比 + 板块角色 + 信号） ───
+
+// ─── 市场情绪卡片（含评分表盘 + 明细数据） ───
+function renderSentimentCards(data) {
+    var sc = data.score || 0;
+    var lv = data.level || '未知';
+    var icon = data.icon || '📊';
+    var col = sc >= 8 ? '#ef4444' : sc >= 6 ? '#fbbf24' : sc >= 4 ? '#34d399' : sc >= 2 ? '#94a3b8' : '#60a5fa';
+
+    var pct = sc * 10;
+    var ringCol = col;
+
+    // 等级标签
+    var lvLabel = lv;
+    if (lv.indexOf('炸板') >= 0) lvLabel = lv;
+
+    // 明细数据
+    var items = [
+        { label: '昨日涨停', value: data.prev_limit_count + ' 只', color: 'var(--green)' },
+        { label: '炸板', value: data.zhaban_count + ' 只', color: 'var(--yellow)' },
+        { label: '跌停', value: data.dieting_count + ' 只', color: 'var(--red)' },
+        { label: '平均溢价', value: (data.avg_premium >= 0 ? '+' : '') + data.avg_premium + '%', color: data.avg_premium >= 0 ? 'var(--green)' : 'var(--red)' },
+        { label: '晋级率', value: (data.promotion_rate * 100).toFixed(0) + '%', color: 'var(--text-primary)' },
+        { label: '炸板率', value: (data.zhaban_rate * 100).toFixed(0) + '%', color: 'var(--yellow)' },
+    ];
+
+    var detailRows = '';
+    for (var di = 0; di < items.length; di++) {
+        var it = items[di];
+        detailRows += '<div class="bar-row"><span class="bar-label" style="width:70px">' + it.label + '</span><div class="bar-track"><div class="bar-fill" style="width:' + (di < 3 ? Math.min(100, data[['prev_limit_count','zhaban_count','dieting_count'][di]] * 3) : 50) + '%;background:' + it.color + ';opacity:0.3"></div></div><span class="bar-val" style="color:' + it.color + '">' + it.value + '</span></div>';
+    }
+
+    return '<div class="card-list">' +
+        '<div class="stock-card" style="cursor:default">' +
+        '<div class="card-header">' +
+        '<span style="font-size:24px;margin-right:8px">' + icon + '</span>' +
+        '<span class="card-name" style="font-size:18px">市场情绪</span>' +
+        '<span class="card-score" style="font-size:24px;color:' + ringCol + '">' + lvLabel + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:16px;padding:8px 0">' +
+        '<div class="sr-wrap" style="width:80px;height:80px"><div class="sr-ring" style="width:80px;height:80px;background:conic-gradient(' + ringCol + ' ' + pct + '%, transparent ' + pct + '%)"><div class="sr-inner" style="width:64px;height:64px;font-size:22px;background:var(--bg-secondary)">' + sc + '</div></div></div>' +
+        '<div style="flex:1"><div class="card-bars">' + detailRows + '</div></div>' +
+        '</div>' +
+        '<div class="card-hint"><span>评分制: 0-10分 · 市场情绪综合指标</span></div>' +
+        '</div></div>';
+}
+
 function renderIndicatorsCards(items) {
     const parts = ['<div class="card-list">'];
     for (var i = 0; i < items.length; i++) {
