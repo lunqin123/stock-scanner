@@ -365,14 +365,20 @@ function renderIndicatorsCards(items) {
         if (item.lhb_level == 'warn') tags.push(['龙虎榜预警','tag-red']);
         if (item.leadership) tags.push([esc(item.leadership), 'tag-blue']);
 
-        var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
-        if (item.lhb_net_str) {
-            var netColor = item.lhb_net >= 0 ? 'var(--green)' : 'var(--red)';
-            infoHtml += '💰 主力净<span style="color:' + netColor + '">' + (item.lhb_net >= 0 ? '+' : '') + esc(item.lhb_net_str) + '</span>  ';
+        var hasLhb = item.lhb_net && Math.abs(item.lhb_net) > 0;
+        var hasDetail = item.lhb_detail || item.position;
+
+        var infoHtml = '';
+        if (hasLhb || hasDetail) {
+            infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
+            if (hasLhb) {
+                var netColor = item.lhb_net >= 0 ? 'var(--green)' : 'var(--red)';
+                infoHtml += '💰 主力净<span style="color:' + netColor + '">' + (item.lhb_net >= 0 ? '+' : '') + esc(item.lhb_net_str) + '</span>  ';
+            }
+            if (item.position) infoHtml += '📊 ' + esc(item.position) + '  ';
+            if (item.lhb_detail) infoHtml += '📋 ' + esc(item.lhb_detail);
+            infoHtml += '</div>';
         }
-        if (item.position) infoHtml += '📊 ' + esc(item.position) + '  ';
-        if (item.lhb_detail) infoHtml += '📋 ' + esc(item.lhb_detail);
-        infoHtml += '</div>';
 
         var srPct = Math.min(100, sr * 60);
         parts.push(
@@ -384,7 +390,7 @@ function renderIndicatorsCards(items) {
             '</div>',
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">封成比</span><div class="bar-track"><div class="bar-fill ' + (sr >= 1.5 ? 'high' : sr >= 0.5 ? 'mid' : 'low') + '" style="width:' + srPct + '%"></div></div><span class="bar-val" style="color:' + col + '">' + (sr ? sr.toFixed(2) : '-') + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">资金</span><div class="bar-track"><div class="bar-fill ' + (item.lhb_net >= 0 ? 'high' : 'low') + '" style="width:' + Math.min(100, Math.abs(item.lhb_net || 0) / 2e8 * 100) + '%"></div></div><span class="bar-val ' + (item.lhb_net >= 0 ? 'green' : 'red') + '">' + esc(item.lhb_net_str || '-') + '</span></div>',
+            (hasLhb ? '<div class="bar-row"><span class="bar-label">资金</span><div class="bar-track"><div class="bar-fill ' + (item.lhb_net >= 0 ? 'high' : 'low') + '" style="width:' + Math.min(100, Math.abs(item.lhb_net || 0) / 2e8 * 100) + '%"></div></div><span class="bar-val ' + (item.lhb_net >= 0 ? 'green' : 'red') + '">' + esc(item.lhb_net_str || '-') + '</span></div>' : ''),
             '</div></div>',
             infoHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
