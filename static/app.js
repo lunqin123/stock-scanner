@@ -214,11 +214,6 @@ async function loadCardView(output, pageKey) {
         return;
     }
 
-    if (pageKey === 'sentiment') {
-        await loadCardViewStream(output, pageKey);
-        return;
-    }
-
     try {
         const resp = await fetch(info.api);
         const data = await resp.json();
@@ -242,7 +237,9 @@ async function loadCardView(output, pageKey) {
         }
 
         try {
-            if (pageKey === 'scan-sector') {
+            if (pageKey === 'sentiment') {
+                html += renderSentimentCards(data);
+            } else if (pageKey === 'scan-sector') {
                 html += renderSectorCards(items);
             } else if (pageKey === 'scan-limit') {
                 html += renderStockCards(items, data);
