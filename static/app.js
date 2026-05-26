@@ -432,6 +432,7 @@ async function loadMarketStatus() {
 
 function updateMarketUI() {
     var info = _marketLabels[_marketStatus] || _marketLabels['closed'];
+    // 侧边栏底部
     var modeEl = document.getElementById('market-mode');
     if (!modeEl) {
         modeEl = document.createElement('div');
@@ -440,6 +441,11 @@ function updateMarketUI() {
         document.querySelector('.sidebar').appendChild(modeEl);
     }
     modeEl.innerHTML = '<span>' + info.icon + '</span><span>' + info.text + '</span>';
+    // 移动端顶部标题栏
+    var titleEl = document.querySelector('.mobile-title');
+    if (titleEl) {
+        titleEl.innerHTML = '选股扫描器 <span style="font-size:10px;color:var(--text-muted);font-weight:400">' + info.icon + ' ' + info.text + '</span>';
+    }
 
     // 盘中模式：隐藏盘中不相关的页面
     var hiddenInTrading = { 'scan-trend': true, 'indicators': true, 'backtest': true };
