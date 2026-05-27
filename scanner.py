@@ -688,21 +688,39 @@ def detect_market_sentiment(today_str: str):
         today_limit_up = 0
         today_limit_down = 0
         today_market_breadth = 0.5  # 默认中性
+        all_up = 0
+        all_down = 0
         try:
             print("  [情绪] 第3步: 获取今日大盘数据...", file=sys.stderr)
             today_pool = ak.stock_zt_pool_em(date=today_str)
             if today_pool is not None and not today_pool.empty:
                 today_limit_up = len(today_pool)
+
             today_dt = ak.stock_zt_pool_dtgc_em(date=today_str)
             if today_dt is not None and not today_dt.empty:
                 today_limit_down = len(today_dt)
-            # 涨跌比 = 涨停 / (涨停+跌停)
+
+            # 获取全市场涨跌家数
+            print("  [情绪] 获取全市场涨跌分布...", file=sys.stderr)
+            try:
+                import requests as _req
+                url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=0&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:3+f:!2&fields=f3"
+                resp = _req.get(url, timeout=15, proxies={"http": None, "https": None})
+                if resp.status_code == 200:
+                    diff = resp.json().get("data", {}).get("diff", [])
+                    all_up = sum(1 for d in diff if d.get("f3", 0) > 0)
+                    all_down = sum(1 for d in diff if d.get("f3", 0) < 0)
+                    print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
+            except Exception as e:
+                print(f"  [情绪] 全市场数据获取失败: {e}", file=sys.stderr)
+
+            # 涨跌比（基于涨停/跌停）
             total_sd = today_limit_up + today_limit_down
             if total_sd > 0:
                 today_market_breadth = today_limit_up / total_sd
             print(f"  [情绪] 今日涨停 {today_limit_up} 只, 跌停 {today_limit_down} 只", file=sys.stderr)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [情绪] 大盘数据获取异常: {e}", file=sys.stderr)
 
         # 评分（基于昨日涨停股今日表现）
         if avg_premium > 3 and promo_rate > 0.3:
@@ -721,21 +739,37 @@ def detect_market_sentiment(today_str: str):
             level = "冰点"
             score = 1.0
 
-        # 今日大盘修正
-        if today_market_breadth < 0.3:  # 跌停远多于涨停
-            score -= 2
-            if level != "冰点":
-                level = f"冰点({level})"
-        elif today_market_breadth < 0.5:  # 跌停多于涨停
-            score -= 1
-            if level not in ("冰点", "低迷"):
-                level = f"低迷({level})"
-        elif today_limit_up >= 60:  # 涨停潮
+        # 全市场涨跌比修正（更侧重整体市场感受）
+        if all_up + all_down > 0:
+            all_ratio = all_up / (all_up + all_down)
+            if all_ratio < 0.2:  # 极差
+                score -= 3
+                level = "冰点"
+            elif all_ratio < 0.3:  # 很差
+                score -= 2
+                if level not in ("冰点",):
+                    level = f"冰点({level})"
+            elif all_ratio < 0.4:  # 差
+                score -= 1
+                if level not in ("冰点", "低迷"):
+                    level = f"低迷({level})"
+            elif all_ratio > 0.7:  # 普涨
+                score += 1
+                if level not in ("高潮",):
+                    level = f"活跃({level})"
+            elif all_ratio > 0.8:  # 大涨
+                score += 2
+                level = "高潮"
+
+        # 今日涨停/跌停修正
+        if today_limit_up >= 60:
             score += 1
-            if level not in ("高潮",):
-                level = f"活跃({level})"
         elif today_limit_up >= 40:
             score += 0.5
+        if today_limit_down > 30:
+            score -= 1
+        elif today_limit_down > 15:
+            score -= 0.5
 
         # 今日跌停数修正（额外惩罚）
         if today_limit_down > 30:
@@ -765,6 +799,8 @@ def detect_market_sentiment(today_str: str):
             'today_limit_up': today_limit_up,
             'today_limit_down': today_limit_down,
             'today_breadth': round(today_market_breadth, 2),
+            'all_up': all_up,
+            'all_down': all_down,
         }
         return round(score, 1), level, details
 

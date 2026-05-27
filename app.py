@@ -1261,6 +1261,10 @@ def api_sentiment_cards():
               "today_limit_up": details.get("today_limit_up", 0),
               "today_limit_down": details.get("today_limit_down", 0),
               "today_breadth": details.get("today_breadth", 0),
+              "all_up": details.get("all_up", 0),
+              "all_down": details.get("all_down", 0),
+              "all_up": details.get("all_up", 0),
+              "all_down": details.get("all_down", 0),
                   "zhaban_count": details.get("zhaban_count", 0),
                   "dieting_count": details.get("dieting_count", 0),
                   "avg_premium": details.get("avg_premium", 0),
@@ -1270,7 +1274,7 @@ def api_sentiment_cards():
         return result
     except Exception as e:
         return {"ok": False, "error": str(e), "score": 0, "level": "未知", "icon": "📊",
-                "prev_limit_count": 0, "today_limit_up": 0, "today_limit_down": 0, "today_breadth": 0, "zhaban_count": 0, "dieting_count": 0,
+                "prev_limit_count": 0, "today_limit_up": 0, "today_limit_down": 0, "today_breadth": 0, "all_up": 0, "all_down": 0, "zhaban_count": 0, "dieting_count": 0,
                 "avg_premium": 0, "promotion_rate": 0, "zhaban_rate": 0}
 
 
@@ -1297,6 +1301,10 @@ async def api_sentiment_stream():
               "today_limit_up": details.get("today_limit_up", 0),
               "today_limit_down": details.get("today_limit_down", 0),
               "today_breadth": details.get("today_breadth", 0),
+              "all_up": details.get("all_up", 0),
+              "all_down": details.get("all_down", 0),
+              "all_up": details.get("all_up", 0),
+              "all_down": details.get("all_down", 0),
                 "zhaban_count": details.get("zhaban_count", 0),
                 "dieting_count": details.get("dieting_count", 0),
                 "avg_premium": details.get("avg_premium", 0),

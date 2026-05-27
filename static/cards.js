@@ -369,9 +369,9 @@ function renderSentimentCards(data) {
         { label: '昨日涨停', value: data.prev_limit_count + ' 只', color: 'var(--green)' },
         { label: '今日涨停', value: (data.today_limit_up || 0) + ' 只', color: 'var(--green)' },
         { label: '今日跌停', value: (data.today_limit_down || 0) + ' 只', color: 'var(--red)' },
-        { label: '平均溢价', value: (data.avg_premium >= 0 ? '+' : '') + data.avg_premium + '%', color: data.avg_premium >= 0 ? 'var(--green)' : 'var(--red)' },
-        { label: '晋级率', value: (data.promotion_rate * 100).toFixed(0) + '%', color: 'var(--text-primary)' },
-        { label: '涨跌比', value: (data.today_breadth * 100).toFixed(0) + '%', color: data.today_breadth >= 0.5 ? 'var(--green)' : 'var(--red)' },
+        { label: '全市场涨', value: (data.all_up || 0) + ' 家', color: data.all_up > data.all_down ? 'var(--green)' : 'var(--red)' },
+        { label: '全市场跌', value: (data.all_down || 0) + ' 家', color: data.all_up > data.all_down ? 'var(--red)' : 'var(--green)' },
+        { label: '涨跌比', value: (data.all_up && data.all_down ? (data.all_up / data.all_down).toFixed(2) : '-'), color: data.all_up > data.all_down ? 'var(--green)' : 'var(--red)' },
     ];
 
     var detailRows = '';
