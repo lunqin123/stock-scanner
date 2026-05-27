@@ -1246,24 +1246,29 @@ def api_sentiment_cards():
     """Market sentiment - structured card data with cache"""
     from scanner import detect_market_sentiment
     from datetime import date
-    today = date.today().strftime("%Y%m%d")
-    cached = daily_get("sentiment_cards")
-    if cached:
-        return cached
-    score, level, details = detect_market_sentiment(today)
-    if details is None:
-        details = {}
-    icons = {"高潮":"🔥","活跃":"⚡","正常":"✅","低迷":"⚠️","冰点":"❄️"}
-    icon = icons.get(level, "📊")
-    result = {"ok": True, "score": score, "level": level, "icon": icon,
-              "prev_limit_count": details.get("prev_limit_count", 0),
-              "zhaban_count": details.get("zhaban_count", 0),
-              "dieting_count": details.get("dieting_count", 0),
-              "avg_premium": details.get("avg_premium", 0),
-              "promotion_rate": details.get("promotion_rate", 0),
-              "zhaban_rate": details.get("zhaban_rate", 0)}
-    daily_set("sentiment_cards", result)
-    return result
+    try:
+        today = date.today().strftime("%Y%m%d")
+        cached = daily_get("sentiment_cards")
+        if cached:
+            return cached
+        score, level, details = detect_market_sentiment(today)
+        if details is None:
+            details = {}
+        icons = {"高潮":"🔥","活跃":"⚡","正常":"✅","低迷":"⚠️","冰点":"❄️"}
+        icon = icons.get(level, "📊")
+        result = {"ok": True, "score": score, "level": level, "icon": icon,
+                  "prev_limit_count": details.get("prev_limit_count", 0),
+                  "zhaban_count": details.get("zhaban_count", 0),
+                  "dieting_count": details.get("dieting_count", 0),
+                  "avg_premium": details.get("avg_premium", 0),
+                  "promotion_rate": details.get("promotion_rate", 0),
+                  "zhaban_rate": details.get("zhaban_rate", 0)}
+        daily_set("sentiment_cards", result)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e), "score": 0, "level": "未知", "icon": "📊",
+                "prev_limit_count": 0, "zhaban_count": 0, "dieting_count": 0,
+                "avg_premium": 0, "promotion_rate": 0, "zhaban_rate": 0}
 
 
 @app.get("/api/sentiment/stream")
