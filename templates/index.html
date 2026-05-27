@@ -110,6 +110,7 @@ window.addEventListener('unhandledrejection', function(e) {
     <div class="card">
         <div class="card-header-bar" id="param-bar">
             <button class="btn" onclick="runCurrent()">▶ 运行</button>
+            <button class="btn btn-orange btn-sm" onclick="refreshCurrent()" title="强制重新拉取数据并更新缓存">🔄 刷新</button>
             <button class="btn btn-green btn-sm" id="btn-add-all" onclick="addAllToWatchlist()" style="display:none" title="将当前列表全部加入自选">+ 全部自选</button>
         </div>
 
