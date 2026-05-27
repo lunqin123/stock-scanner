@@ -702,36 +702,31 @@ def detect_market_sentiment(today_str: str):
 
             # 获取全市场涨跌家数
             print("  [情绪] 获取全市场涨跌分布...", file=sys.stderr)
-            for _attempt in range(2):
-                try:
-                    # Method 1: akshare
-                    spot = ak.stock_zh_a_spot_em()
-                    if spot is not None and len(spot) > 100:
-                        spot.iloc[:, 4] = spot.iloc[:, 4].astype(float)
-                        all_up = len(spot[spot.iloc[:, 4] > 0])
-                        all_down = len(spot[spot.iloc[:, 4] < 0])
+            try:
+                import requests as _req
+                url = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                       "Market_Center.getHQNodeData?page=1&num=5000&sort=changepercent&asc=0&node=hs_a")
+                resp = _req.get(url, timeout=25)
+                if resp.status_code == 200:
+                    data_list = resp.json()
+                    if isinstance(data_list, list):
+                        ups = 0
+                        downs = 0
+                        for d in data_list:
+                            try:
+                                cp = float(str(d.get("changepercent", "0")).replace("%", ""))
+                                if cp > 0: ups += 1
+                                elif cp < 0: downs += 1
+                            except: pass
+                        all_up = ups
+                        all_down = downs
                         print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
-                        break
-                except Exception:
-                    pass
-                try:
-                    # Method 2: sina finance
-                    import requests as _req
-                    url = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=5000&sort=changepercent&asc=0&node=hs_a&symbol=&_s_r_a=init"
-                    resp = _req.get(url, timeout=15, proxies={"http": None, "https": None})
-                    if resp.status_code == 200:
-                        data_list = resp.json()
-                        if isinstance(data_list, list) and len(data_list) > 100:
-                            all_up = sum(1 for d in data_list if float(d.get("changepercent", 0)) > 0)
-                            all_down = sum(1 for d in data_list if float(d.get("changepercent", 0)) < 0)
-                            print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
-                            break
-                except Exception:
-                    pass
-                if _attempt == 0:
-                    print("  [情绪] 全市场数据重试中...", file=sys.stderr)
-            else:
-                print("  [情绪] 全市场数据获取失败", file=sys.stderr)
+                    else:
+                        print(f"  [情绪] sina返回格式异常: {type(data_list)}", file=sys.stderr)
+                else:
+                    print(f"  [情绪] sina返回{resp.status_code}", file=sys.stderr)
+            except Exception as e:
+                print(f"  [情绪] sina数据获取失败: {e}", file=sys.stderr)
 
             # 涨跌比（基于涨停/跌停）
             total_sd = today_limit_up + today_limit_down
