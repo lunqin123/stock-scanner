@@ -672,9 +672,6 @@ def detect_market_sentiment(today_str: str):
 
         print("  [情绪] 第3步: 计算评分...", file=sys.stderr)
 
-        zb_df = ak.stock_zt_pool_zbgc_em(date=yesterday)
-        dt_df = ak.stock_zt_pool_dtgc_em(date=yesterday)
-
         prev_total = len(prev_limit)
         zb_total = len(zb_df) if zb_df is not None and not zb_df.empty else 0
         dt_total = len(dt_df) if dt_df is not None and not dt_df.empty else 0
@@ -687,7 +684,27 @@ def detect_market_sentiment(today_str: str):
         promo_rate = float((changes > 9).sum() / prev_total)  # 晋级率
         zhaban_rate = zb_total / (prev_total + zb_total) if (prev_total + zb_total) > 0 else 0.5
 
-        # 评分
+        # 获取今天的大盘数据
+        today_limit_up = 0
+        today_limit_down = 0
+        today_market_breadth = 0.5  # 默认中性
+        try:
+            print("  [情绪] 第3步: 获取今日大盘数据...", file=sys.stderr)
+            today_pool = ak.stock_zt_pool_em(date=today_str)
+            if today_pool is not None and not today_pool.empty:
+                today_limit_up = len(today_pool)
+            today_dt = ak.stock_zt_pool_dtgc_em(date=today_str)
+            if today_dt is not None and not today_dt.empty:
+                today_limit_down = len(today_dt)
+            # 涨跌比 = 涨停 / (涨停+跌停)
+            total_sd = today_limit_up + today_limit_down
+            if total_sd > 0:
+                today_market_breadth = today_limit_up / total_sd
+            print(f"  [情绪] 今日涨停 {today_limit_up} 只, 跌停 {today_limit_down} 只", file=sys.stderr)
+        except Exception:
+            pass
+
+        # 评分（基于昨日涨停股今日表现）
         if avg_premium > 3 and promo_rate > 0.3:
             level = "高潮"
             score = 9.0
@@ -704,16 +721,37 @@ def detect_market_sentiment(today_str: str):
             level = "冰点"
             score = 1.0
 
-        # 炸板率修正
+        # 今日大盘修正
+        if today_market_breadth < 0.3:  # 跌停远多于涨停
+            score -= 2
+            if level != "冰点":
+                level = f"冰点({level})"
+        elif today_market_breadth < 0.5:  # 跌停多于涨停
+            score -= 1
+            if level not in ("冰点", "低迷"):
+                level = f"低迷({level})"
+        elif today_limit_up >= 60:  # 涨停潮
+            score += 1
+            if level not in ("高潮",):
+                level = f"活跃({level})"
+        elif today_limit_up >= 40:
+            score += 0.5
+
+        # 今日跌停数修正（额外惩罚）
+        if today_limit_down > 30:
+            score -= 1
+        elif today_limit_down > 15:
+            score -= 0.5
+
+        # 炸板率修正（用昨天的数据）
         if zhaban_rate > 0.4:
             score -= 2
-            level = f"炸板({level})"
         elif zhaban_rate > 0.25:
             score -= 1
 
-        # 跌停数修正
+        # 昨日跌停数修正
         if dt_total > 20:
-            score = max(0, score - 1)
+            score -= 1
 
         score = max(0, min(10, score))
 
@@ -724,6 +762,9 @@ def detect_market_sentiment(today_str: str):
             'avg_premium': round(avg_premium, 2),
             'promotion_rate': round(promo_rate, 2),
             'zhaban_rate': round(zhaban_rate, 2),
+            'today_limit_up': today_limit_up,
+            'today_limit_down': today_limit_down,
+            'today_breadth': round(today_market_breadth, 2),
         }
         return round(score, 1), level, details
 

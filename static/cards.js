@@ -367,17 +367,17 @@ function renderSentimentCards(data) {
     // 明细数据
     var items = [
         { label: '昨日涨停', value: data.prev_limit_count + ' 只', color: 'var(--green)' },
-        { label: '炸板', value: data.zhaban_count + ' 只', color: 'var(--yellow)' },
-        { label: '跌停', value: data.dieting_count + ' 只', color: 'var(--red)' },
+        { label: '今日涨停', value: (data.today_limit_up || 0) + ' 只', color: 'var(--green)' },
+        { label: '今日跌停', value: (data.today_limit_down || 0) + ' 只', color: 'var(--red)' },
         { label: '平均溢价', value: (data.avg_premium >= 0 ? '+' : '') + data.avg_premium + '%', color: data.avg_premium >= 0 ? 'var(--green)' : 'var(--red)' },
         { label: '晋级率', value: (data.promotion_rate * 100).toFixed(0) + '%', color: 'var(--text-primary)' },
-        { label: '炸板率', value: (data.zhaban_rate * 100).toFixed(0) + '%', color: 'var(--yellow)' },
+        { label: '涨跌比', value: (data.today_breadth * 100).toFixed(0) + '%', color: data.today_breadth >= 0.5 ? 'var(--green)' : 'var(--red)' },
     ];
 
     var detailRows = '';
     for (var di = 0; di < items.length; di++) {
         var it = items[di];
-        detailRows += '<div class="bar-row"><span class="bar-label" style="width:70px">' + it.label + '</span><div class="bar-track"><div class="bar-fill" style="width:' + (di < 3 ? Math.min(100, data[['prev_limit_count','zhaban_count','dieting_count'][di]] * 3) : 50) + '%;background:' + it.color + ';opacity:0.3"></div></div><span class="bar-val" style="color:' + it.color + '">' + it.value + '</span></div>';
+        detailRows += '<div class="bar-row"><span class="bar-label" style="width:70px">' + it.label + '</span><div class="bar-track"><div class="bar-fill" style="width:' + (di < 3 ? Math.min(100, data[['prev_limit_count','today_limit_up','today_limit_down'][di]] * 3) : 50) + '%;background:' + it.color + ';opacity:0.3"></div></div><span class="bar-val" style="color:' + it.color + '">' + it.value + '</span></div>';
     }
 
     return '<div class="card-list">' +
