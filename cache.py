@@ -59,6 +59,12 @@ def daily_get(key: str):
     path = _daily_path(key)
     try:
         if os.path.exists(path):
+            # 检查缓存是否过期：开盘前（<9:30）写入的缓存视为过期
+            mtime = os.path.getmtime(path)
+            mtime_dt = datetime.fromtimestamp(mtime, _CST)
+            if mtime_dt.hour < 9 or (mtime_dt.hour == 9 and mtime_dt.minute < 30):
+                os.remove(path)
+                return None
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception:
