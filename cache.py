@@ -17,7 +17,7 @@ _CACHE_TTL = 7200
 # ─── 2小时短期缓存（避免重复拉取慢 API） ───
 
 def get(name):
-    path = os.path.join(_CACHE_DIR, f"{name}.pkl")
+    path = os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl")
     try:
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
             with open(path, 'rb') as f:
@@ -82,5 +82,25 @@ def daily_set(key: str, data):
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(_daily_path(key), 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def clear_all():
+    """清除所有缓存（版本号不匹配的文件也会被清理）"""
+    import glob
+    try:
+        kept = 0
+        removed = 0
+        for f in os.listdir(_CACHE_DIR):
+            fp = os.path.join(_CACHE_DIR, f)
+            if os.path.isfile(fp) and not f.endswith(".json"):
+                # pickle 文件检查版本号
+                if f"_v{_CACHE_VER}" not in f:
+                    os.remove(fp)
+                    removed += 1
+                else:
+                    kept += 1
+        print(f"  [缓存清理] 删除 {removed} 个旧版本, 保留 {kept} 个当前版本", file=__import__('sys').stderr)
     except Exception:
         pass
