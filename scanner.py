@@ -705,24 +705,24 @@ def detect_market_sentiment(today_str: str):
             try:
                 import requests as _req
                 url = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-                       "Market_Center.getHQNodeData?page=1&num=5000&sort=changepercent&asc=0&node=hs_a")
-                resp = _req.get(url, timeout=25)
+                       "Market_Center.getHQNodeData?page=1&num=500&sort=changepercent&asc=0&node=hs_a")
+                resp = _req.get(url, timeout=15)
                 if resp.status_code == 200:
-                    data_list = resp.json()
-                    if isinstance(data_list, list):
-                        ups = 0
-                        downs = 0
-                        for d in data_list:
-                            try:
-                                cp = float(str(d.get("changepercent", "0")).replace("%", ""))
-                                if cp > 0: ups += 1
-                                elif cp < 0: downs += 1
-                            except: pass
-                        all_up = ups
-                        all_down = downs
-                        print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
+                    txt = resp.text
+                    # sina返回JSONP格式, 前128字符是函数包装, 直接去掉开头
+                    if txt and txt.startswith("[") and txt.endswith("]"):
+                        import json as _json
+                        rows = _json.loads(txt)
+                        if isinstance(rows, list):
+                            ups = sum(1 for r in rows if float(str(r.get("changepercent","0")).replace("%","")) > 0)
+                            downs = sum(1 for r in rows if float(str(r.get("changepercent","0")).replace("%","")) < 0)
+                            all_up = ups
+                            all_down = downs
+                            print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
+                        else:
+                            print(f"  [情绪] sina格式不对: {type(rows)}", file=sys.stderr)
                     else:
-                        print(f"  [情绪] sina返回格式异常: {type(data_list)}", file=sys.stderr)
+                        print(f"  [情绪] sina前50: {txt[:50]}", file=sys.stderr)
                 else:
                     print(f"  [情绪] sina返回{resp.status_code}", file=sys.stderr)
             except Exception as e:
