@@ -97,6 +97,15 @@ async function runCurrent() {
     await callApi(info.api, currentPage);
 }
 
+async function refreshCurrent() {
+    // 强制刷新：带 ?refresh=1 参数重新拉取并更新缓存
+    const info = PAGES[currentPage];
+    if (!info) return;
+    delete _outputCache[currentPage];
+    var refreshUrl = info.api + '?refresh=1';
+    await callApi(refreshUrl, currentPage);
+}
+
 async function callApi(apiUrl, pageKey) {
     const output = _dom.output();
     delete _outputCache[pageKey];
