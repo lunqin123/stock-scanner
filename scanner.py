@@ -700,33 +700,40 @@ def detect_market_sentiment(today_str: str):
             if today_dt is not None and not today_dt.empty:
                 today_limit_down = len(today_dt)
 
-            # 获取全市场涨跌家数
+            # 获取全市场涨跌家数（Sina采样多页汇总）
             print("  [情绪] 获取全市场涨跌分布...", file=sys.stderr)
             try:
                 import requests as _req
-                url = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-                       "Market_Center.getHQNodeData?page=1&num=500&sort=changepercent&asc=0&node=hs_a")
-                resp = _req.get(url, timeout=15)
-                if resp.status_code == 200:
-                    txt = resp.text
-                    # sina返回JSONP格式, 前128字符是函数包装, 直接去掉开头
-                    if txt and txt.startswith("[") and txt.endswith("]"):
-                        import json as _json
-                        rows = _json.loads(txt)
-                        if isinstance(rows, list):
-                            ups = sum(1 for r in rows if float(str(r.get("changepercent","0")).replace("%","")) > 0)
-                            downs = sum(1 for r in rows if float(str(r.get("changepercent","0")).replace("%","")) < 0)
-                            all_up = ups
-                            all_down = downs
-                            print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
-                        else:
-                            print(f"  [情绪] sina格式不对: {type(rows)}", file=sys.stderr)
-                    else:
-                        print(f"  [情绪] sina前50: {txt[:50]}", file=sys.stderr)
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                _SINA_BASE = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                              "Market_Center.getHQNodeData?num=100&sort=code&asc=1&node=hs_a&page=")
+                def _fetch_page(p):
+                    try:
+                        r = _req.get(_SINA_BASE + str(p), timeout=15)
+                        if r.status_code == 200 and r.text.startswith("["):
+                            d = r.json()
+                            ups = sum(1 for x in d if float(x.get("changepercent", 0)) > 0)
+                            downs = sum(1 for x in d if float(x.get("changepercent", 0)) < 0)
+                            return ups, downs
+                    except: pass
+                    return 0, 0
+                total_up = 0
+                total_down = 0
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    pages = [1, 15, 30, 45]
+                    futs = {ex.submit(_fetch_page, p): p for p in pages}
+                    for f in as_completed(futs):
+                        u, d = f.result()
+                        total_up += u
+                        total_down += d
+                if total_up + total_down > 0:
+                    all_up = total_up
+                    all_down = total_down
+                    print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
                 else:
-                    print(f"  [情绪] sina返回{resp.status_code}", file=sys.stderr)
+                    print("  [情绪] 全市场数据采样失败", file=sys.stderr)
             except Exception as e:
-                print(f"  [情绪] sina数据获取失败: {e}", file=sys.stderr)
+                print(f"  [情绪] 全市场获取异常: {e}", file=sys.stderr)
 
             # 涨跌比（基于涨停/跌停）
             total_sd = today_limit_up + today_limit_down
