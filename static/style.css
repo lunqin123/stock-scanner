@@ -225,6 +225,117 @@ body {
     box-shadow: var(--shadow);
 }
 
+/* ════════════════════ 市场概览 Dashboard ════════════════════ */
+.dashboard-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 2fr;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.dash-stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: var(--transition);
+    box-shadow: var(--shadow);
+}
+
+.dash-stat-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+}
+
+.dash-stat-card .dash-stat-icon {
+    font-size: 24px;
+    width: 40px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.dash-stat-card .dash-stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.dash-stat-card .dash-stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.dash-stat-card .dash-stat-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.dash-stat-card .dash-stat-value.accent { color: var(--accent); }
+.dash-stat-card .dash-stat-value.green { color: var(--green); }
+
+.dash-stat-card .sector-tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    background: var(--bg-hover);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: var(--transition);
+}
+.dash-stat-card .sector-tag:hover { color: var(--accent); background: rgba(79,140,255,0.1); }
+.dash-stat-card .sector-tag em { font-style: normal; color: var(--accent); font-weight: 600; }
+
+.dash-sectors-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.sectors-card { cursor: default; }
+
+/* ════════════════════ 卡片头部操作栏 ════════════════════ */
+.card-header-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.card-header-bar h2 {
+    margin-bottom: 0;
+    margin-right: auto;
+}
+
+.principal-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-left: auto;
+}
+.principal-input {
+    width: 80px;
+    padding: 4px 6px;
+    border: 1px solid var(--border, #334155);
+    border-radius: 6px;
+    background: var(--bg-primary, #1e293b);
+    color: var(--text-primary, #e2e8f0);
+    font-size: 13px;
+    text-align: right;
+    outline: none;
+    transition: var(--transition);
+}
+.principal-input:focus {
+    border-color: var(--accent, #4f8cff);
+}
+
 /* ════════════════════ 按钮 ════════════════════ */
 .btn {
     background: var(--accent);
