@@ -506,7 +506,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
     s_community = community_scores if community_scores is not None else pd.Series(3.5, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, s_community, w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=w)
     total_scores = base_totals * sentiment_multiplier
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -588,7 +588,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
     s_community = community_scores if community_scores is not None else pd.Series(3.5, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, s_community, w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=w)
     total_scores = base_totals * sentiment_multiplier
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -2187,7 +2187,7 @@ def main():
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_community = community_scores if community_scores is not None else pd.Series(3.5, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, s_community, weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=weights)
     total_scores = base_totals * sentiment_multiplier
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
