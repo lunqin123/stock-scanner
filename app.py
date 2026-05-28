@@ -286,7 +286,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 
 
 @app.get("/api/scan/sector/cards")
-def api_sector_cards():
+def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）"""
     import akshare as ak
     import pandas as pd
@@ -294,10 +294,11 @@ def api_sector_cards():
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"sector_cards_{today}"
-    cached = cache_get(key)
-    if cached:
-        print("  [板块卡片] 命中缓存", file=sys.stderr)
-        return cached
+    if not refresh:
+        cached = cache_get(key)
+        if cached:
+            print("  [板块卡片] 命中缓存", file=sys.stderr)
+            return cached
     print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
     try:
         limit_df = ak.stock_zt_pool_em(date=today)
@@ -374,7 +375,7 @@ def api_sector_cards():
 
 
 @app.get("/api/scan/trend/cards")
-def api_trend_cards():
+def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
     import akshare as ak
     import pandas as pd
@@ -382,10 +383,11 @@ def api_trend_cards():
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"trend_cards_{today}"
-    cached = cache_get(key)
-    if cached:
-        print("  [趋势卡片] 命中缓存", file=sys.stderr)
-        return cached
+    if not refresh:
+        cached = cache_get(key)
+        if cached:
+            print("  [趋势卡片] 命中缓存", file=sys.stderr)
+            return cached
     print("  [趋势卡片] 拉取昨日涨停数据...", file=sys.stderr)
     def _fetch(d):
         return ak.stock_zt_pool_previous_em(date=d)
@@ -468,7 +470,7 @@ def api_trend_cards():
 
 
 @app.get("/api/scan/zhaban/cards")
-def api_zhaban_cards():
+def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     """炸板分析 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
@@ -478,10 +480,11 @@ def api_zhaban_cards():
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"zhaban_cards_{today}"
-    cached = cache_get(key)
-    if cached:
-        print("  [炸板卡片] 命中缓存", file=sys.stderr)
-        return cached
+    if not refresh:
+        cached = cache_get(key)
+        if cached:
+            print("  [炸板卡片] 命中缓存", file=sys.stderr)
+            return cached
     print("  [炸板卡片] 拉取炸板数据...", file=sys.stderr)
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=today)
@@ -613,7 +616,7 @@ def api_zhaban_cards():
 
 
 @app.get("/api/scan/dtqiaoban/cards")
-def api_dtqiaoban_cards():
+def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")):
     """跌停翘板 — 结构化数据（含评分、分析、跳转）"""
     import akshare as ak
     import pandas as pd
@@ -621,10 +624,11 @@ def api_dtqiaoban_cards():
     print("  [翘板卡片] 开始...", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     key = f"dtqiaoban_cards_{today}"
-    cached = cache_get(key)
-    if cached:
-        print("  [翘板卡片] 命中缓存", file=sys.stderr)
-        return cached
+    if not refresh:
+        cached = cache_get(key)
+        if cached:
+            print("  [翘板卡片] 命中缓存", file=sys.stderr)
+            return cached
     print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=today)
@@ -982,18 +986,19 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 # ═══════════════════════════════════════════
 
 @app.get("/api/scan/limit-up/stream")
-async def api_scan_limit_up_stream():
+async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新")):
     """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
     today = date.today().strftime("%Y%m%d")
 
     async def _generate():
-        # 检查每日缓存
-        cached = daily_get("limit_up_cards")
-        if cached:
-            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
-            await asyncio.sleep(0.03)
-            yield f"data: {json.dumps({'type':'complete','stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
-            return
+        # 检查每日缓存（refresh 时跳过）
+        if not refresh:
+            cached = daily_get("limit_up_cards")
+            if cached:
+                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+                await asyncio.sleep(0.03)
+                yield f"data: {json.dumps({'type':'complete','stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
+                return
 
         q = queue.Queue()
         result_holder = {"data": None, "error": None}
@@ -1131,15 +1136,16 @@ def _cached_stream(gen):
 
 
 @app.get("/api/indicators/stream")
-def api_indicators_stream():
+def api_indicators_stream(refresh: bool = Query(False, description="强制刷新")):
     from datetime import date
     today = date.today().strftime("%Y%m%d")
-    cached = daily_get("indicators")
-    if cached:
-        async def _cached():
-            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
-            yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
-        return StreamingResponse(_cached(), media_type="text/event-stream")
+    if not refresh:
+        cached = daily_get("indicators")
+        if cached:
+            async def _cached():
+                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+                yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
+            return StreamingResponse(_cached(), media_type="text/event-stream")
     from indicators import run_enhanced
     from scanner import fetch_limit_up_pool, pre_filter
     def run():
@@ -1152,14 +1158,15 @@ def api_indicators_stream():
 
 
 @app.get("/api/community/stream")
-def api_community_stream():
+def api_community_stream(refresh: bool = Query(False, description="强制刷新")):
     today = date.today().strftime("%Y%m%d")
-    cached = daily_get("community")
-    if cached:
-        async def _cached():
-            yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
-            yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
-        return StreamingResponse(_cached(), media_type="text/event-stream")
+    if not refresh:
+        cached = daily_get("community")
+        if cached:
+            async def _cached():
+                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+                yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
+            return StreamingResponse(_cached(), media_type="text/event-stream")
     import community
     from scanner import fetch_limit_up_pool
     def run():
@@ -1242,15 +1249,16 @@ def api_community_cards():
     return {"ok": True, "items": items[:10]}
 
 @app.get("/api/sentiment/cards")
-def api_sentiment_cards():
+def api_sentiment_cards(refresh: bool = Query(False, description="强制刷新")):
     """Market sentiment - structured card data with cache"""
     from scanner import detect_market_sentiment
     from datetime import date
     try:
         today = date.today().strftime("%Y%m%d")
-        cached = daily_get("sentiment_cards")
-        if cached:
-            return cached
+        if not refresh:
+            cached = daily_get("sentiment_cards")
+            if cached:
+                return cached
         score, level, details = detect_market_sentiment(today)
         if details is None:
             details = {}
@@ -1279,16 +1287,17 @@ def api_sentiment_cards():
 
 
 @app.get("/api/sentiment/stream")
-async def api_sentiment_stream():
+async def api_sentiment_stream(refresh: bool = Query(False, description="强制刷新")):
     """Market sentiment - SSE streaming with real-time progress"""
     from datetime import date
     today = date.today().strftime("%Y%m%d")
-    cached = daily_get("sentiment_cards")
-    if cached:
-        async def _cached():
-            yield "data: " + json.dumps({"type":"progress","text":"use cache..."}) + chr(10) + chr(10)
-            yield "data: " + json.dumps({"type":"complete","ok": True, **cached}) + chr(10) + chr(10)
-        return StreamingResponse(_cached(), media_type="text/event-stream")
+    if not refresh:
+        cached = daily_get("sentiment_cards")
+        if cached:
+            async def _cached():
+                yield "data: " + json.dumps({"type":"progress","text":"use cache..."}) + chr(10) + chr(10)
+                yield "data: " + json.dumps({"type":"complete","ok": True, **cached}) + chr(10) + chr(10)
+            return StreamingResponse(_cached(), media_type="text/event-stream")
     from scanner import detect_market_sentiment
     def run():
         score, level, details = detect_market_sentiment(today)

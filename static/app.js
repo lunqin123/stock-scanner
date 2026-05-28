@@ -113,17 +113,18 @@ async function callApi(apiUrl, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
     if (info.textApi) {
-        await loadCardView(output, pageKey);
+        await loadCardView(output, pageKey, apiUrl);
     } else if (info.streamApi) {
-        await loadTextViewStream(output, pageKey);
+        await loadTextViewStream(output, pageKey, apiUrl);
     } else {
-        await loadTextView(output, pageKey);
+        await loadTextView(output, pageKey, apiUrl);
     }
     _outputCache[pageKey] = output.innerHTML;
 }
 
-async function loadTextView(output, pageKey) {
+async function loadTextView(output, pageKey, apiUrl) {
     const info = PAGES[pageKey];
+    const url = apiUrl || info.api;
     // 显示进度条动画（非流式页面用估算进度）
     showProgress('正在加载...', 15);
     let estPct = 15;
@@ -134,7 +135,7 @@ async function loadTextView(output, pageKey) {
     }, 300);
 
     try {
-        const resp = await fetch(info.api);
+        const resp = await fetch(url);
         const data = await resp.json();
         clearInterval(estInterval);
         showProgress('加载完成', 100);
@@ -151,8 +152,9 @@ async function loadTextView(output, pageKey) {
 }
 
 // ─── 文本流式加载（龙虎榜/舆情，SSE 实时进度） ───
-async function loadTextViewStream(output, pageKey) {
+async function loadTextViewStream(output, pageKey, apiUrl) {
     const info = PAGES[pageKey];
+    const url = apiUrl || info.streamApi;
     const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
     if (bar) bar.style.display = 'block';
     if (fill) fill.style.width = '10%';
@@ -162,7 +164,7 @@ async function loadTextViewStream(output, pageKey) {
     await new Promise(r => setTimeout(r, 40));
 
     try {
-        const resp = await fetch(info.streamApi);
+        const resp = await fetch(url);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
@@ -215,16 +217,17 @@ async function loadTextViewStream(output, pageKey) {
     }
 }
 
-async function loadCardView(output, pageKey) {
+async function loadCardView(output, pageKey, apiUrl) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
+    const url = apiUrl || info.api;
 
     if (pageKey === 'scan-limit') {
-        await loadCardViewStream(output, pageKey);
+        await loadCardViewStream(output, pageKey, apiUrl);
         return;
     }
 
     try {
-        const resp = await fetch(info.api);
+        const resp = await fetch(url);
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
@@ -272,7 +275,7 @@ async function loadCardView(output, pageKey) {
 }
 
 // ─── SSE 流式加载（防抖 + RAF 优化） ───
-async function loadCardViewStream(output, pageKey) {
+async function loadCardViewStream(output, pageKey, apiUrl) {
     const bar = _dom.progress();
     const fill = _dom.fill();
     const txt = _dom.txt();
@@ -317,6 +320,7 @@ async function loadCardViewStream(output, pageKey) {
 
     try {
         var streamUrl = '/api/scan/limit-up/stream';
+        if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) streamUrl += '?refresh=1';
         var fetchOpts = pageKey === 'sentiment' ? {credentials:'same-origin'} : {};
         if (pageKey === 'sentiment') streamUrl = '/api/sentiment/stream';
         const resp = await fetch(streamUrl, fetchOpts || {});
