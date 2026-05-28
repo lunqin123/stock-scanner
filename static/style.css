@@ -209,6 +209,22 @@ body {
     font-weight: 600;
 }
 
+.module-page {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 24px;
+}
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    box-shadow: var(--shadow);
+}
+
 /* ════════════════════ 按钮 ════════════════════ */
 .btn {
     background: var(--accent);
