@@ -527,8 +527,8 @@ function showChangelog() {
         return;
     }
     var allVersions = _versionData.history || [];
-    // 当前版本放在最前面
     allVersions = [{ version: _versionData.version, date: _versionData.date, changes: _versionData.changes }].concat(allVersions);
+    var SHOW_MAX = 5;  // 默认显示最近 5 个版本，更多需要展开
 
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease';
@@ -543,9 +543,12 @@ function showChangelog() {
     html += '<span id="modal-close" style="margin-left:auto;cursor:pointer;font-size:18px;color:var(--text-muted)">✕</span>';
     html += '</div>';
 
-    for (var vi = 0; vi < allVersions.length; vi++) {
+    var hasMore = allVersions.length > SHOW_MAX;
+    var displayCount = hasMore ? SHOW_MAX : allVersions.length;
+
+    for (var vi = 0; vi < displayCount; vi++) {
         var v = allVersions[vi];
-        html += '<div style="margin:0 0 14px 0;padding:0 0 14px 0;' + (vi < allVersions.length - 1 ? 'border-bottom:1px solid var(--border-light,#2a3648)' : '') + '">';
+        html += '<div style="margin:0 0 14px 0;padding:0 0 14px 0;border-bottom:1px solid var(--border-light,#2a3648)">';
         html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
         html += '<strong style="font-size:14px">v' + esc(v.version) + '</strong>';
         html += '<span style="color:var(--text-muted);font-size:11px">' + (v.date || '') + '</span>';
@@ -556,11 +559,38 @@ function showChangelog() {
         html += '</ul></div>';
     }
 
+    if (hasMore) {
+        var remaining = allVersions.length - SHOW_MAX;
+        html += '<div id="ver-more" style="text-align:center;cursor:pointer;color:var(--accent,#4f8cff);font-size:13px;padding:4px 0 8px" onclick="expandOlderVersions()">展开更早 ' + remaining + ' 个版本 ▼</div>';
+        // 隐藏的旧版本
+        html += '<div id="ver-old" style="display:none">';
+        for (var vi = displayCount; vi < allVersions.length; vi++) {
+            var v = allVersions[vi];
+            html += '<div style="margin:0 0 14px 0;padding:0 0 14px 0;border-bottom:1px solid var(--border-light,#2a3648)">';
+            html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+            html += '<strong style="font-size:14px">v' + esc(v.version) + '</strong>';
+            html += '<span style="color:var(--text-muted);font-size:11px">' + (v.date || '') + '</span>';
+            html += '</div><ul style="margin:0;padding:0 0 0 16px;color:var(--text-secondary);line-height:1.9;font-size:13px">';
+            for (var ci = 0; ci < v.changes.length; ci++) {
+                html += '<li>' + esc(v.changes[ci]) + '</li>';
+            }
+            html += '</ul></div>';
+        }
+        html += '</div>';
+    }
+
     html += '<div style="margin-top:4px;text-align:right;font-size:11px;color:var(--text-muted)">点击空白处关闭</div>';
     box.innerHTML = html;
     box.querySelector('#modal-close').onclick = function() { overlay.remove(); };
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+}
+
+function expandOlderVersions() {
+    var el = document.getElementById('ver-old');
+    var btn = document.getElementById('ver-more');
+    if (el) el.style.display = '';
+    if (btn) btn.style.display = 'none';
 }
 
 // ─── 初始化 ───
