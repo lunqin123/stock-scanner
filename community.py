@@ -52,7 +52,7 @@ def fetch_news_for_stocks(df, top_n=TOP_STOCKS):
 
     def _fetch_one(code, name):
         try:
-            news_df = ak.stock_news_em(code)
+            news_df = _timeout_call(lambda: ak.stock_news_em(code), timeout=10)
             if news_df is not None and not news_df.empty:
                 items = []
                 for _, nr in news_df.head(TOP_NEWS).iterrows():
@@ -78,6 +78,17 @@ def fetch_news_for_stocks(df, top_n=TOP_STOCKS):
     return result
 
 
+def _timeout_call(fn, timeout=15, default=None):
+    """在子线程中执行 fn，超过 timeout 秒则返回 default"""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except Exception:
+            return default
+
+
 def fetch_guba_rank():
     """东方财富股吧人气排名 TOP100，带缓存"""
     if ak is None:
@@ -87,7 +98,7 @@ def fetch_guba_rank():
     if cached:
         return cached
     try:
-        df = ak.stock_hot_rank_em()
+        df = _timeout_call(ak.stock_hot_rank_em, timeout=15)
         if df is not None and not df.empty:
             result = {
                 str(row['代码']).strip().zfill(6): {
@@ -112,7 +123,7 @@ def fetch_comment_scores():
     if cached:
         return cached
     try:
-        df = ak.stock_comment_em()
+        df = _timeout_call(ak.stock_comment_em, timeout=15)
         if df is not None and not df.empty:
             result = {}
             for _, row in df.iterrows():
@@ -138,7 +149,7 @@ def fetch_xueqiu_rank():
     if cached:
         return cached
     try:
-        df = ak.stock_hot_follow_xq()
+        df = _timeout_call(ak.stock_hot_follow_xq, timeout=10)
         if df is not None and not df.empty:
             result = {}
             for i, (_, row) in enumerate(df.iterrows(), 1):
@@ -162,7 +173,7 @@ def fetch_global_news():
         return []
     items = []
     try:
-        ths = ak.stock_info_global_ths()
+        ths = _timeout_call(ak.stock_info_global_ths, timeout=10)
         if ths is not None and not ths.empty:
             for _, row in ths.head(5).iterrows():
                 items.append({
@@ -173,7 +184,7 @@ def fetch_global_news():
     except Exception:
         pass
     try:
-        cls = ak.stock_info_global_cls()
+        cls = _timeout_call(ak.stock_info_global_cls, timeout=10)
         if cls is not None and not cls.empty:
             for _, row in cls.head(5).iterrows():
                 items.append({
@@ -331,9 +342,9 @@ def run(df, top_n=TOP_STOCKS):
         for f in as_completed(futs):
             key = futs[f]
             try:
-                res[key] = f.result()
+                res[key] = f.result(timeout=30)  # 最多等30秒
             except Exception:
-                res[key] = futs[key]  # fallback to default
+                res[key] = {} if key != "gl" else []
     guba = res.get("guba", {})
     comments = res.get("comments", {})
     news = res.get("news", {})
