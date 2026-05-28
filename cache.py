@@ -76,9 +76,24 @@ def daily_get(key: str):
         pass
     return None
 
+def _is_market_frozen() -> bool:
+    """盘后 15:00 到次日 9:30 之间，以及周末，冻结每日缓存不被覆盖"""
+    now = datetime.now(_CST)
+    wd = now.weekday()
+    if wd >= 5:
+        return True  # 周末冻结
+    minute = now.hour * 60 + now.minute
+    if minute >= 900:  # 15:00 之后
+        return True
+    return False
+
 def daily_set(key: str, data):
-    # 文件名含日期，自然隔离：当日首次写入后，刷新直接命中缓存
+    # 盘后冻结：已有缓存文件时不覆盖，保留全天数据
     try:
+        if _is_market_frozen():
+            path = _daily_path(key)
+            if os.path.exists(path):
+                return  # 盘后不覆盖已有缓存
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(_daily_path(key), 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
