@@ -1409,11 +1409,30 @@ async def webhook(request: Request):
     if event != "push":
         return {"ok": True, "event": event, "action": "ignored"}
 
-    # 后台拉取并重启
+    # 后台拉取并重启（git pull HTTPS 可能挂起，改用 curl 下载压缩包）
     def _deploy():
+        import urllib.request, zipfile, io, shutil
+        tmp_zip = "/tmp/stock_scanner_deploy.zip"
+        tmp_dir = "/tmp/stock_scanner_deploy"
         try:
-            os.chdir("/home/ubuntu/stock-scanner")
-            subprocess.run(["git", "pull"], capture_output=True, timeout=30)
+            urllib.request.urlretrieve(
+                "https://api.github.com/repos/lunqin123/stock-scanner/zipball/master",
+                tmp_zip)
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+            with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                zf.extractall(tmp_dir)
+            dirs = os.listdir(tmp_dir)
+            if dirs:
+                src = os.path.join(tmp_dir, dirs[0])
+                for item in os.listdir(src):
+                    s = os.path.join(src, item)
+                    d = os.path.join("/home/ubuntu/stock-scanner", item)
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d, symlinks=True, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s, d)
+            os.remove(tmp_zip)
             subprocess.run(["sudo", "systemctl", "restart", "stock-scanner"], capture_output=True, timeout=30)
         except Exception as e:
             print(f"[Webhook] 部署失败: {e}", file=sys.stderr)
