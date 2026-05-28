@@ -526,27 +526,39 @@ function showChangelog() {
         loadVersion().then(showChangelog);
         return;
     }
+    var allVersions = _versionData.history || [];
+    // 当前版本放在最前面
+    allVersions = [{ version: _versionData.version, date: _versionData.date, changes: _versionData.changes }].concat(allVersions);
+
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease';
     overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
 
     const box = document.createElement('div');
-    box.style.cssText = 'background:var(--bg-card,#1e293b);border:1px solid var(--border-light,#334155);border-radius:12px;padding:24px;max-width:420px;width:90%;max-height:70vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.5)';
+    box.style.cssText = 'background:var(--bg-card,#1e293b);border:1px solid var(--border-light,#334155);border-radius:12px;padding:24px;max-width:460px;width:90%;max-height:75vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.5)';
 
     var html = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">';
     html += '<span style="font-size:20px">📦</span>';
-    html += '<strong style="font-size:16px">更新日志 v' + esc(_versionData.version) + '</strong>';
-    html += '<span style="color:var(--text-muted);font-size:12px">' + (_versionData.date || '') + '</span>';
+    html += '<strong style="font-size:16px">更新日志</strong>';
     html += '<span id="modal-close" style="margin-left:auto;cursor:pointer;font-size:18px;color:var(--text-muted)">✕</span>';
-    html += '</div><ul style="margin:0;padding:0 0 0 18px;color:var(--text-secondary);line-height:2;font-size:13px">';
-    for (var i = 0; i < _versionData.changes.length; i++) {
-        html += '<li>' + esc(_versionData.changes[i]) + '</li>';
+    html += '</div>';
+
+    for (var vi = 0; vi < allVersions.length; vi++) {
+        var v = allVersions[vi];
+        html += '<div style="margin:0 0 14px 0;padding:0 0 14px 0;' + (vi < allVersions.length - 1 ? 'border-bottom:1px solid var(--border-light,#2a3648)' : '') + '">';
+        html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+        html += '<strong style="font-size:14px">v' + esc(v.version) + '</strong>';
+        html += '<span style="color:var(--text-muted);font-size:11px">' + (v.date || '') + '</span>';
+        html += '</div><ul style="margin:0;padding:0 0 0 16px;color:var(--text-secondary);line-height:1.9;font-size:13px">';
+        for (var ci = 0; ci < v.changes.length; ci++) {
+            html += '<li>' + esc(v.changes[ci]) + '</li>';
+        }
+        html += '</ul></div>';
     }
-    html += '</ul><div style="margin-top:12px;text-align:right;font-size:11px;color:var(--text-muted)">点击空白处关闭</div>';
+
+    html += '<div style="margin-top:4px;text-align:right;font-size:11px;color:var(--text-muted)">点击空白处关闭</div>';
     box.innerHTML = html;
-
     box.querySelector('#modal-close').onclick = function() { overlay.remove(); };
-
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 }
