@@ -11,7 +11,7 @@ import asyncio
 import threading
 import queue
 from contextlib import redirect_stdout, redirect_stderr
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,11 @@ import uvicorn
 from cache import get as cache_get, put as cache_put, daily_get, daily_set
 
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
+
+_CST_OFFSET = timezone(timedelta(hours=8))
+def _fetched_at() -> str:
+    """返回当前东八区时间字符串，格式 HH:MM:SS"""
+    return datetime.now(_CST_OFFSET).strftime("%H:%M:%S")
 
 # ── 挂载静态文件 ──
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -276,6 +281,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
                 "multiplier": data['sentiment_multiplier'],
             },
             "date": data['date'],
+            "fetched_at": _fetched_at(),
         }
         # 仅情绪成功才缓存，避免"未知"被反复命中
         if data.get('sentiment_ok'):
@@ -369,7 +375,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
             'sector_code': '',
         })
     items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:15]}
+    result = {"ok": True, "items": items[:15], "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result
 
@@ -464,7 +470,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             'signals': signals,
             'advice': advice,
         })
-    result = {"ok": True, "items": items}
+    result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result
 
@@ -610,7 +616,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:10]}
+    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result
 
@@ -732,7 +738,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:10]}
+    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result
 
@@ -871,7 +877,7 @@ def api_indicators_cards():
             'signals': sigs,
         })
     items.sort(key=lambda x: x.get('seal_ratio') or 0, reverse=True)
-    return {"ok": True, "items": items[:10]}
+    return {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
 
 @app.get("/api/indicators")
 def api_indicators():
@@ -977,6 +983,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         except:
             result[key] = 0
 
+    result["fetched_at"] = _fetched_at()
     daily_set("dashboard", result)
     return result
 
@@ -997,7 +1004,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             if cached:
                 yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
                 await asyncio.sleep(0.03)
-                yield f"data: {json.dumps({'type':'complete','stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
+                yield f"data: {json.dumps({'type':'complete','fetched_at':cached.get('fetched_at',''),'stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
                 return
 
         q = queue.Queue()
@@ -1039,6 +1046,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
                             "multiplier": data['sentiment_multiplier'],
                         },
                         "date": data['date'],
+                        "fetched_at": _fetched_at(),
                     }
                     daily_set("limit_up_cards", cache_data)
             except Exception as e:
@@ -1061,9 +1069,10 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             except queue.Empty:
                 continue
 
+        fet = _fetched_at()
         data = result_holder["data"]
         if data:
-            yield f"data: {json.dumps({'type':'complete','stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level'],'multiplier':data['sentiment_multiplier']},'date':data['date']})}\n\n"
+            yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level'],'multiplier':data['sentiment_multiplier']},'date':data['date']})}\n\n"
         elif result_holder["error"]:
             yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
         else:
@@ -1246,7 +1255,7 @@ def api_community_cards():
             'score_note': _comment_score_note(cs),
         })
     items.sort(key=lambda x: x.get('comment_score') or 0, reverse=True)
-    return {"ok": True, "items": items[:10]}
+    return {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
 
 @app.get("/api/sentiment/cards")
 def api_sentiment_cards(refresh: bool = Query(False, description="强制刷新")):
@@ -1277,7 +1286,8 @@ def api_sentiment_cards(refresh: bool = Query(False, description="强制刷新")
                   "dieting_count": details.get("dieting_count", 0),
                   "avg_premium": details.get("avg_premium", 0),
                   "promotion_rate": details.get("promotion_rate", 0),
-                  "zhaban_rate": details.get("zhaban_rate", 0)}
+                  "zhaban_rate": details.get("zhaban_rate", 0),
+                  "fetched_at": _fetched_at()}
         daily_set("sentiment_cards", result)
         return result
     except Exception as e:

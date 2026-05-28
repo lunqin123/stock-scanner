@@ -247,6 +247,7 @@ async function loadCardView(output, pageKey, apiUrl) {
             if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
             html += '</div>';
         }
+        if (data.fetched_at) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(data.fetched_at)}</div>`;
 
         try {
             if (pageKey === 'sentiment') {
@@ -353,6 +354,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             bar.style.display = 'none';
 
                             // 使用 RAF 批量渲染卡片
+                            const fet = msg.fetched_at || '';
                             const s = msg.sentiment || {};
                             let html = '';
                             if (s.level) {
@@ -361,6 +363,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                                 if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
                                 html += '</div>';
                             }
+                            if (fet) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(fet)}</div>`;
                             html += renderStockCards(msg.stocks, msg);
 
                             // 用 requestAnimationFrame + 微任务分离 DOM 操作和渲染
