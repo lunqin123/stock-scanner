@@ -1369,12 +1369,19 @@ def get_market_status():
 def _schedule_close_scan():
     """盘后 15:05 自动触发一次全量扫描，写入冻结缓存"""
     import threading
+    from cache import daily_get
     now = datetime.now(_MARKET_CST)
     if now.weekday() >= 5:
         return  # 周末跳过
     target = now.replace(hour=15, minute=5, second=0, microsecond=0)
     if now >= target:
-        return  # 已过 15:05，今日不再触发
+        # 已过 15:05：检查是否已有缓存，没有则立即触发
+        has_cache = daily_get("limit_up_cards") is not None
+        if has_cache:
+            return  # 已有缓存，不用补扫
+        print("  [收盘扫描] 15:05 已过且无缓存，60秒后启动补扫", file=sys.stderr)
+        threading.Timer(60, _run_close_scan).start()
+        return
     delay = (target - now).total_seconds()
     threading.Timer(delay, _run_close_scan).start()
     print(f"  [收盘扫描] 已调度，将在 {delay/60:.0f} 分钟后执行", file=sys.stderr)
