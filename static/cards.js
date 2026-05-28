@@ -37,7 +37,6 @@ function renderStockCards(stocks, data) {
         const col = ringColor(s.total_score);
         const msgn = s.net_money >= 0 ? '+' : '';
         const st = s.seal_time || '0000';
-        const watched = isWatched(s.code);
 
         const bars = [
             [s.seal_score, 32],
@@ -64,7 +63,7 @@ function renderStockCards(stocks, data) {
             `<span class="card-rank">#${s.rank}</span>`,
             `<span class="card-name">${esc(s.name)}</span>`,
             `<span class="card-code">${s.code}</span>`,
-            `<span class="watchlist-btn ${watched?'watched':''}" data-code="${s.code}" data-name="${esc(s.name)}" onclick="toggleWatchBtn(this);return false">${watched?'✓':'+'}</span>`,
+            `<span class="copy-btn" onclick="copyCode('${s.code}','${esc(s.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
             scoreRingHTML(s.total_score),
             `</div>`,
             `<div class="card-body"><div class="card-bars">${barsHTML}</div>`,
@@ -265,14 +264,13 @@ function renderMiniStockCards(items, pageKey) {
         const item = items[i];
         const chg = item.change_pct;
         const cv = chg !== undefined ? (chg >= 5 ? RING_COLORS.high : chg >= 3 ? RING_COLORS.mid : RING_COLORS.poor) : '';
-        const watched = isWatched(item.code);
         parts.push(
             `<a href="https://stockpage.10jqka.com.cn/${item.code}/" target="_blank" class="stock-card">`,
             '<div class="card-header">',
             `<span class="card-rank">#${i+1}</span>`,
             `<span class="card-name">${esc(item.name)}</span>`,
             `<span class="card-code">${item.code}</span>`,
-            `<span class="watchlist-btn ${watched?'watched':''}" data-code="${item.code}" data-name="${esc(item.name)}" onclick="toggleWatchBtn(this);return false">${watched?'✓':'+'}</span>`,
+            `<span class="copy-btn" onclick="copyCode('${item.code}','${esc(item.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
             chg !== undefined ? `<span class="card-score" style="color:${cv}">+${chg}%</span>` : '',
             '</div>',
             item.seal_time ? `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">封板时间: ${item.seal_time.slice(0,2)}:${item.seal_time.slice(2)}</div>` : '',
@@ -654,5 +652,27 @@ function renderSimpleCards(items, pageKey) {
     return renderMiniStockCards(items, pageKey);
 }
 
-// ─── 兼容 `escapeHtml` 别名（被 watchlist.js 引用） ───
+// ─── 复制股票代码到剪贴板 ───
+function copyCode(code, name) {
+    const txt = code + ' ' + name;
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(txt).catch(function() {
+            fallbackCopy(txt);
+        });
+    } else {
+        fallbackCopy(txt);
+    }
+}
+function fallbackCopy(txt) {
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+}
+
+// ─── 兼容 `escapeHtml` 别名 ───
 window.escapeHtml = esc;

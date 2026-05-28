@@ -184,51 +184,27 @@ body.has-bg .main {
     font-size: 16px;
 }
 
-/* ── 自选股徽章 ── */
-.watchlist-badge {
-    margin-left: auto;
-    background: var(--accent);
-    color: #fff;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 8px;
-    min-width: 18px;
-    text-align: center;
-    line-height: 1.4;
-}
-
-/* ── 自选按钮（卡片内） ── */
-.watchlist-btn {
+/* ── 复制代码按钮 ── */
+.copy-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
+    width: 26px;
     height: 22px;
-    border-radius: 50%;
+    border-radius: 4px;
     border: 1px solid var(--border);
     background: var(--bg-primary);
     color: var(--text-muted);
-    font-size: 14px;
-    font-weight: 700;
+    font-size: 12px;
     cursor: pointer;
     transition: var(--transition);
     flex-shrink: 0;
     line-height: 1;
+    text-decoration: none;
 }
-.watchlist-btn:hover {
+.copy-btn:hover {
     border-color: var(--accent);
-    color: var(--accent);
     background: rgba(79,140,255,0.1);
-}
-.watchlist-btn.watched {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--accent);
-}
-.watchlist-btn.watched:hover {
-    background: var(--red);
-    border-color: var(--red);
 }
 
 /* ── 背景色预设色块 ── */
@@ -624,12 +600,6 @@ body.has-bg .main {
     gap: 8px;
     flex-wrap: wrap;
     margin-bottom: 16px;
-}
-
-/* 自选股页面隐藏操作按钮 */
-body[data-page="watchlist"] #param-bar,
-body[data-page="watchlist"] #quick-actions {
-    display: none !important;
 }
 
 /* ════════════════════ 状态标签 ════════════════════ */

@@ -39,11 +39,7 @@ window.addEventListener('unhandledrejection', function(e) {
         📈 选股扫描器
         <small>超短线 · 首板策略</small>
     </div>
-    <div class="nav-item" data-page="watchlist">
-        <span class="icon">📋</span> 自选股
-        <span class="watchlist-badge" id="watchlist-count">0</span>
-    </div>
-    <div class="nav-item active" data-page="scan-limit">
+    <div class="nav-item" data-page="scan-limit">
         <span class="icon">🛡️</span> 涨停扫描
     </div>
     <div class="nav-item" data-page="scan-trend">
@@ -111,7 +107,6 @@ window.addEventListener('unhandledrejection', function(e) {
         <div class="card-header-bar" id="param-bar">
             <button class="btn" onclick="runCurrent()">▶ 运行</button>
             <button class="btn btn-orange btn-sm" onclick="refreshCurrent()" title="强制重新拉取数据并更新缓存">🔄 刷新</button>
-            <button class="btn btn-green btn-sm" id="btn-add-all" onclick="addAllToWatchlist()" style="display:none" title="将当前列表全部加入自选">+ 全部自选</button>
         </div>
 
     <!-- 快捷操作（自选页面隐藏） -->
@@ -133,7 +128,6 @@ window.addEventListener('unhandledrejection', function(e) {
     </div> <!-- /module-page -->
 </main>
 
-<script src="/static/watchlist.js?v=20260528"></script>
 <script src="/static/cards.js?v=20260528"></script>
 <script src="/static/dashboard.js?v=20260528"></script>
 <script src="/static/app.js?v=20260528"></script>

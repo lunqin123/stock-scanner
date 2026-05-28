@@ -11,8 +11,6 @@ const _dom = {
     txt: () => $('progress-text'),
     pageTitle: () => $('page-title'),
     modulePage: () => document.querySelector('.module-page'),
-    watchlistCount: () => $('watchlist-count'),
-    addAllBtn: () => $('btn-add-all'),
 };
 const _navItems = () => document.querySelectorAll('.nav-item');
 
@@ -20,7 +18,6 @@ let currentPage = '';
 const _outputCache = {};
 
 const PAGES = {
-    'watchlist':    { title: '📋 自选股' },
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
     'scan-trend':   { title: '📊 趋势扫描',   api: '/api/scan/trend/cards',   textApi: '/api/scan/trend' },
     'scan-sector':  { title: '🧩 板块热度',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
@@ -71,12 +68,9 @@ function switchPage(page) {
             });
         }
 
-        if (page === 'watchlist') {
-        renderWatchlistPage();
-        _outputCache[page] = outputEl.innerHTML;
-    } else if (_outputCache[page]) {
-        outputEl.innerHTML = _outputCache[page];
-    } else if (info.api) {
+        if (_outputCache[page]) {
+            outputEl.innerHTML = _outputCache[page];
+        } else if (info.api) {
         showProgress('正在加载...', 20);
         outputEl.innerHTML = '';
         setTimeout(() => runCurrent(), 80);
@@ -272,7 +266,6 @@ async function loadCardView(output, pageKey, apiUrl) {
     }
     _outputCache[pageKey] = output.innerHTML;
     hideProgress();
-    showAddAllBtn();
 }
 
 // ─── SSE 流式加载（防抖 + RAF 优化） ───
@@ -370,8 +363,6 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             requestAnimationFrame(() => {
                                 output.innerHTML = html;
                                 _outputCache[pageKey] = output.innerHTML;
-                                updateWatchlistBadge();
-                                showAddAllBtn();
                             });
                             return;
 
@@ -395,11 +386,6 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 }
 
 // ─── 工具函数 ───
-function showAddAllBtn() {
-    const el = _dom.addAllBtn();
-    if (el) el.style.display = document.querySelectorAll('#output .watchlist-btn').length ? '' : 'none';
-}
-
 
 
 // ─── 背景管理 ───
@@ -567,7 +553,6 @@ function showVersionToast(data) {
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
     setupBackground();
-    updateWatchlistBadge();
     loadMarketStatus();
     loadDashboard();
     checkVersion();  // 版本更新通知
