@@ -435,50 +435,68 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
 
 # ─── 本金适配评分 ───
 
+def _dynamic_positions(principal: float) -> int:
+    """根据本金动态分配持仓数：小本金集中，大本金分散"""
+    if principal < 10000:   return 2
+    if principal < 50000:   return 3
+    if principal < 200000:  return 4
+    return 5
+
+
 def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
     """
     根据本金计算每只股票的价格适配度和流动性适配度 (0-10 分)。
-    - 价格适配: 本金 / 3 份 能买几手（100 股/手）
-    - 流动性适配: 单份持仓不超过该股日成交额的 3%
+    - 价格适配 (0-5): 考虑动态持仓数 + A股市场最低佣金成本
+    - 流动性适配 (0-5): 单份持仓占比日成交额，大本金更严
     """
-    scores = pd.Series(5.0, index=df.index)  # 基准 5 分
+    scores = pd.Series(5.0, index=df.index)
 
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
     turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
     cap_col = '流通市值' if '流通市值' in df.columns else None
 
-    position_size = principal / 3  # 分 3 份
+    n_positions = _dynamic_positions(principal)
+    position_size = principal / n_positions
+
     for idx in df.index:
         price = float(df.loc[idx, price_col])
         lots = position_size / (price * 100)
+        cost_per_trade = max(5, position_size * 0.00025)  # 最低佣金 5 元，或万2.5
+        cost_ratio = cost_per_trade / position_size * 100  # 佣金占持仓百分比
 
-        # 价格适配 (0-5): 能买几手
+        # 价格适配 (0-5): 能买几手 + 佣金影响
         if lots >= 3:
             price_fit = 5
         elif lots >= 2:
             price_fit = 4
         elif lots >= 1:
             price_fit = 2.5
+            if cost_ratio > 0.3:  # 佣金超过 0.3% 扣分
+                price_fit -= 0.5
         elif lots >= 0.5:
             price_fit = 1
+            if cost_ratio > 0.3:
+                price_fit -= 0.5
         else:
             price_fit = 0
 
-        # 流动性适配 (0-5): 当日成交额 vs 持仓大小
-        liquid_fit = 2.5  # 默认中性
+        # 流动性适配 (0-5): 大本金要求更高流动性
+        liquid_fit = 2.5
         if turnover_col and cap_col:
             cap = float(df.loc[idx, cap_col])
             turnover = float(df.loc[idx, turnover_col])
             daily_volume = cap * (turnover / 100)
             if daily_volume > 0:
                 ratio = position_size / daily_volume
-                if ratio < 0.01:
+                # 大本金阈值更严
+                strictness = 0.03 if principal > 200000 else 0.05
+                if ratio < strictness * 0.2:
                     liquid_fit = 5
-                elif ratio < 0.03:
+                elif ratio < strictness * 0.6:
                     liquid_fit = 4
-                elif ratio < 0.05:
+                elif ratio < strictness * 1.0:
                     liquid_fit = 3
-                elif ratio < 0.10:
+                elif ratio < strictness * 2.0:
                     liquid_fit = 1.5
                 else:
                     liquid_fit = 0.5

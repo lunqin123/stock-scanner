@@ -155,7 +155,10 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     if community_scores is None:
         community_scores = pd.Series(3.5, index=filtered.index)
 
-    money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
+    # 本金缩放资金分：小本金同样净流入更显著
+    p_money_factor = max(0.8, min(1.2, 1.0 + (20000 - principal) / 200000))
+    money_scores = (money_scores + lhb_bonus) * p_money_factor
+    money_scores = money_scores.clip(upper=20.0)
     sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
 
     print("  [扫描] 第7步: 生成评分报告...", file=sys.stderr)
