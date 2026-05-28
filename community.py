@@ -79,14 +79,20 @@ def fetch_news_for_stocks(df, top_n=TOP_STOCKS):
 
 
 def _timeout_call(fn, timeout=15, default=None):
-    """在子线程中执行 fn，超过 timeout 秒则返回 default"""
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(fn)
-        try:
-            return fut.result(timeout=timeout)
-        except Exception:
-            return default
+    """在子线程中执行 fn，超过 timeout 秒则返回 default（不等待线程结束）"""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    import threading
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        return fut.result(timeout=timeout)
+    except TimeoutError:
+        # 不等待线程结束，直接返回默认值
+        ex.shutdown(wait=False)
+        return default
+    except Exception:
+        ex.shutdown(wait=False)
+        return default
 
 
 def fetch_guba_rank():
