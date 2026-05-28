@@ -422,12 +422,32 @@ function applyBg(val) {
 function clearOutput() { const el = _dom.output(); el.innerHTML = '<span class="loading">输出结果</span>'; delete _outputCache[currentPage]; }
 function exportOutput() {
     const txt = _dom.output().textContent;
-    navigator.clipboard.writeText(txt).then(() => {
-        const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
-        const orig = btn.textContent;
-        btn.textContent = '✅ 已复制';
-        setTimeout(() => btn.textContent = orig, 1500);
-    }).catch(() => alert('复制失败'));
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(txt).then(() => {
+            const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
+            const orig = btn.textContent;
+            btn.textContent = '✅ 已复制';
+            setTimeout(() => btn.textContent = orig, 1500);
+        }).catch(() => alert('复制失败'));
+    } else {
+        // HTTP 环境降级方案
+        const ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
+            const orig = btn.textContent;
+            btn.textContent = '✅ 已复制';
+            setTimeout(() => btn.textContent = orig, 1500);
+        } catch (e) {
+            alert('复制失败，请手动选择文本后 Ctrl+C');
+        }
+        document.body.removeChild(ta);
+    }
 }
 async function runAll() {
     const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment'];
