@@ -70,20 +70,6 @@ window.addEventListener('unhandledrejection', function(e) {
     <div class="nav-item" id="version-btn" onclick="showChangelog()" title="查看更新日志">
         <span class="icon">📦</span> <span id="version-label">版本</span>
     </div>
-    <div style="padding:8px 20px 4px;font-size:11px;color:var(--text-muted);letter-spacing:0.5px">🎨 背景主题</div>
-    <div class="bg-presets">
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#0c1220,#1a2744)" onclick="setBgPreset('linear-gradient(135deg,#0c1220 0%,#1a2744 50%,#0d1b2a 100%)')" title="深海蓝"></div>
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#0f0c29,#302b63)" onclick="setBgPreset('linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%)')" title="极光紫"></div>
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#0b1d1a,#1a3a32)" onclick="setBgPreset('linear-gradient(135deg,#0b1d1a 0%,#1a3a32 50%,#0d2018 100%)')" title="墨玉绿"></div>
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#1a0c0c,#3a1a1a)" onclick="setBgPreset('linear-gradient(135deg,#1a0c0c 0%,#3a1a1a 50%,#2a0d0d 100%)')" title="暗夜红"></div>
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#1a140c,#3a2a1a)" onclick="setBgPreset('linear-gradient(135deg,#1a140c 0%,#3a2a1a 50%,#2a1a0d 100%)')" title="暖阳橙"></div>
-        <div class="bg-swatch" style="background:linear-gradient(135deg,#0f1115,#1e2230)" onclick="setBgPreset('linear-gradient(135deg,#0f1115 0%,#1e2230 50%,#12141a 100%)')" title="星空灰"></div>
-        <div class="bg-swatch bg-swatch-upload" onclick="document.getElementById('bg-input').click()" title="自定义图片">📁</div>
-    </div>
-    <div class="nav-item" onclick="clearBackground()" title="恢复默认背景">
-        <span class="icon">🗑️</span> 清除背景
-    </div>
-    <input type="file" id="bg-input" accept="image/*" style="display:none" onchange="setBackground(this)">
 </nav>
 
 <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>

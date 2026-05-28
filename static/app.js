@@ -408,23 +408,6 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 // ─── 工具函数 ───
 
 
-// ─── 背景管理 ───
-function setupBackground() { const s = localStorage.getItem('customBg'); if (s) applyBg(s); }
-function setBgPreset(gradient) { localStorage.setItem('customBg', gradient); applyBg(gradient); }
-function setBackground(input) {
-    const file = input.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => { const r = e.target.result; localStorage.setItem('customBg', r); applyBg(r); };
-    reader.readAsDataURL(file);
-    input.value = '';
-}
-function clearBackground() { localStorage.removeItem('customBg'); document.body.style.background = ''; document.body.classList.remove('has-bg'); }
-function applyBg(val) {
-    if (val.startsWith('linear-gradient')) document.body.style.background = val;
-    else { document.body.style.backgroundImage = `url(${val})`; document.body.style.backgroundSize = 'cover'; document.body.style.backgroundPosition = 'center'; document.body.style.backgroundAttachment = 'fixed'; }
-    document.body.classList.add('has-bg');
-}
 function clearOutput() { const el = _dom.output(); el.innerHTML = '<span class="loading">输出结果</span>'; delete _outputCache[currentPage]; }
 function exportOutput() {
     const txt = _dom.output().textContent;
@@ -608,7 +591,6 @@ function expandOlderVersions() {
 
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
-    setupBackground();
     loadMarketStatus();
     loadDashboard();
     loadVersion();
