@@ -20,10 +20,9 @@ from cache import get as cache_get, put as cache_put, daily_get, daily_set
 
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
-_CST_OFFSET = timezone(timedelta(hours=8))
 def _fetched_at() -> str:
     """返回当前东八区时间字符串，格式 HH:MM:SS"""
-    return datetime.now(_CST_OFFSET).strftime("%H:%M:%S")
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M:%S")
 
 # ── 挂载静态文件 ──
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1280,8 +1279,6 @@ def api_sentiment_cards(refresh: bool = Query(False, description="强制刷新")
               "today_breadth": details.get("today_breadth", 0),
               "all_up": details.get("all_up", 0),
               "all_down": details.get("all_down", 0),
-              "all_up": details.get("all_up", 0),
-              "all_down": details.get("all_down", 0),
                   "zhaban_count": details.get("zhaban_count", 0),
                   "dieting_count": details.get("dieting_count", 0),
                   "avg_premium": details.get("avg_premium", 0),
@@ -1313,15 +1310,11 @@ async def api_sentiment_stream(refresh: bool = Query(False, description="强制�
         score, level, details = detect_market_sentiment(today)
         if details is None:
             details = {}
-        icons = {"高潮":"🔥","活跃":"⚡","正常":"✅","低迷":"⚠️","冰点":"❄️"}
-        icon = icons.get(level, "📊")
-        return {"ok": True, "score": score, "level": level, "icon": icon,
+        return {"ok": True, "score": score, "level": level,
                 "prev_limit_count": details.get("prev_limit_count", 0),
               "today_limit_up": details.get("today_limit_up", 0),
               "today_limit_down": details.get("today_limit_down", 0),
               "today_breadth": details.get("today_breadth", 0),
-              "all_up": details.get("all_up", 0),
-              "all_down": details.get("all_down", 0),
               "all_up": details.get("all_up", 0),
               "all_down": details.get("all_down", 0),
                 "zhaban_count": details.get("zhaban_count", 0),
@@ -1346,8 +1339,6 @@ def _comment_score_note(score):
 # ═══════════════════════════════════════════
 #  市场状态检测
 # ═══════════════════════════════════════════
-
-from datetime import datetime, timedelta, timezone
 
 _MARKET_CST = timezone(timedelta(hours=8))
 

@@ -315,9 +315,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
     try {
         var streamUrl = '/api/scan/limit-up/stream';
         if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) streamUrl += '?refresh=1';
-        var fetchOpts = pageKey === 'sentiment' ? {credentials:'same-origin'} : {};
-        if (pageKey === 'sentiment') streamUrl = '/api/sentiment/stream';
-        const resp = await fetch(streamUrl, fetchOpts || {});
+        const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
