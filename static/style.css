@@ -516,6 +516,30 @@ body.has-bg .main {
     margin-right: auto;
 }
 
+.principal-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-left: auto;
+}
+.principal-input {
+    width: 80px;
+    padding: 4px 6px;
+    border: 1px solid var(--border, #334155);
+    border-radius: 6px;
+    background: var(--bg-primary, #1e293b);
+    color: var(--text-primary, #e2e8f0);
+    font-size: 13px;
+    text-align: right;
+    outline: none;
+    transition: var(--transition);
+}
+.principal-input:focus {
+    border-color: var(--accent, #4f8cff);
+}
+
 /* ════════════════════ 按钮 ════════════════════ */
 .btn {
     background: var(--accent);

@@ -432,6 +432,62 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
 
     return np.clip(scores, 0, 10)
 
+
+# ─── 本金适配评分 ───
+
+def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
+    """
+    根据本金计算每只股票的价格适配度和流动性适配度 (0-10 分)。
+    - 价格适配: 本金 / 3 份 能买几手（100 股/手）
+    - 流动性适配: 单份持仓不超过该股日成交额的 3%
+    """
+    scores = pd.Series(5.0, index=df.index)  # 基准 5 分
+
+    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
+    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+
+    position_size = principal / 3  # 分 3 份
+    for idx in df.index:
+        price = float(df.loc[idx, price_col])
+        lots = position_size / (price * 100)
+
+        # 价格适配 (0-5): 能买几手
+        if lots >= 3:
+            price_fit = 5
+        elif lots >= 2:
+            price_fit = 4
+        elif lots >= 1:
+            price_fit = 2.5
+        elif lots >= 0.5:
+            price_fit = 1
+        else:
+            price_fit = 0
+
+        # 流动性适配 (0-5): 当日成交额 vs 持仓大小
+        liquid_fit = 2.5  # 默认中性
+        if turnover_col and cap_col:
+            cap = float(df.loc[idx, cap_col])
+            turnover = float(df.loc[idx, turnover_col])
+            daily_volume = cap * (turnover / 100)
+            if daily_volume > 0:
+                ratio = position_size / daily_volume
+                if ratio < 0.01:
+                    liquid_fit = 5
+                elif ratio < 0.03:
+                    liquid_fit = 4
+                elif ratio < 0.05:
+                    liquid_fit = 3
+                elif ratio < 0.10:
+                    liquid_fit = 1.5
+                else:
+                    liquid_fit = 0.5
+
+        scores[idx] = price_fit + liquid_fit
+
+    return scores
+
+
 # ─── 第七步: 总评分 + 输出 ───
 
 def format_table_output(df: pd.DataFrame, money_scores: pd.Series,

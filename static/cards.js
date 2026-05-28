@@ -39,12 +39,13 @@ function renderStockCards(stocks, data) {
         const st = s.seal_time || '0000';
 
         const bars = [
-            [s.seal_score, 32],
-            [s.money_score, 20],
-            [s.sector_score, 22],
+            [s.seal_score, 28],
+            [s.money_score, 16],
+            [s.sector_score, 20],
             [s.tech_score, 10],
             [s.history_score, 5],
             [s.community_score, 7],
+            [s.principal_score, 8],
         ];
 
         let barsHTML = '';
@@ -85,7 +86,8 @@ function renderStockCards(stocks, data) {
 
 // ─── 板块标签助记 ───
 function barLabel(max) {
-    return max === 32 ? '涨停强度' : max === 20 ? '资金面' : max === 22 ? '板块热度' : max === 10 ? '量价关系' : max === 5 ? '历史股性' : '舆情评分';
+    var labels = {28:'涨停强度',16:'资金面',20:'板块热度',10:'量价关系',5:'历史股性',7:'舆情评分',8:'本金适配'};
+    return labels[max] || '';
 }
 
 // ─── 标签分析 ───

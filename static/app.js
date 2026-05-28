@@ -84,20 +84,25 @@ function switchPage(page) {
     }
 }
 
+function getPrincipal() {
+    var el = document.getElementById('principal-input');
+    return el ? el.value || '20000' : '20000';
+}
+
 async function runCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
     delete _outputCache[currentPage];
-    await callApi(info.api, currentPage);
+    var url = info.api + '?principal=' + getPrincipal();
+    await callApi(url, currentPage);
 }
 
 async function refreshCurrent() {
-    // 强制刷新：带 ?refresh=1 参数重新拉取并更新缓存
     const info = PAGES[currentPage];
     if (!info) return;
     delete _outputCache[currentPage];
-    var refreshUrl = info.api + '?refresh=1';
-    await callApi(refreshUrl, currentPage);
+    var url = info.api + '?refresh=1&principal=' + getPrincipal();
+    await callApi(url, currentPage);
 }
 
 async function callApi(apiUrl, pageKey) {
@@ -314,7 +319,11 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
     try {
         var streamUrl = '/api/scan/limit-up/stream';
-        if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) streamUrl += '?refresh=1';
+        var params = [];
+        if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
+        var pMatch = apiUrl && apiUrl.match(/principal=(\d+)/);
+        if (pMatch) params.push('principal=' + pMatch[1]);
+        if (params.length) streamUrl += '?' + params.join('&');
         const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();

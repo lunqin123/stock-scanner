@@ -110,6 +110,9 @@ window.addEventListener('unhandledrejection', function(e) {
         <div class="card-header-bar" id="param-bar">
             <button class="btn" onclick="runCurrent()">▶ 运行</button>
             <button class="btn btn-orange btn-sm" onclick="refreshCurrent()" title="强制重新拉取数据并更新缓存">🔄 刷新</button>
+            <span class="principal-group">
+                本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
+            </span>
         </div>
 
     <!-- 快捷操作（自选页面隐藏） -->

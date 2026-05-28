@@ -65,11 +65,12 @@ def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
     return {"ok": True, "output": out, "mode": "table" if table else "detail"}
 
 
-def _scan_limit_up_data(today_str: str):
+def _scan_limit_up_data(today_str: str, principal: float = 20000):
     """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
     from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
                          get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, filter_by_price,
+                         score_tech_form, score_by_principal,
+                         filter_by_price,
                          fetch_fund_flow_data, detect_market_sentiment,
                          analyze_dragon_tiger, score_stock_history, TOP_N)
     import pandas as pd
@@ -108,6 +109,7 @@ def _scan_limit_up_data(today_str: str):
         raw_money = pd.Series(0.0, index=filtered.index)
     sector_scores = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
     tech_scores = score_tech_form(filtered)
+    principal_scores = score_by_principal(filtered, principal)
 
     print("  [扫描] 第6步: 并行获取预测评分...", file=sys.stderr)
     with ThreadPoolExecutor(max_workers=4) as ex:
@@ -161,7 +163,8 @@ def _scan_limit_up_data(today_str: str):
     weights = weight_manager.load_weights()
     base_totals = weight_manager.apply_weights(
         seal_scores, money_scores, sector_scores, tech_scores,
-        history_scores, community_scores, weights)
+        history_scores, community_scores=community_scores,
+        principal_scores=principal_scores, weights=weights)
     total_scores = base_totals * sentiment_multiplier
 
     # 取 TOP_N
@@ -193,6 +196,7 @@ def _scan_limit_up_data(today_str: str):
             'tech_score': round(float(tech_scores.get(idx, 0)), 1),
             'history_score': round(float(history_scores.get(idx, 0)), 1),
             'community_score': round(float(community_scores.get(idx, 0)), 1),
+            'principal_score': round(float(principal_scores.get(idx, 0)), 1),
             'net_money': net,
             'net_money_str': _money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
@@ -210,6 +214,8 @@ def _scan_limit_up_data(today_str: str):
         'tech_scores': tech_scores,
         'history_scores': history_scores,
         'community_scores': community_scores,
+        'principal_scores': principal_scores,
+        'principal': principal,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
         'sentiment_multiplier': sentiment_multiplier,
@@ -255,10 +261,12 @@ def score_community(df):
 
 
 @app.get("/api/scan/limit-up/cards")
-def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新")):
+def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
+                              principal: float = Query(20000, description="本金(元)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
+    cache_key = f"limit_up_cards_{int(principal)}"
     if not refresh:
-        cached = daily_get("limit_up_cards")
+        cached = daily_get(cache_key)
         if cached:
             return cached
 
@@ -266,7 +274,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     try:
-        data = _scan_limit_up_data(today)
+        data = _scan_limit_up_data(today, principal=principal)
         if data is None:
             print("  [涨停卡片] 无数据", file=sys.stderr)
             return {"ok": True, "stocks": [], "sentiment": {}}
@@ -284,7 +292,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
         }
         # 仅情绪成功才缓存，避免"未知"被反复命中
         if data.get('sentiment_ok'):
-            daily_set("limit_up_cards", result)
+            daily_set(cache_key, result)
         return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
@@ -992,14 +1000,16 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 # ═══════════════════════════════════════════
 
 @app.get("/api/scan/limit-up/stream")
-async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新")):
+async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新"),
+                                    principal: float = Query(20000, description="本金(元)")):
     """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
     today = date.today().strftime("%Y%m%d")
+    _cache_key = f"limit_up_cards_{int(principal)}"
 
     async def _generate():
         # 检查每日缓存（refresh 时跳过）
         if not refresh:
-            cached = daily_get("limit_up_cards")
+            cached = daily_get(_cache_key)
             if cached:
                 yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
                 await asyncio.sleep(0.03)
@@ -1033,7 +1043,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             try:
                 sys.stderr = cap
                 sys.stdout = cap
-                data = _scan_limit_up_data(today)
+                data = _scan_limit_up_data(today, principal=principal)
                 result_holder["data"] = data
                 if data and data.get('sentiment_ok'):
                     cache_data = {
@@ -1047,7 +1057,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
                         "date": data['date'],
                         "fetched_at": _fetched_at(),
                     }
-                    daily_set("limit_up_cards", cache_data)
+                    daily_set(_cache_key, cache_data)
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
@@ -1357,38 +1367,39 @@ def get_market_status():
     return "closed"
 
 
+_CLOSE_CACHE_KEY = "limit_up_cards_20000"
+
 def _schedule_close_scan():
-    """盘后 15:05 自动触发一次全量扫描，写入冻结缓存"""
+    """盘后 15:05 自动触发一次全量扫描，写入冻结缓存（默认本金 2 万）"""
     import threading
     from cache import daily_get
     now = datetime.now(_MARKET_CST)
     if now.weekday() >= 5:
-        return  # 周末跳过
+        return
     target = now.replace(hour=15, minute=5, second=0, microsecond=0)
     if now >= target:
-        # 已过 15:05：检查是否已有缓存，没有则立即触发
-        has_cache = daily_get("limit_up_cards") is not None
+        has_cache = daily_get(_CLOSE_CACHE_KEY) is not None
         if has_cache:
-            return  # 已有缓存，不用补扫
+            return
         print("  [收盘扫描] 15:05 已过且无缓存，60秒后启动补扫", file=sys.stderr)
-        threading.Timer(60, _run_close_scan).start()
+        threading.Timer(60, lambda: _run_close_scan(principal=20000)).start()
         return
     delay = (target - now).total_seconds()
-    threading.Timer(delay, _run_close_scan).start()
+    threading.Timer(delay, lambda: _run_close_scan(principal=20000)).start()
     print(f"  [收盘扫描] 已调度，将在 {delay/60:.0f} 分钟后执行", file=sys.stderr)
 
-def _run_close_scan():
+def _run_close_scan(principal=20000):
     """执行收盘扫描，强制写入每日缓存"""
     from cache import daily_set
     from datetime import date
     from scanner import fetch_limit_up_pool
-    print("  [收盘扫描] ============ 开始 =============", file=sys.stderr)
+    print(f"  [收盘扫描] ============ 开始 (本金{principal}元) =============", file=sys.stderr)
     today = date.today().strftime("%Y%m%d")
     try:
-        data = _scan_limit_up_data(today)
+        data = _scan_limit_up_data(today, principal=principal)
         if data is None or not data['stocks']:
             print("  [收盘扫描] 无数据，10分钟后重试", file=sys.stderr)
-            threading.Timer(600, _run_close_scan).start()
+            threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
             return
         # 构造缓存数据
         cache_data = {
@@ -1403,11 +1414,11 @@ def _run_close_scan():
             "fetched_at": _fetched_at(),
         }
         if data.get('sentiment_ok'):
-            daily_set("limit_up_cards", cache_data, force=True)
+            daily_set(_CLOSE_CACHE_KEY, cache_data, force=True)
             print(f"  [收盘扫描] ✅ 完成，{len(data['stocks'])} 只标的已缓存", file=sys.stderr)
         else:
             print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
-            threading.Timer(600, _run_close_scan).start()
+            threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
     except Exception as e:
         print(f"  [收盘扫描] 失败: {e}，10分钟后重试", file=sys.stderr)
         import traceback
