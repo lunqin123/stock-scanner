@@ -189,6 +189,26 @@ body {
     background: rgba(79,140,255,0.1);
 }
 
+/* ════════════════════ 主内容 ════════════════════ */
+.main {
+    flex: 1;
+    padding: 28px 36px;
+    overflow-y: auto;
+    max-height: 100vh;
+}
+
+.main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.main-header h1 {
+    font-size: 22px;
+    font-weight: 600;
+}
+
 /* ════════════════════ 按钮 ════════════════════ */
 .btn {
     background: var(--accent);
