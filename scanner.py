@@ -11,7 +11,7 @@ import sys
 import io
 import os
 import argparse
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 # ─── 编码修复: 强制 stdout/stderr 使用 UTF-8，解决 PowerShell GBK 乱码 ───
 if hasattr(sys.stdout, 'reconfigure'):
@@ -29,9 +29,20 @@ import numpy as np
 import time
 
 
-# ─── 本地缓存（日内数据缓存 2 小时，避免重复拉取慢 API） ───
+# ─── 本地缓存（日内数据缓存，根据市场状态动态调整 TTL） ───
 _CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache")
-_CACHE_TTL = 7200
+_CACHE_TTL = 7200  # 默认 2 小时
+_CST = timezone(timedelta(hours=8))
+
+def _fund_flow_ttl() -> int:
+    """资金流缓存 TTL：盘中 5 分钟，盘后不缓存"""
+    now = datetime.now(_CST)
+    if now.weekday() >= 5:
+        return 0  # 周末不缓存
+    minute = now.hour * 60 + now.minute
+    if (570 <= minute < 690) or (780 <= minute < 900):
+        return 300  # 盘中 9:30-11:30, 13:00-15:00 → 5 分钟
+    return 0  # 盘后不缓存（确保盘后刷新能获取全天数据）
 
 def _cache_put(name, df):
     try:
@@ -42,10 +53,11 @@ def _cache_put(name, df):
     except Exception:
         pass
 
-def _cache_get(name):
+def _cache_get(name, ttl_override: int = None):
     path = os.path.join(_CACHE_DIR, f"{name}.pkl")
+    ttl = ttl_override if ttl_override is not None else _CACHE_TTL
     try:
-        if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl:
             return pd.read_pickle(path)
     except Exception:
         pass
@@ -169,7 +181,7 @@ def score_seal_strength(df: pd.DataFrame) -> pd.Series:
 def fetch_fund_flow_data():
     """获取同花顺全市场资金流数据，返回 (fund_df, error_msg)，带本地缓存"""
     print("  → 获取同花顺资金流数据...", file=sys.stderr)
-    cached = _cache_get("fund_flow")
+    cached = _cache_get("fund_flow", ttl_override=_fund_flow_ttl())
     if cached is not None:
         print("  → 命中本地缓存", file=sys.stderr)
         return cached, None
