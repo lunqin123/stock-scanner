@@ -436,11 +436,9 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
 # ─── 本金适配评分 ───
 
 def _dynamic_positions(principal: float) -> int:
-    """根据本金动态分配持仓数：小本金集中，大本金分散"""
-    if principal < 10000:   return 2
-    if principal < 50000:   return 3
-    if principal < 200000:  return 4
-    return 5
+    """根据本金动态分配持仓数：小于10万梭哈一只，大于等于10万分3份"""
+    if principal < 100000:  return 1
+    return 3
 
 
 def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
