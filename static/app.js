@@ -492,12 +492,62 @@ function closeSidebar() {
     document.getElementById('sidebar-overlay').classList.remove('open');
 }
 
+// ─── 版本更新通知 ───
+async function checkVersion() {
+    try {
+        const resp = await fetch('/api/version');
+        const data = await resp.json();
+        if (!data.version) return;
+        const lastVer = localStorage.getItem('_lastVersion');
+        if (data.version !== lastVer) {
+            localStorage.setItem('_lastVersion', data.version);
+            // 等页面渲染完成再弹窗
+            setTimeout(() => showVersionToast(data), 1500);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function showVersionToast(data) {
+    const toast = document.createElement('div');
+    toast.id = 'version-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:10000;background:var(--bg-card,#1e293b);border:1px solid var(--border-light,#334155);border-radius:12px;padding:16px 20px;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.5);animation:fadeInUp 0.3s ease;font-size:13px;cursor:pointer';
+    toast.onclick = () => { toast.style.animation = 'fadeInUp 0.2s reverse'; setTimeout(() => toast.remove(), 200); };
+
+    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:18px">📦</span>
+        <strong style="font-size:14px">已更新 v${esc(data.version)}</strong>
+        <span style="color:var(--text-muted);font-size:11px">${data.date || ''}</span>
+    </div><ul style="margin:0;padding:0 0 0 16px;color:var(--text-secondary);line-height:1.8">`;
+    for (const c of (data.changes || [])) {
+        html += `<li>${esc(c)}</li>`;
+    }
+    html += '</ul><div style="margin-top:8px;font-size:11px;color:var(--text-muted)">点击关闭</div>';
+    toast.innerHTML = html;
+    document.body.appendChild(toast);
+
+    // 8秒后自动消失
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.style.animation = 'fadeInUp 0.2s reverse';
+            setTimeout(() => toast.remove(), 200);
+        }
+    }, 8000);
+}
+
+// ─── 动画 keyframes ───
+(function injectToastAnim() {
+    const style = document.createElement('style');
+    style.textContent = '@keyframes fadeInUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}';
+    document.head.appendChild(style);
+})();
+
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
     setupBackground();
     updateWatchlistBadge();
     loadMarketStatus();
     loadDashboard();
+    checkVersion();  // 版本更新通知
 
     document.querySelectorAll('.nav-item').forEach(el => {
         el.addEventListener('click', () => { location.hash = el.dataset.page; closeSidebar(); });

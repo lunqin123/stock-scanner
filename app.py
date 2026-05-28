@@ -1356,6 +1356,17 @@ def get_market_status():
     return "closed"
 
 
+@app.get("/api/version")
+def api_version():
+    """返回当前版本号和更新日志"""
+    vpath = os.path.join(_BASE_DIR, "version.json")
+    try:
+        with open(vpath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {"version": "unknown", "changes": []}
+
+
 @app.get("/api/market-status")
 def api_market_status():
     status = get_market_status()
