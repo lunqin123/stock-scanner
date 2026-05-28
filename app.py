@@ -1366,6 +1366,57 @@ def get_market_status():
     return "closed"
 
 
+def _schedule_close_scan():
+    """盘后 15:05 自动触发一次全量扫描，写入冻结缓存"""
+    import threading
+    now = datetime.now(_MARKET_CST)
+    if now.weekday() >= 5:
+        return  # 周末跳过
+    target = now.replace(hour=15, minute=5, second=0, microsecond=0)
+    if now >= target:
+        return  # 已过 15:05，今日不再触发
+    delay = (target - now).total_seconds()
+    threading.Timer(delay, _run_close_scan).start()
+    print(f"  [收盘扫描] 已调度，将在 {delay/60:.0f} 分钟后执行", file=sys.stderr)
+
+def _run_close_scan():
+    """执行收盘扫描，强制写入每日缓存"""
+    from cache import daily_set
+    from datetime import date
+    from scanner import fetch_limit_up_pool
+    print("  [收盘扫描] ============ 开始 =============", file=sys.stderr)
+    today = date.today().strftime("%Y%m%d")
+    try:
+        data = _scan_limit_up_data(today)
+        if data is None or not data['stocks']:
+            print("  [收盘扫描] 无数据，10分钟后重试", file=sys.stderr)
+            threading.Timer(600, _run_close_scan).start()
+            return
+        # 构造缓存数据
+        cache_data = {
+            "ok": True,
+            "stocks": data['stocks'],
+            "sentiment": {
+                "score": data['sentiment_score'],
+                "level": data['sentiment_level'],
+                "multiplier": data['sentiment_multiplier'],
+            },
+            "date": data['date'],
+            "fetched_at": _fetched_at(),
+        }
+        if data.get('sentiment_ok'):
+            daily_set("limit_up_cards", cache_data, force=True)
+            print(f"  [收盘扫描] ✅ 完成，{len(data['stocks'])} 只标的已缓存", file=sys.stderr)
+        else:
+            print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
+            threading.Timer(600, _run_close_scan).start()
+    except Exception as e:
+        print(f"  [收盘扫描] 失败: {e}，10分钟后重试", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        threading.Timer(600, _run_close_scan).start()
+
+
 @app.get("/api/version")
 def api_version():
     """返回当前版本号和更新日志"""
@@ -1454,6 +1505,12 @@ def index():
 # ═══════════════════════════════════════════
 #  启动
 # ═══════════════════════════════════════════
+
+@app.on_event("startup")
+def _on_startup():
+    """应用启动时调度盘后自动扫描"""
+    _schedule_close_scan()
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8080)

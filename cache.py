@@ -87,10 +87,10 @@ def _is_market_frozen() -> bool:
         return True
     return False
 
-def daily_set(key: str, data):
-    # 盘后冻结：已有缓存文件时不覆盖，保留全天数据
+def daily_set(key: str, data, force=False):
+    # 盘后冻结：已有缓存文件时不覆盖，保留全天数据（除非 force=True）
     try:
-        if _is_market_frozen():
+        if not force and _is_market_frozen():
             path = _daily_path(key)
             if os.path.exists(path):
                 return  # 盘后不覆盖已有缓存
