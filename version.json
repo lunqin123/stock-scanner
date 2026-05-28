@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "date": "2026-05-28",
   "changes": [
     "修复刷新按钮失效：前端 refresh=1 参数被丢弃、后端缓存端点无 refresh 参数",
