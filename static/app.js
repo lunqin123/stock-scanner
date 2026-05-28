@@ -88,10 +88,22 @@ function getPrincipal() {
     var el = document.getElementById('principal-input');
     return el ? el.value || '20000' : '20000';
 }
+function savePrincipal() {
+    var el = document.getElementById('principal-input');
+    if (el) localStorage.setItem('_principal', el.value);
+}
+// 加载时恢复上次本金
+document.addEventListener('DOMContentLoaded', function() {
+    var el = document.getElementById('principal-input');
+    var saved = localStorage.getItem('_principal');
+    if (saved && el) el.value = saved;
+    if (el) el.addEventListener('change', savePrincipal);
+});
 
 async function runCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
+    savePrincipal();
     delete _outputCache[currentPage];
     var url = info.api + '?principal=' + getPrincipal();
     await callApi(url, currentPage);
@@ -100,6 +112,7 @@ async function runCurrent() {
 async function refreshCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
+    savePrincipal();
     delete _outputCache[currentPage];
     var url = info.api + '?refresh=1&principal=' + getPrincipal();
     await callApi(url, currentPage);
