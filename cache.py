@@ -40,20 +40,18 @@ def put(name, data):
 _CST = timezone(timedelta(hours=8))
 
 def _trading_date() -> str:
-    """返回当前交易日的日期：凌晨0点到9:30开盘前归为上一个交易日"""
+    """返回当前交易日的日期：凌晨/周末/节假日归为上一个交易日"""
     now = datetime.now(_CST)
-    if now.weekday() >= 5:
-        # 周末：归到上周五
-        days_to_friday = now.weekday() - 4
-        return (now - timedelta(days=days_to_friday)).strftime("%Y-%m-%d")
-    # 工作日的 0:00-9:30 之间，归为上一个交易日
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    if now < market_open:
-        yesterday = now - timedelta(days=1)
-        while yesterday.weekday() >= 5:
-            yesterday -= timedelta(days=1)
-        return yesterday.strftime("%Y-%m-%d")
-    return now.strftime("%Y-%m-%d")
+    d = now
+    if now.hour < 9 or (now.hour == 9 and now.minute < 30):
+        d = now - timedelta(hours=12)
+    for _ in range(10):
+        d_str = d.strftime("%Y-%m-%d")
+        yyyymmdd = d.strftime("%Y%m%d")
+        if d.weekday() < 5 and _is_trading_day(yyyymmdd):
+            return d_str
+        d -= timedelta(days=1)
+    return now.strftime("%Y-%m-%d")  # fallback
 
 def _daily_path(key: str) -> str:
     return os.path.join(_CACHE_DIR, f"daily_{_trading_date()}_{key}_v{_CACHE_VER}.json")
@@ -62,9 +60,9 @@ def daily_get(key: str):
     path = _daily_path(key)
     try:
         if os.path.exists(path):
-            # 检查缓存是否过期：工作日开盘前（<9:30）写入的缓存视为过期
+            # 检查缓存是否过期：交易日开盘前写入的缓存视为过期
             now = datetime.now(_CST)
-            if now.weekday() < 5:
+            if _is_trading_day(now.strftime("%Y%m%d")):
                 mtime = os.path.getmtime(path)
                 mtime_dt = datetime.fromtimestamp(mtime, _CST)
                 if mtime_dt.hour < 9 or (mtime_dt.hour == 9 and mtime_dt.minute < 30):
@@ -76,12 +74,50 @@ def daily_get(key: str):
         pass
     return None
 
+_CALENDAR_CACHE = None
+_CALENDAR_MTIME = 0
+
+def _load_trading_calendar():
+    """加载 A 股交易日历（缓存7天，含节假日）"""
+    global _CALENDAR_CACHE, _CALENDAR_MTIME
+    now = time.time()
+    if _CALENDAR_CACHE is not None and now - _CALENDAR_MTIME < 604800:
+        return _CALENDAR_CACHE  # 7天内不重复拉取
+    path = os.path.join(_CACHE_DIR, "trading_calendar.txt")
+    dates = set()
+    try:
+        if os.path.exists(path) and now - os.path.getmtime(path) < 604800:
+            with open(path, 'r') as f:
+                dates = set(line.strip() for line in f)
+        else:
+            import akshare as ak
+            df = ak.tool_trade_date_hist_sina()
+            if df is not None and not df.empty:
+                col = df.columns[0]
+                for d in df[col]:
+                    dates.add(str(d).replace('-', '')[:8])
+                os.makedirs(_CACHE_DIR, exist_ok=True)
+                with open(path, 'w') as f:
+                    for d in sorted(dates):
+                        f.write(d + '\n')
+    except Exception:
+        pass
+    _CALENDAR_CACHE = dates
+    _CALENDAR_MTIME = now
+    return dates
+
+
+def _is_trading_day(d_str: str) -> bool:
+    """判断 YYYYMMDD 是否为 A 股交易日"""
+    return d_str in _load_trading_calendar()
+
+
 def _is_market_frozen() -> bool:
-    """盘后 15:00 到次日 9:30 之间，以及周末，冻结每日缓存不被覆盖"""
+    """盘后 15:00 起冻结每日缓存，节假日同样冻结"""
     now = datetime.now(_CST)
     wd = now.weekday()
-    if wd >= 5:
-        return True  # 周末冻结
+    if wd >= 5 or not _is_trading_day(now.strftime("%Y%m%d")):
+        return True
     minute = now.hour * 60 + now.minute
     if minute >= 900:  # 15:00 之后
         return True

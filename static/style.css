@@ -3,27 +3,27 @@
    ═══════════════════════════════════════════ */
 
 :root {
-    --bg-primary: #0a0d14;
-    --bg-secondary: #12161f;
-    --bg-card: #161b2b;
-    --bg-hover: #1e2538;
-    --border: #2e3650;
-    --border-light: rgba(255,255,255,0.10);
-    --text-primary: #f0f2f8;
-    --text-secondary: #b0b8d0;
-    --text-muted: #8090b0;
-    --accent: #4f8cff;
-    --accent-hover: #6ba0ff;
+    --bg-primary: #1a0e24;
+    --bg-secondary: #251831;
+    --bg-card: #302235;
+    --bg-hover: #3a2a47;
+    --border: #7a5a4a;
+    --border-light: rgba(140, 101, 83, 0.15);
+    --text-primary: #f0ece4;
+    --text-secondary: #c8b4a4;
+    --text-muted: #8c6553;
+    --accent: #fca731;
+    --accent-hover: #fdb84a;
     --green: #34d399;
     --red: #f87171;
     --yellow: #fbbf24;
     --orange: #fb923c;
     --radius: 10px;
     --radius-sm: 6px;
-    --shadow: 0 4px 20px rgba(0,0,0,0.3);
-    --shadow-lg: 0 8px 40px rgba(0,0,0,0.4);
-    --glass-bg: rgba(22, 27, 43, 0.6);
-    --glass-border: rgba(255,255,255,0.06);
+    --shadow: 0 4px 20px rgba(0,0,0,0.4);
+    --shadow-lg: 0 8px 40px rgba(0,0,0,0.5);
+    --glass-bg: rgba(48, 34, 53, 0.6);
+    --glass-border: rgba(252, 167, 49, 0.08);
     --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -69,8 +69,8 @@ body {
 }
 
 @keyframes glowPulse {
-    0%, 100% { box-shadow: 0 0 6px rgba(79,140,255,0.2); }
-    50% { box-shadow: 0 0 16px rgba(79,140,255,0.4); }
+    0%, 100% { box-shadow: 0 0 6px rgba(252, 167, 49, 0.25); }
+    50% { box-shadow: 0 0 16px rgba(252, 167, 49, 0.4); }
 }
 
 @keyframes barGrow {
@@ -103,7 +103,7 @@ body {
    ════════════════════════════════════════════════════════ */
 .sidebar {
     width: 220px;
-    background: linear-gradient(180deg, #12161f 0%, #0e121c 100%);
+    background: linear-gradient(180deg, #2a1a35 0%, #1a0e24 100%);
     border-right: 1px solid var(--border-light);
     padding: 24px 0;
     flex-shrink: 0;
@@ -154,10 +154,10 @@ body {
 }
 
 .nav-item.active {
-    background: linear-gradient(90deg, rgba(79,140,255,0.08) 0%, transparent 100%);
+    background: linear-gradient(90deg, rgba(252, 167, 49, 0.1) 0%, transparent 100%);
     color: var(--accent);
     border-left-color: var(--accent);
-    box-shadow: inset 0 0 20px rgba(79,140,255,0.05);
+    box-shadow: inset 0 0 20px rgba(252, 167, 49, 0.05);
 }
 
 .nav-item .icon {
@@ -186,7 +186,7 @@ body {
 }
 .copy-btn:hover {
     border-color: var(--accent);
-    background: rgba(79,140,255,0.1);
+    background: rgba(252, 167, 49, 0.12);
 }
 
 /* ════════════════════ 主内容 ════════════════════ */
@@ -288,7 +288,7 @@ body {
     text-decoration: none;
     transition: var(--transition);
 }
-.dash-stat-card .sector-tag:hover { color: var(--accent); background: rgba(79,140,255,0.1); }
+.dash-stat-card .sector-tag:hover { color: var(--accent); background: rgba(252, 167, 49, 0.12); }
 .dash-stat-card .sector-tag em { font-style: normal; color: var(--accent); font-weight: 600; }
 
 .dash-sectors-wrap {
@@ -333,7 +333,7 @@ body {
     transition: var(--transition);
 }
 .principal-input:focus {
-    border-color: var(--accent, #4f8cff);
+    border-color: var(--accent);
 }
 
 /* ════════════════════ 按钮 ════════════════════ */
@@ -354,7 +354,7 @@ body {
 .btn:hover {
     background: var(--accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(79,140,255,0.25);
+    box-shadow: 0 4px 16px rgba(252, 167, 49, 0.25);
 }
 
 .btn:active { transform: translateY(0); }
@@ -474,7 +474,7 @@ body {
 .stock-card:hover {
     border-color: var(--accent);
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(79,140,255,0.1);
+    box-shadow: 0 6px 20px rgba(252, 167, 49, 0.12);
 }
 
 /* ── 卡片头部 ── */
@@ -603,7 +603,7 @@ body {
 /* 评分条渐变色（按得分比例） */
 .bar-fill.low { background: linear-gradient(90deg, #f87171, #fb923c); }
 .bar-fill.mid { background: linear-gradient(90deg, #fbbf24, #34d399); }
-.bar-fill.high { background: linear-gradient(90deg, #34d399, #4f8cff); }
+.bar-fill.high { background: linear-gradient(90deg, #34d399, var(--accent)); }
 
 /* ── 卡片右侧信息区 ── */
 .card-info {
@@ -744,7 +744,7 @@ body {
     font-weight: 500;
     padding: 3px 0;
     margin: 2px 0;
-    background: rgba(79,140,255,0.04);
+    background: rgba(252, 167, 49, 0.06);
     border-radius: 4px;
     padding: 4px 8px;
 }
