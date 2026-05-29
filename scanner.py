@@ -525,9 +525,9 @@ def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
 def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
     """
     过滤次日大概率买不到的股票：
-    - 早盘封板(10:00前) + 连板≥2 → 次日一字板概率高
-    - 封单/流通市值 > 5% → 跳空封死
-    - 炸板次数 ≥ 3 → 主力放弃
+    - 早盘封板(10:00前) + 连板≥3 → 次日一字板概率高
+    - 封单/流通市值 > 8% → 跳空封死
+    - 炸板次数 ≥ 4 → 主力放弃
     """
     mask = pd.Series(True, index=df.index)
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
@@ -540,20 +540,20 @@ def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
         # 早盘连板 → 次日大概率买不到
         seal_t = str(df.loc[idx, seal_time_col])[:4]
         lb = float(df.loc[idx, lb_col]) if pd.notna(df.loc[idx, lb_col]) else 1
-        if seal_t and int(seal_t[:2]) < 10 and lb >= 2:
+        if seal_t and int(seal_t[:2]) < 10 and lb >= 3:
             mask[idx] = False
             continue
 
         # 巨量封单
         seal_f = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
         cap = float(df.loc[idx, cap_col]) if pd.notna(df.loc[idx, cap_col]) else float('inf')
-        if cap > 0 and seal_f / cap > 0.05:
+        if cap > 0 and seal_f / cap > 0.08:
             mask[idx] = False
             continue
 
         # 过度烂板
         zb = int(float(df.loc[idx, zban_col])) if pd.notna(df.loc[idx, zban_col]) else 0
-        if zb >= 3:
+        if zb >= 4:
             mask[idx] = False
 
     excluded = (~mask).sum()
