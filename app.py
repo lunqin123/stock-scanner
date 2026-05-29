@@ -111,7 +111,8 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
     from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
                          get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, get_sector_resonance,
+                         score_tech_form, score_buyability,
+                         get_sector_resonance, can_buy_filter,
                          filter_by_price,
                          fetch_fund_flow_data, detect_market_sentiment,
                          analyze_dragon_tiger, score_stock_history, TOP_N)
@@ -152,6 +153,23 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     sector_mom = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
     sector_res = get_sector_resonance(filtered)
     tech_scores = score_tech_form(filtered)
+    buyability_scores = score_buyability(filtered)
+
+    # 可买到过滤（硬过滤：排除次日大概率买不到的）
+    before_pf = len(filtered)
+    filtered = can_buy_filter(filtered)
+    after_pf = len(filtered)
+    if after_pf < before_pf:
+        seal_scores = seal_scores.loc[filtered.index]
+        money_scores = money_scores.loc[filtered.index]
+        raw_money = raw_money.loc[filtered.index]
+        sector_mom = sector_mom.loc[filtered.index]
+        sector_res = sector_res.loc[filtered.index]
+        tech_scores = tech_scores.loc[filtered.index]
+        buyability_scores = buyability_scores.loc[filtered.index]
+        if filtered.empty:
+            print("  [扫描] 可买到过滤后为空", file=sys.stderr)
+            return None
 
     # 本金过滤（硬过滤，不参与评分）
     before_pf = len(filtered)
@@ -164,6 +182,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         sector_mom = sector_mom.loc[filtered.index]
         sector_res = sector_res.loc[filtered.index]
         tech_scores = tech_scores.loc[filtered.index]
+        buyability_scores = buyability_scores.loc[filtered.index]
         if filtered.empty:
             print("  [扫描] 本金过滤后为空", file=sys.stderr)
             return None
@@ -214,6 +233,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     weights = weight_manager.load_weights()
     base_totals = weight_manager.apply_weights(
         seal_scores, money_scores, sector_res, sector_mom,
+        buyability_scores,
         tech_scores, history_scores, sentiment_series,
         weights=weights)
     total_scores = base_totals  # 情绪已是独立因子，不再做后置乘数
@@ -256,6 +276,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'tech_score': round(float(tech_scores.get(idx, 0)), 1),
             'history_score': round(float(history_scores.get(idx, 0)), 1),
             'sentiment_score': sentiment_score,
+            'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'net_money': net,
             'net_money_str': _money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",

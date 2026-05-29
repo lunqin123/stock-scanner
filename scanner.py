@@ -520,6 +520,99 @@ def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
     return scores
 
 
+# ─── 可买到过滤 ───
+
+def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    过滤次日大概率买不到的股票：
+    - 早盘封板(10:00前) + 连板≥2 → 次日一字板概率高
+    - 封单/流通市值 > 5% → 跳空封死
+    - 炸板次数 ≥ 3 → 主力放弃
+    """
+    mask = pd.Series(True, index=df.index)
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
+    cap_col = '流通市值' if '流通市值' in df.columns else df.columns[13]
+    lb_col = '连板数' if '连板数' in df.columns else df.columns[14]
+    zban_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
+
+    for idx in df.index:
+        # 早盘连板 → 次日大概率买不到
+        seal_t = str(df.loc[idx, seal_time_col])[:4]
+        lb = float(df.loc[idx, lb_col]) if pd.notna(df.loc[idx, lb_col]) else 1
+        if seal_t and int(seal_t[:2]) < 10 and lb >= 2:
+            mask[idx] = False
+            continue
+
+        # 巨量封单
+        seal_f = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
+        cap = float(df.loc[idx, cap_col]) if pd.notna(df.loc[idx, cap_col]) else float('inf')
+        if cap > 0 and seal_f / cap > 0.05:
+            mask[idx] = False
+            continue
+
+        # 过度烂板
+        zb = int(float(df.loc[idx, zban_col])) if pd.notna(df.loc[idx, zban_col]) else 0
+        if zb >= 3:
+            mask[idx] = False
+
+    excluded = (~mask).sum()
+    if excluded > 0:
+        print(f"  [可买过滤] 排除 {excluded} 只（次日大概率买不到）", file=sys.stderr)
+    return df[mask]
+
+
+# ─── 开盘可行性评分 ───
+
+def score_buyability(df: pd.DataFrame) -> pd.Series:
+    """
+    评分次日开盘是否买得到+盘中能否发力 (0-10)。
+    - 封板时间越晚越好（尾盘板次日不封死）
+    - 首板加分（首板次日比连板更可能买到）
+    - 换手率适中（有换手但不过度）
+    - 封单适中（太小主力弱，太大次日封死）
+    """
+    scores = pd.Series(5.0, index=df.index)
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
+    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
+    lb_col = '连板数' if '连板数' in df.columns else df.columns[14]
+
+    for idx in df.index:
+        # 封板时间 (0-4)：越晚越好
+        seal_t = str(df.loc[idx, seal_time_col])[:4]
+        if seal_t:
+            h = int(seal_t[:2])
+            if h >= 14: t_score = 4.0      # 尾盘→次日大概率可买
+            elif h >= 11: t_score = 3.0     # 午盘
+            elif h >= 10: t_score = 2.0     # 上午
+            else: t_score = 1.0              # 早盘→最可能被堵
+        else:
+            t_score = 2.5
+
+        # 连板数 (0-3)：首板加分
+        lb = float(df.loc[idx, lb_col]) if pd.notna(df.loc[idx, lb_col]) else 1
+        if lb == 1:
+            lb_score = 3.0
+        elif lb == 2:
+            lb_score = 1.5
+        else:
+            lb_score = 0.0
+
+        # 换手率 (0-3)：适中最好
+        turnover = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 10
+        if 5 <= turnover <= 15:
+            tn_score = 3.0
+        elif 3 <= turnover <= 25:
+            tn_score = 2.0
+        else:
+            tn_score = 1.0
+
+        scores[idx] = t_score + lb_score + tn_score
+
+    return scores.clip(0, 10)
+
+
 # ─── 第七步: 总评分 + 输出 ───
 
 def format_table_output(df: pd.DataFrame, money_scores: pd.Series,

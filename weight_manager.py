@@ -13,13 +13,14 @@ import numpy as np
 
 # ─── 默认权重（与当前硬编码值一致） ───
 DEFAULT_WEIGHTS = {
-    'seal': 14.0,      # 封板强度（描述今天封板质量）
+    'seal': 8.0,       # 封板强度（降权：早盘板次日买不到）
     'tech': 16.0,      # 量价结构（换手区间，有效次日预测因子）
     'sector_res': 10.0,# 板块共振（今日板块涨停集中度）
     'sentiment': 25.0, # 市场情绪（核心独立因子）
     'sector_mom': 15.0,# 晋级预期（板块持续性）
     'history': 12.0,   # 历史股性（涨停频率有回测证据）
-    'money': 8.0,      # 资金驱动（降权：超短线中预测力有限）
+    'money': 6.0,      # 资金驱动（降权：超短线中预测力有限）
+    'buyability': 8.0, # 开盘可行性（次日买得到+盘中发力潜力）
 }
 TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
 BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech']  # 回测中可调权的因子
@@ -120,11 +121,11 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
-            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0}
+            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0, 'buyability': 10.0}
 _RAW_TOTAL = sum(_RAW_MAX.values())  # 91
 
 
-def apply_weights(seal_scores, money_scores, sector_res, sector_mom,
+def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_scores,
                   tech_scores, history_scores, sentiment_score,
                   weights=None):
     """
@@ -139,7 +140,8 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom,
                 sector_mom * (w['sector_mom'] / _RAW_MAX['sector_mom']) +
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
-                sentiment_score * (w['sentiment'] / _RAW_MAX['sentiment']))
+                sentiment_score * (w['sentiment'] / _RAW_MAX['sentiment']) +
+                buyability_scores * (w['buyability'] / _RAW_MAX['buyability']))
     return weighted / TOTAL_WEIGHT * 100
 
 

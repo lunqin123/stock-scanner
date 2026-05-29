@@ -39,7 +39,7 @@ function renderStockCards(stocks, data) {
         const st = s.seal_time || '0000';
 
         const bars = [
-            [s.seal_score, 25],
+            [s.buyability_score || 5, 10],
             [s.tech_score, 10],
             [s.sector_mom, 12],
             [s.money_score, 20],
@@ -85,7 +85,7 @@ function renderStockCards(stocks, data) {
 
 // ─── 板块标签助记 ───
 function barLabel(max) {
-    var labels = {25:'封板强度',10:'量价结构',12:'晋级预期',20:'资金驱动'};
+    var labels = {10:'买得到',12:'晋级预期',20:'资金驱动'};
     return labels[max] || '';
 }
 
