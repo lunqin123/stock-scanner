@@ -79,12 +79,26 @@ def get_today_str() -> str:
 # ─── 第一步: 获取涨停池（含非交易日检测） ───
 
 def fetch_limit_up_pool() -> pd.DataFrame:
-    """获取当日涨停股池。非交易日返回空 DataFrame。"""
+    """获取当日涨停股池。非交易日或 API 故障返回空 DataFrame。"""
     print("[1/5] 获取涨停股池...", file=sys.stderr)
     today_str = date.today().strftime("%Y%m%d")
     try:
         df = ak.stock_zt_pool_em(date=today_str)
     except Exception:
+        # 降级：尝试用昨日日期
+        print("  ⚠ akshare 涨停池获取失败，尝试降级...", file=sys.stderr)
+        from datetime import timedelta
+        yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+        try:
+            df = ak.stock_zt_pool_em(date=yesterday)
+            if df is not None and not df.empty:
+                print(f"  → 降级成功，使用昨日数据：{len(df)} 只", file=sys.stderr)
+                return df
+        except Exception:
+            pass
+        return pd.DataFrame()
+    if df is None or df.empty:
+        print("  → 无涨停数据（非交易日或市场休市）", file=sys.stderr)
         return pd.DataFrame()
     print(f"  → 共 {len(df)} 只涨停", file=sys.stderr)
     return df

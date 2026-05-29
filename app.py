@@ -1491,6 +1491,41 @@ def api_version():
 
 
 @app.get("/api/market-status")
+@app.get("/api/health")
+def api_health():
+    """系统健康检查：akshare连通性 + 缓存磁盘 + 交易日历"""
+    checks = {}
+    # 1. akshare连通性
+    try:
+        import akshare as ak
+        cal = ak.tool_trade_date_hist_sina()
+        checks["akshare"] = "ok" if cal is not None and not cal.empty else "empty"
+    except Exception as e:
+        checks["akshare"] = f"fail: {e}"
+
+    # 2. 缓存目录可写
+    try:
+        test_path = os.path.join(os.environ.get("TMP", "/tmp"), "claude_stock_cache", ".healthcheck")
+        os.makedirs(os.path.dirname(test_path), exist_ok=True)
+        with open(test_path, 'w') as f: f.write('ok')
+        os.remove(test_path)
+        checks["cache_disk"] = "ok"
+    except Exception as e:
+        checks["cache_disk"] = f"fail: {e}"
+
+    # 3. 交易日历
+    try:
+        from cache import _load_trading_calendar
+        cal = _load_trading_calendar()
+        checks["calendar"] = f"ok ({len(cal)} days)" if len(cal) > 5000 else f"degraded ({len(cal)})"
+    except Exception as e:
+        checks["calendar"] = f"fail: {e}"
+
+    all_ok = all(not v.startswith("fail") for v in checks.values())
+    return {"ok": all_ok, "checks": checks}
+
+
+@app.get("/api/market-status")
 def api_market_status():
     status = get_market_status()
     return {"ok": True, "status": status}
@@ -1575,9 +1610,29 @@ def index():
 #  启动
 # ═══════════════════════════════════════════
 
+def _cleanup_old_cache(days=30):
+    """删除超过 N 天的旧缓存文件"""
+    import glob, time
+    now = time.time()
+    dirs = [os.path.join(os.environ.get("TMP", "/tmp"), d)
+            for d in ("claude_stock_cache", "stock_scanner_cache")]
+    cleaned = 0
+    for d in dirs:
+        if not os.path.exists(d): continue
+        for f in glob.glob(os.path.join(d, "*")):
+            try:
+                if now - os.path.getmtime(f) > days * 86400:
+                    os.remove(f)
+                    cleaned += 1
+            except OSError:
+                pass
+    if cleaned > 0:
+        print(f"  [启动清理] 删除 {cleaned} 个超过{days}天的旧缓存文件", file=sys.stderr)
+
 @app.on_event("startup")
 def _on_startup():
-    """应用启动时调度盘后自动扫描"""
+    """应用启动时：清理旧缓存 + 调度盘后自动扫描"""
+    _cleanup_old_cache()
     _schedule_close_scan()
 
 
