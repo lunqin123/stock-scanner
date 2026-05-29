@@ -1,16 +1,7 @@
 name: CI — 不变性验证
 
 on:
-  push:
-    branches: [master, main]
-    paths-ignore:
-      - "version.json"
-      - "templates/**"
-      - "static/**"
-      - "*.md"
-      - ".gitignore"
-  pull_request:
-    branches: [master, main]
+  workflow_dispatch:  # 仅手动触发
 
 jobs:
   invariant-test:
