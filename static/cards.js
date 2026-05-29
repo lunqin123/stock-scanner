@@ -39,13 +39,10 @@ function renderStockCards(stocks, data) {
         const st = s.seal_time || '0000';
 
         const bars = [
-            [s.seal_score, 28],
-            [s.money_score, 16],
-            [s.sector_score, 20],
+            [s.seal_score, 25],
             [s.tech_score, 10],
-            [s.history_score, 5],
-            [s.community_score, 7],
-            [s.principal_score, 8],
+            [s.sector_mom, 12],
+            [s.money_score, 20],
         ];
 
         let barsHTML = '';
@@ -54,7 +51,9 @@ function renderStockCards(stocks, data) {
             barsHTML += `<div class="bar-row"><span class="bar-label">${barLabel(mx)}</span><div class="bar-track"><div class="bar-fill ${barColor(pct)}" style="width:${pct}%"></div></div><span class="bar-val">${sc}</span></div>`;
         }
 
-        const sentSign = s.base_score > 0 ? (s.total_score > s.base_score ? '+' : '-') : '';
+        const sentScore = s.sentiment_score != null ? s.sentiment_score : 5;
+        const sentCls = sentScore >= 7 ? 'green' : sentScore <= 3 ? 'red' : '';
+        const sentDisplay = sentScore + '/10';
 
         const tags = analyzeTags(s);
 
@@ -70,7 +69,7 @@ function renderStockCards(stocks, data) {
             `<div class="card-body"><div class="card-bars">${barsHTML}</div>`,
             `<div class="card-info">`,
             `<div class="info-row"><span class="label">基础分</span><span class="value">${s.base_score}</span></div>`,
-            `<div class="info-row"><span class="label">情绪加成</span><span class="value ${sentSign === '+' ? 'green' : sentSign === '-' ? 'red' : ''}">${sentSign || '='}</span></div>`,
+            `<div class="info-row"><span class="label">情绪加成</span><span class="value ${sentCls}">${esc(sentDisplay)}</span></div>`,
             `<div class="info-row"><span class="label">净流入</span><span class="value ${s.net_money>=0?'green':'red'}">${msgn}${esc(s.net_money_str)}</span></div>`,
             `<div class="info-row"><span class="label">换手率</span><span class="value">${esc(s.turnover)}%</span></div>`,
             `<div class="info-row"><span class="label">封板时间</span><span class="value">${st.slice(0,2)}:${st.slice(2)}</span></div>`,
@@ -86,7 +85,7 @@ function renderStockCards(stocks, data) {
 
 // ─── 板块标签助记 ───
 function barLabel(max) {
-    var labels = {28:'涨停强度',16:'资金面',20:'板块热度',10:'量价关系',5:'历史股性',7:'舆情评分',8:'本金适配'};
+    var labels = {25:'封板强度',10:'量价结构',12:'晋级预期',20:'资金驱动'};
     return labels[max] || '';
 }
 

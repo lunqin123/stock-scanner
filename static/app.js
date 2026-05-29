@@ -14,8 +14,29 @@ const _dom = {
 };
 const _navItems = () => document.querySelectorAll('.nav-item');
 
+function _savePageCache(key, html, url) {
+    try {
+        localStorage.setItem('_cache_' + key, JSON.stringify({url: url || '', html: html}));
+    } catch(e) {}
+}
+function _loadPageCache(key) {
+    try {
+        var s = localStorage.getItem('_cache_' + key);
+        return s ? JSON.parse(s) : null;
+    } catch(e) { return null; }
+}
+
 let currentPage = '';
-const _outputCache = {};
+const _outputCache = new Proxy({}, {
+    set: function(target, key, value) {
+        target[key] = value;
+        if (typeof key === 'string' && value) {
+            _savePageCache(key, value, _lastUrl[key]);
+        }
+        return true;
+    }
+});
+const _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
@@ -104,8 +125,39 @@ async function runCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
-    delete _outputCache[currentPage];
     var url = info.api + '?principal=' + getPrincipal();
+    if (_lastUrl[currentPage] === url && _outputCache[currentPage]) {
+        return;
+    }
+    _lastUrl[currentPage] = url;
+
+    // 页面刷新后 localStorage 有缓存 → 瞬间展示，不重复请求
+    if (!_outputCache[currentPage]) {
+        // QQ 浏览器等无法依赖 localStorage → 用服务端注入的数据
+        if (currentPage === 'scan-limit' && window._CACHED_RANKING) {
+            var cr = window._CACHED_RANKING;
+            if (cr.stocks && cr.stocks.length) {
+                var rankingHtml = renderStockCards(cr.stocks, cr);
+                var s = cr.sentiment || {};
+                rankingHtml = (s.level ? '<div class="sentiment-banner">📊 市场情绪: <strong>' + esc(s.level) + '</strong></div>' : '') +
+                    (cr.fetched_at ? '<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ' + esc(cr.fetched_at) + '</div>' : '') +
+                    rankingHtml;
+                _outputCache[currentPage] = rankingHtml;
+                _dom.output().innerHTML = rankingHtml;
+                hideProgress();
+                return;
+            }
+        }
+        var cached = _loadPageCache(currentPage);
+        if (cached && cached.url === url) {
+            _outputCache[currentPage] = cached.html;
+            var el = _dom.output();
+            if (el) el.innerHTML = cached.html;
+            hideProgress();
+            return;
+        }
+    }
+
     await callApi(url, currentPage);
 }
 
@@ -113,14 +165,13 @@ async function refreshCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
-    delete _outputCache[currentPage];
     var url = info.api + '?refresh=1&principal=' + getPrincipal();
+    _lastUrl[currentPage] = '';  // 强制重新拉取
     await callApi(url, currentPage);
 }
 
 async function callApi(apiUrl, pageKey) {
     const output = _dom.output();
-    delete _outputCache[pageKey];
 
     const info = PAGES[pageKey] || PAGES['scan-limit'];
 
@@ -256,7 +307,9 @@ async function loadCardView(output, pageKey, apiUrl) {
         if (s.level) {
             html += '<div class="sentiment-banner">';
             html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
-            if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
+            if (s.score != null) {
+                html += ' ｜ 情绪 ' + s.score + '/10';
+            }
             html += '</div>';
         }
         if (data.fetched_at) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(data.fetched_at)}</div>`;
@@ -373,7 +426,9 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             if (s.level) {
                                 html += '<div class="sentiment-banner">';
                                 html += `📊 市场情绪: <strong>${escapeHtml(s.level)}</strong>`;
-                                if (s.multiplier) html += ` ｜ 评分乘数 ×${s.multiplier}`;
+                                if (s.score != null) {
+                                    html += ' ｜ 情绪 ' + s.score + '/10';
+                                }
                                 html += '</div>';
                             }
                             if (fet) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(fet)}</div>`;
@@ -453,6 +508,7 @@ var _marketLabels = {
     'closed': { icon: '🌙', text: '盘后', cls: 'mode-closed' },
     'weekend': { icon: '🎉', text: '休市', cls: 'mode-weekend' },
     'lunch': { icon: '☕', text: '午休', cls: 'mode-lunch' },
+    'holiday': { icon: '🎌', text: '假日', cls: 'mode-weekend' },
 };
 
 async function loadMarketStatus() {

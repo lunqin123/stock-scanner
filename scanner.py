@@ -35,14 +35,15 @@ _CACHE_TTL = 7200  # 默认 2 小时
 _CST = timezone(timedelta(hours=8))
 
 def _fund_flow_ttl() -> int:
-    """资金流缓存 TTL：盘中 5 分钟，盘后不缓存"""
+    """资金流缓存 TTL：盘中 5 分钟，盘后/非交易日不缓存"""
+    from cache import _is_trading_day
     now = datetime.now(_CST)
-    if now.weekday() >= 5:
-        return 0  # 周末不缓存
+    if not _is_trading_day(now.strftime("%Y%m%d")):
+        return 0
     minute = now.hour * 60 + now.minute
     if (570 <= minute < 690) or (780 <= minute < 900):
-        return 300  # 盘中 9:30-11:30, 13:00-15:00 → 5 分钟
-    return 0  # 盘后不缓存（确保盘后刷新能获取全天数据）
+        return 300  # 盘中 5 分钟
+    return 0
 
 def _cache_put(name, df):
     try:
@@ -348,6 +349,21 @@ def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> 
         scores[idx] = min(12, base + consistency_bonus)
     return scores
 
+
+def get_sector_resonance(df: pd.DataFrame) -> pd.Series:
+    """板块今日涨停集中度 (0-8)，只计涨停数量，不含资金一致性"""
+    industry_col = '所属行业' if '所属行业' in df.columns else '行业'
+    if industry_col not in df.columns:
+        return pd.Series(4.0, index=df.index)
+    counts = df[industry_col].value_counts()
+    scores = pd.Series(0.0, index=df.index)
+    for idx in df.index:
+        industry = df.loc[idx, industry_col]
+        cnt = counts.get(industry, 1)
+        scores[idx] = min(4 + cnt * 2, 8)
+    return scores
+
+
 # ─── 第六步: 量价关系评分 (满分 10) ───
 
 def score_tech_form(df: pd.DataFrame) -> pd.Series:
@@ -514,16 +530,13 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
                         sentiment_level: str = "未知",
                         sentiment_detail: dict = None,
                         history_scores: pd.Series = None,
-                        community_scores: pd.Series = None,
-                        sentiment_multiplier: float = 1.0,
                         weights: dict = None) -> str:
     import weight_manager
     w = weights if weights else weight_manager.DEFAULT_WEIGHTS
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
-    s_community = community_scores if community_scores is not None else pd.Series(3.5, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=w)
-    total_scores = base_totals * sentiment_multiplier
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
     df['总分'] = total_scores.round(1)
@@ -533,7 +546,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df['技术形态'] = tech_scores.round(1)
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
-    df['舆情评分'] = s_community.round(1)
+    df['舆情评分'] = pd.Series(0, index=df.index)
     def _pad(s, w, right=False):
         """CJK字符宽度补齐：中文占2格，英文/数字占1格"""
         s = str(s)
@@ -595,17 +608,14 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
                   sentiment_level: str = "未知",
                   sentiment_detail: dict = None,
                   history_scores: pd.Series = None,
-                  community_scores: pd.Series = None,
-                  sentiment_multiplier: float = 1.0,
                   weights: dict = None) -> str:
     """详细文本输出。"""
     import weight_manager
     w = weights if weights else weight_manager.DEFAULT_WEIGHTS
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
-    s_community = community_scores if community_scores is not None else pd.Series(3.5, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=w)
-    total_scores = base_totals * sentiment_multiplier
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
     df['总分'] = total_scores.round(1)
@@ -615,7 +625,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df['技术形态'] = tech_scores.round(1)
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
-    df['舆情评分'] = s_community.round(1)
+    df['舆情评分'] = pd.Series(0, index=df.index)
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     out = df.loc[top_indices]
@@ -644,7 +654,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     avg_premium = (sentiment_detail or {}).get('avg_premium', 0)
     prev_count = (sentiment_detail or {}).get('prev_limit_count', 0)
     lines.append(f"TOP {TOP_N} 超短线标的 ({today_display}) | "
-                 f"情绪:{sentiment_level}(×{sentiment_multiplier:.2f}) | "
+                 f"情绪:{sentiment_level} | "
                  f"昨涨停{prev_count}只 | 溢价{avg_premium:+.2f}% | "
                  f"晋级{promo_rate*100:.0f}% | 炸板{zhaban_rate*100:.0f}%")
     lines.append("=" * 70)
@@ -705,10 +715,10 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         except (ValueError, TypeError):
             fund_str = str(row.get('封板资金', '0'))
 
-        lines.append(f"\n{rank}. {code} {name} | 总分 {score:.1f} (基础{base_score:.1f}×{sentiment_multiplier:.2f})")
+        lines.append(f"\n{rank}. {code} {name} | 总分 {score:.1f}")
         lines.append(f"   封板: {seal_time} | 封单 {fund_str} | 换手 {turnover}%")
-        lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w['sector']:.0f})")
-        lines.append(f"   评分拆解: 涨停{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w['sector']:.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 舆情{community_val:.1f}/{w['community']:.0f}")
+        lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w.get('sector_mom', 15):.0f})")
+        lines.append(f"   评分拆解: 涨停{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 舆情{community_val:.1f}")
         lines.append(f"   {buy_logic}")
         lines.append(f"   {risk}")
 
@@ -736,11 +746,15 @@ def detect_market_sentiment(today_str: str):
     - level: 冰点/低迷/正常/活跃/高潮
     """
     from datetime import datetime, timedelta
+    from cache import _is_trading_day
     today_dt = datetime.strptime(today_str, '%Y%m%d') if len(today_str) == 8 else datetime.today()
-    # 处理周末：周一→上周五，周日→上周五，其余→前一天
-    weekday = today_dt.weekday()
-    days_back = 3 if weekday == 0 else (2 if weekday == 6 else 1)
-    yesterday = (today_dt - timedelta(days=days_back)).strftime('%Y%m%d')
+    # 回退找到最近交易日（处理周末和节假日）
+    yesterday = today_dt
+    for _ in range(8):
+        yesterday = yesterday - timedelta(days=1)
+        if _is_trading_day(yesterday.strftime('%Y%m%d')):
+            break
+    yesterday = yesterday.strftime('%Y%m%d')
 
     try:
         print("  [情绪] 第1步: 获取昨日涨停数据...", file=sys.stderr)
@@ -871,12 +885,6 @@ def detect_market_sentiment(today_str: str):
             score += 1
         elif today_limit_up >= 40:
             score += 0.5
-        if today_limit_down > 30:
-            score -= 1
-        elif today_limit_down > 15:
-            score -= 0.5
-
-        # 今日跌停数修正（额外惩罚）
         if today_limit_down > 30:
             score -= 1
         elif today_limit_down > 15:
@@ -1759,73 +1767,83 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
 
 # ─── 回测系统 ───
 
-def backtest_score_prev(prev_df: pd.DataFrame, today_df: pd.DataFrame):
+def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = None):
     """
-    对昨日涨停股进行回测评分，复用主系统评分函数。
-    评分维度：涨停强度(25) + 板块热度(12) + 量价关系(10) = 满分参考值~47
+    对昨日涨停股进行回测评分，使用与实盘排行完全相同的 7 因子加权模型。
     prev_df: stock_zt_pool_previous_em 返回的昨日涨停池（含今日涨跌幅）
-    today_df: 保留参数兼容，不再使用
+    date_str: 昨日日期 YYYYMMDD，用于计算历史股性等因子
     返回: (df_with_scores, summary_dict)
     """
     df = prev_df.copy()
 
-    # 前置过滤（使用非位置引用的安全方式）
-    name_col = None
-    code_col = None
+    # 前置过滤
+    name_col = None; code_col = None
     for c in df.columns:
-        if '名称' in str(c) or '股票名称' in str(c):
-            name_col = c
-        if '代码' in str(c):
-            code_col = c
+        if '名称' in str(c) or '股票名称' in str(c): name_col = c
+        if '代码' in str(c): code_col = c
     name_col = name_col or df.columns[2]
     code_col = code_col or df.columns[1]
     st_mask = df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
     df = df[~st_mask]
-    code_mask_688 = df.iloc[:, 1].astype(str).str.startswith('68')
-    df = df[~code_mask_688]
-    code_mask_bj = df.iloc[:, 1].astype(str).str.startswith('8')
-    df = df[~code_mask_bj]
-
+    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
     if df.empty:
         return df, {"count": 0}
 
-    # ─── 复用主系统评分函数 ───
-    seal_score_part = score_seal_strength(df)
-    tech_score_part = score_tech_form(df)
-    sector_score_part = get_sector_heat_scores(df)
-
-    scores = seal_score_part + sector_score_part + tech_score_part
-
-    df['回测评分'] = scores.round(1)
-    df['涨停强度_回测'] = seal_score_part.round(1)
-    df['seal_factor'] = seal_score_part.round(1)
-    df['sector_factor'] = sector_score_part.round(1)
-    df['tech_factor'] = tech_score_part.round(1)
-
-    # 今日表现（列名安全查找）
+    # 今日涨跌幅
     change_col = None
     for c in df.columns:
-        if '涨跌幅' in str(c):
-            change_col = c
-            break
+        if '涨跌幅' in str(c): change_col = c; break
     change_col = change_col or df.columns[3]
     df['今日涨幅'] = df[change_col].astype(float).round(2)
-
-    # 是否晋级（今日涨幅 > 9% = 涨停/晋级）
     df['晋级'] = df['今日涨幅'] > 9
+
+    # ─── 7 因子评分（与实盘排行相同的 apply_weights） ───
+    import weight_manager
+    w = weight_manager.load_weights()
+    seal_s = score_seal_strength(df)
+    tech_s = score_tech_form(df)
+    sector_mom = get_sector_heat_scores(df)
+    sector_res = get_sector_resonance(df)
+
+    # 历史股性：日期可用才计算，否则用默认
+    if date_str:
+        try:
+            history_s, _ = score_stock_history(df, date_str)
+        except Exception:
+            history_s = pd.Series(2.5, index=df.index)
+    else:
+        history_s = pd.Series(2.5, index=df.index)
+
+    # 资金流和情绪历史不可用，用中性默认值
+    money_s = pd.Series(10.0, index=df.index)
+    sent_s = pd.Series(5.0, index=df.index)
+
+    scores = weight_manager.apply_weights(
+        seal_s, money_s, sector_res, sector_mom,
+        tech_s, history_s, sent_s, weights=w)
+
+    df['回测评分'] = scores.round(1)
+    df['seal_factor'] = seal_s.round(1)
+    df['tech_factor'] = tech_s.round(1)
+    df['sector_mom_factor'] = sector_mom.round(1)
+    df['sector_res_factor'] = sector_res.round(1)
+    df['history_factor'] = history_s.round(1)
+    df['money_factor'] = money_s.round(1)  # 全默认，相关性为 0
+    df['sentiment_factor'] = sent_s.round(1)  # 全默认，相关性为 0
 
     total = len(df)
     avg_change = df['今日涨幅'].mean()
     promo_rate = df['晋级'].mean()
     pos_rate = (df['今日涨幅'] > 0).mean()
 
-    # 分组统计
-    def get_grade(s):
-        if s >= 35: return 'A'
-        elif s >= 25: return 'B'
-        elif s >= 15: return 'C'
+    # 分组统计（按百分位分 A/B/C/D）
+    pct_ranks = df['回测评分'].rank(pct=True)
+    def get_grade(p):
+        if p >= 0.75: return 'A'
+        elif p >= 0.50: return 'B'
+        elif p >= 0.25: return 'C'
         else: return 'D'
-    df['等级'] = df['回测评分'].apply(get_grade)
+    df['等级'] = pct_ranks.apply(get_grade)
 
     grades_detail = {}
     for g in ['A', 'B', 'C', 'D']:
@@ -1843,20 +1861,28 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df: pd.DataFrame):
     # 前30% vs 后30%
     sorted_scores = df.sort_values('回测评分')
     n = len(sorted_scores)
-    top30_cnt = max(1, int(n * 0.3))
-    bot30_cnt = max(1, int(n * 0.3))
-    top30 = sorted_scores.tail(top30_cnt)
-    bot30 = sorted_scores.head(bot30_cnt)
+    k = max(1, int(n * 0.3))
+    top30 = sorted_scores.tail(k)
+    bot30 = sorted_scores.head(k)
 
-    # 各因子独立相关性（用于权重调整）
+    # 7 因子独立相关性（跳过常数因子避免 numpy warning）
+    _factor_names = ['seal_factor', 'tech_factor', 'sector_mom_factor',
+                     'sector_res_factor', 'history_factor',
+                     'money_factor', 'sentiment_factor']
     factor_correlations = {}
-    for factor in ['seal_factor', 'sector_factor', 'tech_factor']:
-        if factor in df.columns:
-            fc = df[factor].astype(float).corr(df['今日涨幅'].astype(float))
-            factor_correlations[factor.replace('_factor', '')] = round(fc, 4) if not pd.isna(fc) else 0.0
+    for f in _factor_names:
+        if f in df.columns:
+            vals = df[f].astype(float)
+            if vals.std() < 0.01:
+                continue  # 常数因子（如 money/sentiment 默认值），跳过
+            fc = vals.corr(df['今日涨幅'].astype(float))
+            key = f.replace('_factor', '')
+            factor_correlations[key] = round(fc, 4) if not pd.isna(fc) else 0.0
 
-    # 相关性
     corr = df['回测评分'].corr(df['今日涨幅'])
+
+    # ── 模拟交易统计 ──
+    trade_stats = _simulate_trades(df, '回测评分')
 
     summary = {
         'count': total,
@@ -1868,16 +1894,54 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df: pd.DataFrame):
         'grades': grades_detail,
         'top30_avg': round(top30['今日涨幅'].mean(), 2),
         'bot30_avg': round(bot30['今日涨幅'].mean(), 2),
-        'top5': [(str(df.loc[i, code_col]).strip().zfill(6) if code_col in df.columns else '',
-                  str(df.loc[i, name_col]).strip() if name_col in df.columns else '',
+        'trade_stats': trade_stats,
+        'top5': [(str(df.loc[i, code_col]).strip().zfill(6),
+                  str(df.loc[i, name_col]).strip(),
                   float(df.loc[i, '回测评分']),
                   float(df.loc[i, '今日涨幅'])) for i in sorted_scores.tail(5).index],
-        'bot5': [(str(df.loc[i, code_col]).strip().zfill(6) if code_col in df.columns else '',
-                  str(df.loc[i, name_col]).strip() if name_col in df.columns else '',
+        'bot5': [(str(df.loc[i, code_col]).strip().zfill(6),
+                  str(df.loc[i, name_col]).strip(),
                   float(df.loc[i, '回测评分']),
                   float(df.loc[i, '今日涨幅'])) for i in sorted_scores.head(5).index],
     }
     return df, summary
+
+
+def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001):
+    """
+    模拟交易：取评分最高的 N 只，次日开盘买入/收盘卖出。
+    返回: {total_return, win_rate, profit_loss_ratio, max_drawdown, trades}
+    """
+    sorted_df = df.sort_values(score_col, ascending=False).head(top_n)
+    changes = sorted_df['今日涨幅'].values
+    n_trades = len(changes)
+    if n_trades == 0:
+        return {'total_return': 0, 'win_rate': 0, 'profit_loss_ratio': 0,
+                'max_drawdown': 0, 'trade_count': 0, 'best': 0, 'worst': 0}
+
+    # 每笔：涨幅 - 佣金(万2.5双向) - 滑点(0.1%)
+    returns = changes - commission * 2 * 100 - slippage * 100
+    wins = (returns > 0).sum()
+    total_return = round(float(returns.sum() / n_trades), 2)
+
+    win_avg = float(np.mean(returns[returns > 0])) if wins > 0 else 0
+    loss_avg = float(abs(np.mean(returns[returns <= 0]))) if wins < n_trades else 0
+    profit_loss_ratio = round(win_avg / loss_avg, 2) if loss_avg > 0 else 0
+
+    cum = np.cumsum(returns)
+    peak = np.maximum.accumulate(cum)
+    dd = cum - peak
+    max_dd = round(float(dd.min()), 2)
+
+    return {
+        'total_return': total_return,
+        'win_rate': round(wins / n_trades * 100, 1),
+        'profit_loss_ratio': profit_loss_ratio,
+        'max_drawdown': max_dd,
+        'trade_count': n_trades,
+        'best': round(float(returns.max()), 2),
+        'worst': round(float(returns.min()), 2),
+    }
 
 
 def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weights: dict = None):
@@ -1913,7 +1977,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     except (ValueError, IndexError):
         return None
 
-    df_result, summary = backtest_score_prev(prev_df, today_df)
+    df_result, summary = backtest_score_prev(prev_df, date_str=today_str)
     if summary['count'] == 0:
         return None
 
@@ -1941,10 +2005,13 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     lines.append(f"\n{sep}")
     lines.append(f" 评分验证 | 昨 {summary['count']} 只 → 今晋级 {summary['promo_rate']:.0f}% | "
                  f"正收益 {summary['pos_rate']:.0f}% | 均价 {summary['avg_change']:+.1f}%")
-    # 因子相关性
+    # 因子相关性（显示所有可用因子）
     if fc:
-        corr_str = ' | '.join(f"{k}: {fc[k]:+.3f}" for k in ['seal', 'sector', 'tech'] if k in fc)
-        lines.append(f" 因子相关性: {corr_str}")
+        all_factors = ['seal', 'tech', 'sector_mom', 'sector_res', 'history']
+        avail = [k for k in all_factors if k in fc and fc[k] != 0]
+        if avail:
+            corr_str = ' | '.join(f"{k}: {fc[k]:+.3f}" for k in avail)
+            lines.append(f" 因子相关性: {corr_str}")
     lines.append(f"{'等级':<6} {'数量':<6} {'均价':<8} {'晋级率':<8} {'正收益比'}")
     lines.append("─" * 42)
     for g in ['A', 'B', 'C', 'D']:
@@ -1955,6 +2022,12 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     diff = summary['top30_avg'] - summary['bot30_avg']
     lines.append(f" 相关系数: {summary['correlation']} | "
                  f"前30% {summary['top30_avg']:+.1f}% 后30% {summary['bot30_avg']:+.1f}% 差值 {diff:+.1f}%")
+    # 模拟交易统计
+    ts = summary.get('trade_stats', {})
+    if ts and ts.get('trade_count', 0) > 0:
+        lines.append(f" 模拟TOP10: 均收益{ts['total_return']:+.1f}% | 胜率{ts['win_rate']:.0f}% | "
+                     f"盈亏比{ts['profit_loss_ratio']} | 最大回撤{ts['max_drawdown']}% | "
+                     f"最佳{ts['best']:+.1f}% 最差{ts['worst']:+.1f}%")
     # 周调权信息（周五显示调权结果，其他天显示积累进度）
     if weekly_msg:
         for line in weekly_msg.split('\n'):
@@ -2002,7 +2075,7 @@ def run_backtest():
                 lim = ak.stock_zt_pool_em(date=d_str)
             except Exception:
                 lim = None
-            df_res, summary = backtest_score_prev(prev, lim)
+            df_res, summary = backtest_score_prev(prev, date_str=d_str)
             if summary['count'] >= 5:
                 results.append(summary)
         except Exception as e:
@@ -2040,7 +2113,7 @@ def run_backtest():
     lines.append(f"  平均溢价: {avg_change:+.2f}% | 平均晋级率: {avg_promo:.1f}%")
     lines.append(f"  平均正收益比: {avg_pos:.1f}%")
     if factor_avg:
-        corr_str = " | ".join(f"{k}: {factor_avg[k]:+.3f}" for k in ['seal', 'sector', 'tech'] if k in factor_avg)
+        corr_str = " | ".join(f"{k}: {factor_avg[k]:+.3f}" for k in ['seal', 'sector_mom', 'tech'] if k in factor_avg)
         lines.append(f"  因子相关性(均值): {corr_str}")
     lines.append(f"  评分-涨幅相关系数(均值): {avg_corr:.4f}")
     lines.append(f"  前30%平均涨幅: {avg_top30:+.2f}%  |  后30%: {avg_bot30:+.2f}%  |  差: {avg_top30 - avg_bot30:+.2f}%")
@@ -2166,16 +2239,8 @@ def main():
     else:
         history_scores = pd.Series(2.5, index=filtered.index)
 
-    # 舆情评分
-    community_scores = res.get("community")
-    if community_scores is None:
-        community_scores = pd.Series(3.5, index=filtered.index)
-
     # 龙虎榜加分并入资金质量（仅加分不扣分，满分20）
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
-
-    # 情绪乘数：冰点0.80 ~ 高潮1.20
-    sentiment_multiplier = round(0.80 + sentiment_score / 10 * 0.40, 2)
 
     print("[5/5] 生成评分报告...", file=sys.stderr)
     import weight_manager
@@ -2187,8 +2252,6 @@ def main():
                   sentiment_level=sentiment_level,
                   sentiment_detail=sentiment_detail,
                   history_scores=history_scores,
-                  community_scores=community_scores,
-                  sentiment_multiplier=sentiment_multiplier,
                   weights=weights)
     print(output)
 
@@ -2202,9 +2265,8 @@ def main():
 
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
-    s_community = community_scores if community_scores is not None else pd.Series(3.5, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_scores, tech_scores, s_history, community_scores=s_community, weights=weights)
-    total_scores = base_totals * sentiment_multiplier
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=weights)
+    total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
 
@@ -2221,7 +2283,7 @@ def main():
     try:
         import stock_indicators
         enhanced_output, enhanced_data = stock_indicators.run_enhanced(
-            filtered_top, today_raw, TOP_N, sentiment_multiplier,
+            filtered_top, today_raw, TOP_N,
             total_scores=total_scores
         )
         if enhanced_output:

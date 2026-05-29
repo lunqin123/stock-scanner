@@ -13,16 +13,16 @@ import numpy as np
 
 # ─── 默认权重（与当前硬编码值一致） ───
 DEFAULT_WEIGHTS = {
-    'seal': 28.0,     # 涨停强度（回测相关+0.386，最强因子）
-    'money': 16.0,    # 资金面
-    'sector': 20.0,   # 板块热度（A股板块联动效应极强）
-    'tech': 10.0,     # 量价关系
-    'history': 5.0,   # 历史股性
-    'community': 7.0, # 舆情热评
-    'principal': 8.0, # 本金适配（价格 + 流动性）
+    'seal': 14.0,      # 封板强度（描述今天封板质量）
+    'tech': 16.0,      # 量价结构（换手区间，有效次日预测因子）
+    'sector_res': 10.0,# 板块共振（今日板块涨停集中度）
+    'sentiment': 25.0, # 市场情绪（核心独立因子）
+    'sector_mom': 15.0,# 晋级预期（板块持续性）
+    'history': 12.0,   # 历史股性（涨停频率有回测证据）
+    'money': 8.0,      # 资金驱动（降权：超短线中预测力有限）
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 94
-BACKTEST_FACTORS = ['seal', 'sector', 'tech']  # 回测中可用的因子
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
+BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech']  # 回测中可调权的因子
 
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
@@ -60,7 +60,7 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
     对每个回测因子计算其得分与次日涨幅的 Pearson 相关系数，
     高相关因子权重微升，低相关微降。
 
-    backtest_df: backtest_score_prev 返回的 DataFrame，含 seal_factor / sector_factor / tech_factor / 今日涨幅
+    backtest_df: backtest_score_prev 返回的 DataFrame，含 seal_factor / seal_mom_factor / tech_factor / 今日涨幅
     lr: 学习率，默认 0.05
 
     返回调整后的 weights dict 并自动持久化
@@ -114,46 +114,33 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
         new_weights[k] = max(lo, min(hi, w))
 
     # 重归一化: community 因子固定不变，其他因子在剩余空间内分配
-    comm_w = new_weights.get('community', DEFAULT_WEIGHTS.get('community', 7.0))
-    # 从 total 中去掉 community，对剩余因子重归一
-    remaining_total = TOTAL_WEIGHT - comm_w
-    adj_sum = sum(new_weights[k] for k in new_weights if k != 'community')
-    if adj_sum > 0 and abs(adj_sum - remaining_total) > 0.05:
-        scale = remaining_total / adj_sum
-        for k in new_weights:
-            if k != 'community':
-                new_weights[k] = round(new_weights[k] * scale, 1)
-    new_weights['community'] = round(comm_w, 1)
-
     save_weights(new_weights)
     return new_weights
 
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
-_RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector': 12.0, 'tech': 10.0, 'history': 6.0, 'community': 7.0, 'principal': 10.0}
-_RAW_TOTAL = sum(_RAW_MAX.values())  # 90
+_RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
+            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0}
+_RAW_TOTAL = sum(_RAW_MAX.values())  # 91
 
 
-def apply_weights(seal_scores, money_scores, sector_scores, tech_scores, history_scores,
-                  community_scores=None, principal_scores=None, weights=None):
+def apply_weights(seal_scores, money_scores, sector_res, sector_mom,
+                  tech_scores, history_scores, sentiment_score,
+                  weights=None):
     """
     将原始分数用动态权重加权后归一化到百分制(0-100)。
-    weights=None 时使用 DEFAULT_WEIGHTS。
-    community_scores / principal_scores 可选。
+    7因子全参与加权，不设可选参数。
     返回加权总分 Series。
     """
     w = weights if weights else DEFAULT_WEIGHTS
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
-                sector_scores * (w['sector'] / _RAW_MAX['sector']) +
+                sector_res * (w['sector_res'] / _RAW_MAX['sector_res']) +
+                sector_mom * (w['sector_mom'] / _RAW_MAX['sector_mom']) +
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
-                history_scores * (w['history'] / _RAW_MAX['history']))
-    if community_scores is not None:
-        weighted += community_scores * (w['community'] / _RAW_MAX['community'])
-    if principal_scores is not None:
-        weighted += principal_scores * (w['principal'] / _RAW_MAX['principal'])
-    total = weighted / TOTAL_WEIGHT * 100
-    return total
+                history_scores * (w['history'] / _RAW_MAX['history']) +
+                sentiment_score * (w['sentiment'] / _RAW_MAX['sentiment']))
+    return weighted / TOTAL_WEIGHT * 100
 
 
 # ─── 滚动周调权系统 ───
@@ -251,20 +238,10 @@ def weekly_adjust_weights(current_weights: dict, lr: float = 0.05):
         new_weights[k] = max(lo, min(hi, w))
 
     # 重归一化（community 固定）
-    comm_w = new_weights.get('community', DEFAULT_WEIGHTS.get('community', 7.0))
-    remaining_total = TOTAL_WEIGHT - comm_w
-    adj_sum = sum(new_weights[k] for k in new_weights if k != 'community')
-    if adj_sum > 0 and abs(adj_sum - remaining_total) > 0.05:
-        scale = remaining_total / adj_sum
-        for k in new_weights:
-            if k != 'community':
-                new_weights[k] = round(new_weights[k] * scale, 1)
-    new_weights['community'] = round(comm_w, 1)
-
     save_weights(new_weights)
 
     # 摘要
-    corr_str = " | ".join(f"{k}: {mean_corrs[k]:+.3f}" for k in ['seal', 'sector', 'tech'] if k in mean_corrs)
+    corr_str = " | ".join(f"{k}: {mean_corrs[k]:+.3f}" for k in ['seal', 'sector_mom', 'tech'] if k in mean_corrs)
     changes = []
     for k in DEFAULT_WEIGHTS:
         delta = new_weights[k] - current_weights[k]
