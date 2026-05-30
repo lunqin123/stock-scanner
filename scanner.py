@@ -183,38 +183,21 @@ def pre_filter(df: pd.DataFrame) -> pd.DataFrame:
 # ─── 第三步: 涨停强度评分 (30%, 满分 30) ───
 
 def score_seal_strength(df: pd.DataFrame) -> pd.Series:
+    """封板质量评分 (0-25)：封单充沛度 + 炸板次数（不含封板时间/换手率，已归 buyability）"""
     scores = pd.Series(0.0, index=df.index)
 
-    if '首次封板时间' in df.columns:
-        time_scores = df['首次封板时间'].apply(lambda t: seal_time_score(t) * 0.9)
-        scores += time_scores
-
     if '封板资金' in df.columns:
+        # 封单得分 (0-15)：封板资金绝对值
         fund = df['封板资金'].fillna(0).astype(float)
         max_fund = fund.max()
         if max_fund > 0:
-            fund_scores = (fund / max_fund) * 9
-            scores += fund_scores
+            scores += (fund / max_fund) * 15
         else:
-            scores += pd.Series(4.5, index=df.index)
-
-    if '换手率' in df.columns:
-        turnover = df['换手率'].fillna(0).astype(float)
-        def turn_score(t):
-            if t < 0.5:
-                return 0.0
-            if t <= 5:
-                return 0.6
-            if t <= 15:
-                return 1.0
-            if t <= 25:
-                return 0.6
-            return 0.2
-        scores += turnover.apply(turn_score) * 6
+            scores += pd.Series(7.5, index=df.index)
 
     if '炸板次数' in df.columns:
         zban = df['炸板次数'].fillna(0).astype(float)
-        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 6
+        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 10
         scores += zban_scores
 
     return scores.clip(upper=25.0)
@@ -681,7 +664,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
     df['总分'] = total_scores.round(1)
-    df['涨停强度'] = seal_scores.round(1)
+    df['封板质量'] = seal_scores.round(1)
     df['资金面'] = money_scores.round(1)
     df['板块热度'] = sector_scores.round(1)
     df['技术形态'] = tech_scores.round(1)
@@ -718,7 +701,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
         code = str(row.get('代码', row.iloc[1])).strip().zfill(6)
         name = row.get('名称', row.iloc[2])
         total = str(int(round(float(row['总分']))))
-        seal_s = f"{float(row['涨停强度']):.0f}"
+        seal_s = f"{float(row['封板质量']):.0f}"
         money_s = f"{float(row['资金面']):.0f}"
         sector_s = f"{float(row['板块热度']):.0f}"
         tech_s = f"{float(row['技术形态']):.0f}"
@@ -756,7 +739,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
     df['总分'] = total_scores.round(1)
-    df['涨停强度'] = seal_scores.round(1)
+    df['封板质量'] = seal_scores.round(1)
     df['资金面'] = money_scores.round(1)
     df['板块热度'] = sector_scores.round(1)
     df['技术形态'] = tech_scores.round(1)
@@ -792,7 +775,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         row = out.loc[idx]
         score = float(row['总分'])
         base_score = float(row['基础总分'])
-        seal_score_val = float(row['涨停强度'])
+        seal_score_val = float(row['封板质量'])
         money_score_val = float(row['资金面'])
         sector_score_val = float(row['板块热度'])
         tech_score_val = float(row['技术形态'])
@@ -830,7 +813,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         buy_logic = '+'.join(buy_parts) if buy_parts else '标准首板标的'
 
         risk_parts = []
-        if float(row['涨停强度']) < 11:
+        if float(row['封板质量']) < 11:
             risk_parts.append('封板偏弱')
         try:
             if float(turnover) > 20:
@@ -857,7 +840,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         lines.append(f"\n{rank}. {code} {name} | 总分 {score:.1f}")
         lines.append(f"   封板: {seal_time} | 封单 {fund_str} | 换手 {turnover}%")
         lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w.get('sector_mom', 15):.0f})")
-        lines.append(f"   评分拆解: 涨停{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
+        lines.append(f"   评分拆解: 封板{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
         lines.append(f"   {buy_logic}")
         lines.append(f"   {risk}")
 

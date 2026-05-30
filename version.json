@@ -1,14 +1,28 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "date": "2026-05-30",
   "changes": [
-    "buyability 权重从12→18(首板可买性成第二大因子)",
-    "seal 7→6, money 5→3, history 10→8, sector_res 10→9(从低预测力因子匀额度)",
-    "修复 app.py _run_limit_up_scan 未传 buyability_scores/sector_res 导致显示缺失",
-    "评分拆解行新增「可买」和「共振」因子分数显示",
-    "57项不变性测试全部通过"
+    "seal去重：封板时间+换手率已归buyability，seal只保留封单+炸板次数",
+    "显示重命名：涨停→封板，解决seal/buyability「俩买得到」误读",
+    "seal换手率+时间删后与buyability不再重叠"
   ],
   "history": [
+    {
+      "version": "1.8.0",
+      "date": "2026-05-30",
+      "changes": [
+        "代码一致性重构：P1～P4 全部完成",
+        "cache.py 修复 put/get 文件名版本不一致(缓存永久失效bug)",
+        "seal_time_score 3处copy-paste→1个公共函数，魔法数字→命名常量",
+        "提取 score_zhaban/score_dtqiaoban/score_sector 纯评分函数",
+        "app.py card端点统一调用 scanner 评分函数(之前门户独立评分，改权重对前端无效)",
+        "删除 app.py ~200行重复评分代码",
+        "_money_str 3处重复→1个模块函数",
+        "NON_MAIN_BOARD_PREFIXES 板块过滤10+处统一",
+        "前端刷新进度条+_CACHE_VER缓存版本化",
+        "净减少 ~190行代码，57项测试全绿"
+      ]
+    },
     {
       "version": "1.7.0",
       "date": "2026-05-30",
