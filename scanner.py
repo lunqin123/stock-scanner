@@ -389,7 +389,8 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
     """
     scores = pd.Series(0.0, index=df.index)
 
-    # ─── 1. 量价健康度 (0-4) ───
+    # ─── 1. 量价健康度 (0-4)：换手率×连板数交叉矩阵 ───
+    # 交叉判断：捕捉"缩量涨停=动能不足"、"高连板低换手=买不到"等信号
     turnover_col = '换手率' if '换手率' in df.columns else None
     lb_col = '连板数' if '连板数' in df.columns else None
 
@@ -399,27 +400,29 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
             t = turnover[idx]
             lb = float(df.loc[idx, lb_col]) if lb_col and pd.notna(df.loc[idx, lb_col]) else 1
 
+            # ── 交叉矩阵 ──
+            #       缩量(<1%)  极低(1-3%)  温和(3-5%)  活跃(5-15%)  适中(15-25%)  巨量(>25%)
+            # 首板     0.5        1.0         2.0         4.0           2.0         1.0
+            # 二板     0.0        0.0         1.5         3.0           3.5         1.0
+            # 三板+    0.0        0.0         1.0         2.0           2.5         1.0
             if lb == 1:
-                if 5 <= t <= 15:
-                    scores[idx] = 4.0
-                elif 3 <= t < 5 or 15 < t <= 25:
-                    scores[idx] = 2.0
-                else:
-                    scores[idx] = 1.0
+                if 5 <= t <= 15:        scores[idx] = 4.0   # 首板+活跃换手=完美
+                elif 3 <= t < 5:        scores[idx] = 2.0   # 温和放量
+                elif 15 < t <= 25:      scores[idx] = 2.0   # 分歧偏大但仍可接受
+                elif 1 <= t < 3:        scores[idx] = 1.0   # 极低换手=动能不足
+                elif t < 1:             scores[idx] = 0.5   # 缩量涨停=一字板/买不到
+                else:                   scores[idx] = 1.0   # >25% 巨量分歧
             elif lb == 2:
-                if 8 <= t <= 20:
-                    scores[idx] = 4.0
-                elif 5 <= t < 8 or 20 < t <= 30:
-                    scores[idx] = 2.0
-                else:
-                    scores[idx] = 1.0
-            else:
-                if 10 <= t <= 25:
-                    scores[idx] = 4.0
-                elif 5 <= t < 10:
-                    scores[idx] = 2.0
-                else:
-                    scores[idx] = 1.0
+                if 15 < t <= 25:        scores[idx] = 3.5   # 二板+充分换手=最健康
+                elif 8 <= t <= 15:      scores[idx] = 3.0
+                elif 5 <= t < 8:        scores[idx] = 2.0
+                elif 3 <= t < 5:        scores[idx] = 1.5
+                else:                   scores[idx] = 0.0   # 二板缩量=大概率买不到
+            else:  # 三板+
+                if 10 <= t <= 25:       scores[idx] = 2.5
+                elif 5 <= t < 10:       scores[idx] = 1.5
+                elif 3 <= t < 5:        scores[idx] = 1.0
+                else:                   scores[idx] = 0.0
 
     # ─── 2. 封板力度 (0-3)：封板资金 / 估算成交额 ───
     seal_fund_col = '封板资金' if '封板资金' in df.columns else None
@@ -580,11 +583,10 @@ def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
 
 def score_buyability(df: pd.DataFrame) -> pd.Series:
     """
-    评分次日开盘是否买得到+盘中能否发力 (0-10)。
+    评分次日开盘是否买得到+盘中能否发力 (0-10→实际可到12, 归一化 _RAW_MAX=12)。
     - 封板时间越晚越好（尾盘板次日不封死）
-    - 首板加分（首板次日比连板更可能买到）
+    - 首板加分强化（首板次日比连板更可能买到，首板=5分，2板=2分）
     - 换手率适中（有换手但不过度）
-    - 封单适中（太小主力弱，太大次日封死）
     """
     scores = pd.Series(5.0, index=df.index)
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
@@ -600,18 +602,18 @@ def score_buyability(df: pd.DataFrame) -> pd.Series:
             if h >= 14: t_score = 4.0      # 尾盘→次日大概率可买
             elif h >= 11: t_score = 3.0     # 午盘
             elif h >= 10: t_score = 2.0     # 上午
-            else: t_score = 1.0              # 早盘→最可能被堵
+            else: t_score = 0.5              # 早盘→最可能被堵，降到0.5
         else:
             t_score = 2.5
 
-        # 连板数 (0-3)：首板加分
+        # 连板数 (0-5)：首板优先大幅强化
         lb = float(df.loc[idx, lb_col]) if pd.notna(df.loc[idx, lb_col]) else 1
         if lb == 1:
-            lb_score = 3.0
+            lb_score = 5.0    # 首板→大概率能买到
         elif lb == 2:
-            lb_score = 1.5
+            lb_score = 2.0    # 二板→可能还有机会
         else:
-            lb_score = 0.0
+            lb_score = 0.0    # 三板+→大概率被堵，不给分
 
         # 换手率 (0-3)：适中最好
         turnover = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 10
@@ -624,7 +626,7 @@ def score_buyability(df: pd.DataFrame) -> pd.Series:
 
         scores[idx] = t_score + lb_score + tn_score
 
-    return scores.clip(0, 10)
+    return scores.clip(0, 12)
 
 
 # ─── 第七步: 总评分 + 输出 ───

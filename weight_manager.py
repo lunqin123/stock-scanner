@@ -121,8 +121,8 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
-            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0, 'buyability': 10.0}
-_RAW_TOTAL = sum(_RAW_MAX.values())  # 91
+            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0, 'buyability': 12.0}
+_RAW_TOTAL = sum(_RAW_MAX.values())  # 93
 
 
 def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_scores,
@@ -130,19 +130,32 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
                   weights=None):
     """
     将原始分数用动态权重加权后归一化到百分制(0-100)。
-    7因子全参与加权，不设可选参数。
-    返回加权总分 Series。
+    情绪因子改为乘法调节，而非加法：
+      sentiment(5=中性) → 不调节
+      sentiment(10=高潮) → ×1.3
+      sentiment(0=冰点) → ×0.7
+    这样在冰点行情下总分不会被情绪撑高，风控更严格。
     """
     w = weights if weights else DEFAULT_WEIGHTS
+
+    # 不含情绪的基础加权得分
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
                 sector_res * (w['sector_res'] / _RAW_MAX['sector_res']) +
                 sector_mom * (w['sector_mom'] / _RAW_MAX['sector_mom']) +
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
-                sentiment_score * (w['sentiment'] / _RAW_MAX['sentiment']) +
                 buyability_scores * (w['buyability'] / _RAW_MAX['buyability']))
-    return weighted / TOTAL_WEIGHT * 100
+    base_scores = weighted / (TOTAL_WEIGHT - w['sentiment']) * 100
+
+    # 情绪乘法调节 (0.7 ~ 1.3)
+    if isinstance(sentiment_score, pd.Series):
+        s_val = float(sentiment_score.iloc[0])
+    else:
+        s_val = float(sentiment_score)
+    mult = np.clip(1.0 + (s_val - 5.0) * 0.06, 0.7, 1.3)
+
+    return base_scores * mult
 
 
 # ─── 滚动周调权系统 ───
