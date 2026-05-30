@@ -13,14 +13,14 @@ import numpy as np
 
 # ─── 默认权重（与当前硬编码值一致） ───
 DEFAULT_WEIGHTS = {
-    'seal': 7.0,       # 封板强度（降权：早盘板次日买不到）
+    'seal': 6.0,       # 封板强度（已降权：早盘板次日买不到）
     'tech': 16.0,      # 量价结构（换手区间，有效次日预测因子）
-    'sector_res': 10.0,# 板块共振（今日板块涨停集中度）
+    'sector_res': 9.0, # 板块共振（今日板块涨停集中度）
     'sentiment': 25.0, # 市场情绪（核心独立因子）
     'sector_mom': 15.0,# 晋级预期（板块持续性）
-    'history': 10.0,   # 历史股性（涨停频率有回测证据）
-    'money': 5.0,      # 资金驱动（降权：超短线中预测力有限）
-    'buyability': 12.0,# ↑开盘可行性（次日买得到为首位，权重从8→12）
+    'history': 8.0,    # 历史股性（涨停频率有回测证据）
+    'money': 3.0,      # 资金驱动（继续降权：超短线中预测力有限）
+    'buyability': 18.0,# ↑↑ 开盘可行性（次日买得到为首位，权重增至18%）
 }
 TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
 BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech']  # 回测中可调权的因子

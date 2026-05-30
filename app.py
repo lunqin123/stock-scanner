@@ -248,14 +248,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
 
     # 取 TOP_N
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
-
-    def _money_str(val):
-        try:
-            v = float(val)
-            if abs(v) >= 1e8: return f"{v/1e8:.2f}亿"
-            if abs(v) >= 1e4: return f"{v/1e4:.0f}万"
-            return f"{v:.0f}"
-        except: return str(val)
+    from scanner import money_str
 
     stocks = []
     for rank, idx in enumerate(top_indices, 1):
@@ -278,7 +271,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'sentiment_score': sentiment_score,
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'net_money': net,
-            'net_money_str': _money_str(net),
+            'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
             'seal_time': str(row.get('首次封板时间', ''))[:4],
             'url': f"https://m.10jqka.com.cn/stock/{code}/",
@@ -294,6 +287,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         'sector_res': sector_res,
         'tech_scores': tech_scores,
         'history_scores': history_scores,
+        'buyability_scores': buyability_scores,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
         'sentiment_detail': sentiment_detail,
@@ -321,6 +315,8 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
         sentiment_level=data['sentiment_level'],
         sentiment_detail=data['sentiment_detail'],
         history_scores=data['history_scores'],
+        buyability_scores=data['buyability_scores'],
+        sector_res_scores=data['sector_res'],
     ))
 
 
@@ -346,7 +342,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
         result = _make_cache_entry(data['stocks'], data['sentiment_score'],
                                     data['sentiment_level'], data['date'])
         if data.get('sentiment_ok'):
-            daily_set(cache_key, result)
+            daily_set(cache_key, result, force=refresh)
         return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
@@ -378,65 +374,41 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
         print(f"  [板块卡片] 错误: {e}", file=sys.stderr)
         return JSONResponse({"ok": False, "error": str(e), "items": []})
 
-    industry_col = None
+    # 统一板块评分
+    from scanner import score_sector_data
+    sector_stats = score_sector_data(limit_df, zhaban_df, dieting_df, top_n=15)
+
+    # 行业列名（用于收集成分股）
+    ind_col = None
     for c in limit_df.columns:
-        if '行业' in str(c):
-            industry_col = c
-            break
-    if industry_col is None:
-        return {"ok": True, "items": []}
+        if '行业' in str(c): ind_col = c; break
 
-    zb_industry_col = None
-    if not zhaban_df.empty:
-        for c in zhaban_df.columns:
-            if '行业' in str(c):
-                zb_industry_col = c
-                break
-    dt_industry_col = None
-    if not dieting_df.empty:
-        for c in dieting_df.columns:
-            if '行业' in str(c):
-                dt_industry_col = c
-                break
-
-    limit_counts = limit_df[industry_col].value_counts()
-    zb_counts = zhaban_df[zb_industry_col].value_counts() if not zhaban_df.empty and zb_industry_col else pd.Series(dtype=int)
-    dt_counts = dieting_df[dt_industry_col].value_counts() if not dieting_df.empty and dt_industry_col else pd.Series(dtype=int)
-
-    all_industries = set(limit_counts.index)
     items = []
-    for ind in all_industries:
-        lc = int(limit_counts.get(ind, 0))
-        zc = int(zb_counts.get(ind, 0)) if ind in zb_counts.index else 0
-        dc = int(dt_counts.get(ind, 0)) if ind in dt_counts.index else 0
-        score = min(12, 4 + lc * 2)
-        efficiency = round(lc / (lc + zc) * 100, 1) if (lc + zc) > 0 else 0
+    for s in sector_stats:
+        lc = s['limit_cnt']; zc = s['zhaban_cnt']; dc = s['dieting_cnt']
+        score = min(12, 4 + lc * 2)  # 保持和旧版一致的简分
 
-        # 收集该板块的涨停成分股
-        sector_stocks = limit_df[limit_df[industry_col] == ind]
+        # 收集成分股
         stock_list = []
-        for _, r in sector_stocks.iterrows():
-            stock_list.append({
-                'code': str(r.iloc[1]).strip().zfill(6),
-                'name': str(r.iloc[2]),
-                'turnover': float(r.iloc[8]) if str(r.iloc[8]) != '--' else 0,
-                'seal_time': str(int(float(r.iloc[10]))) if pd.notna(r.iloc[10]) and r.iloc[10] != '--' else '0000',
-                'seal_fund': float(r.iloc[9]) if str(r.iloc[9]) != '--' else 0,
-            })
+        if ind_col:
+            sector_stocks = limit_df[limit_df[ind_col] == s['industry']]
+            for _, r in sector_stocks.head(6).iterrows():
+                stock_list.append({
+                    'code': str(r.iloc[1]).strip().zfill(6),
+                    'name': str(r.iloc[2]),
+                    'turnover': float(r.iloc[8]) if str(r.iloc[8]) != '--' else 0,
+                    'seal_time': str(int(float(r.iloc[10]))) if pd.notna(r.iloc[10]) and r.iloc[10] != '--' else '0000',
+                    'seal_fund': float(r.iloc[9]) if str(r.iloc[9]) != '--' else 0,
+                })
 
         items.append({
-            'name': str(ind),
-            'url': f"https://www.10jqka.com.cn/#/search/{str(ind)}",
-            'limit_count': lc,
-            'zhaban_count': zc,
-            'dieting_count': dc,
-            'score': score,
-            'efficiency': efficiency,
-            'stocks': stock_list[:6],
-            'sector_code': '',
+            'name': s['industry'],
+            'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}",
+            'limit_count': lc, 'zhaban_count': zc, 'dieting_count': dc,
+            'score': score, 'efficiency': s['seal_rate'],
+            'stocks': stock_list, 'sector_code': '',
         })
-    items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:15], "fetched_at": _fetched_at()}
+    result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result
 
@@ -481,6 +453,9 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     industry_col = prev.columns[15] if len(prev.columns) > 15 else None
 
     prev['涨幅'] = prev[chg_col].astype(float)
+    # 过滤 ST/科创板/北交所/创业板
+    from scanner import filter_non_main_board
+    prev = filter_non_main_board(prev)
     trend = prev[(prev['涨幅'] >= 3) & (prev['涨幅'] < 9)].copy()
     if trend.empty:
         return {"ok": True, "items": []}
@@ -543,7 +518,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     import pandas as pd
     from datetime import date
     import numpy as np
-    from scanner import fetch_fund_flow_data, get_money_flow_scores
+    from scanner import fetch_fund_flow_data, get_money_flow_scores, seal_time_score
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"zhaban_cards_{today}"
@@ -563,11 +538,8 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         return {"ok": True, "items": []}
 
     df = zb.copy()
-    # 过滤 ST/688/8xx
-    name_col = df.columns[2]
-    mask = ~df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
-    df = df[mask]
-    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
+    from scanner import filter_non_main_board
+    df = filter_non_main_board(df)
 
     # 过滤市值/股价
     if '流通市值' in df.columns:
@@ -578,69 +550,30 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     if df.empty:
         return {"ok": True, "items": []}
 
-    # 评分
-    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
-    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
-    zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
-    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
-    industry_col = '所属行业' if '所属行业' in df.columns else df.columns[15]
+    # 统一评分（调用 scanner 评分函数）
+    from scanner import score_zhaban_data
+    scored = score_zhaban_data(df, today)
 
-    def _time_score(t):
-        t = str(t).strip()
-        try:
-            if len(t) < 4: return 5
-            h, m = int(t[:2]), int(t[2:4])
-            minutes = h * 60 + m
-            raw = 1.0 - (minutes - 570) / 300.0
-            return max(0, min(10, raw * 10))
-        except: return 5
-
-    # 资金面
-    fund_df, _ = fetch_fund_flow_data()
-    money_scores = pd.Series(0.0, index=df.index)
-    raw_money = pd.Series(0.0, index=df.index)
-    if fund_df is not None:
-        money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df)
+    # 构建卡片输出
+    st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
+    sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
+    zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
+    to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
+    ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
 
     items = []
-    for idx in df.index:
-        row = df.loc[idx]
+    for _, row in scored.iterrows():
         code = str(row.iloc[1]).strip().zfill(6)
         name = str(row.iloc[2])
-
-        seal_time = str(row.get(seal_time_col, ''))[:4]
-        seal_fund = float(row.get(seal_fund_col, 0)) if pd.notna(row.get(seal_fund_col, None)) else 0
-        zb_times = int(float(row.get(zhaban_count_col, 0))) if pd.notna(row.get(zhaban_count_col, None)) else 0
-        turnover = float(row.get(turnover_col, 0)) if pd.notna(row.get(turnover_col, None)) else 0
-        industry = str(row.get(industry_col, ''))
+        seal_time = str(row.get(st_col, ''))[:4]
+        seal_fund = float(row.get(sf_col, 0) or 0)
+        zb_times = int(float(row.get(zb_col, 0)) or 0)
+        turnover = float(row.get(to_col, 0) or 0)
+        industry = str(row.get(ind_col, ''))
         price = float(row.iloc[4])
+        total_score = float(row.get('总分', 0))
+        net = float(row.get('净流入', 0))
 
-        # 封板质量 (0-25)
-        seal_quality = _time_score(seal_time)
-        fund_score = min(10, seal_fund / 1e8 * 2)
-        zb_penalty = max(0, 5 - zb_times * 2)
-        seal_total = min(25, seal_quality + fund_score + zb_penalty)
-
-        # 资金承接 (0-20)
-        money_val = float(raw_money.get(idx, 0))
-        money_scaled = min(20, max(0, float(money_scores.get(idx, 0))))
-        total_score = seal_total + money_scaled
-
-        # 换手评分 (0-10)
-        if turnover > 20: turn_score = 8
-        elif turnover > 10: turn_score = 10
-        elif turnover > 5: turn_score = 7
-        elif turnover > 2: turn_score = 4
-        else: turn_score = 2
-        total_score += turn_score
-
-        # 板块热度 (0-12)
-        sector_score = 6
-        total_score += sector_score
-
-        total_score = min(100, total_score)
-
-        # 信号标签
         signals = []
         if seal_time:
             h = int(seal_time[:2])
@@ -648,32 +581,22 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
             elif h < 11: signals.append("上午封板")
             else: signals.append("午后封板")
         signals.append(f"炸板{zb_times}次")
-        if money_val > 1e8: signals.append("资金承接强")
-        elif money_val > 1e7: signals.append("有资金承接")
+        if net > 1e8: signals.append("资金承接强")
+        elif net > 1e7: signals.append("有资金承接")
         else: signals.append("资金流出")
         if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("换手适中")
 
-        # 策略
         if total_score >= 70: advice = "反包潜力高，竞价高开放量可参与"
         elif total_score >= 50: advice = "竞价观察，高开放量可博弈反包"
         elif total_score >= 35: advice = "仅观望，需竞价放量确认"
         else: advice = "不建议参与，资金面偏弱"
 
         items.append({
-            'code': code,
-            'name': name,
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
-            'score': int(total_score),
-            'price': price,
-            'seal_time': seal_time,
-            'seal_fund': seal_fund,
-            'zhaban_times': zb_times,
-            'turnover': round(turnover, 1),
-            'industry': industry,
-            'net_money': round(money_val, 0),
-            'signals': signals,
-            'advice': advice,
+            'code': code, 'name': name, 'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'score': int(total_score), 'price': price, 'seal_time': seal_time,
+            'seal_fund': seal_fund, 'zhaban_times': zb_times, 'turnover': round(turnover, 1),
+            'industry': industry, 'net_money': round(net, 0), 'signals': signals, 'advice': advice,
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)
@@ -714,88 +637,50 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
     deal_col = 12 if len(dt.columns) > 12 else None
     cont_col = 13 if len(dt.columns) > 13 else None
 
-    def safe_float(v, default=0):
-        try: return float(v) if pd.notna(v) and v != '--' else default
-        except: return default
+    from scanner import NON_MAIN_BOARD_PREFIXES
+    # 前置过滤
+    df = dt.copy()
+    name_col_df = df.columns[2]
+    df = df[~df[name_col_df].astype(str).str.startswith(('ST', '*ST'), na=False)]
+    df = df[~df.iloc[:, 1].astype(str).str.startswith(NON_MAIN_BOARD_PREFIXES)]
+    if len(df.columns) > 6:
+        df = df[df.iloc[:, 6].astype(float).fillna(0) <= 200 * 1e8]
+    if df.empty: return {"ok": True, "items": []}
+
+    # 统一评分（调用 scanner 评分函数）
+    from scanner import score_dtqiaoban_data
+    scored = score_dtqiaoban_data(df)
 
     items = []
-    for _, row in dt.iterrows():
+    for _, row in scored.iterrows():
         code = str(row.iloc[code_col]).strip().zfill(6)
         name = str(row.iloc[name_col])
+        total = float(row.get('翘板评分', 0))
+        turn_val = float(row.iloc[turnover_col]) if turnover_col and pd.notna(row.iloc[turnover_col]) else 0
+        seal_val = float(row.iloc[seal_fund_col]) if seal_fund_col and pd.notna(row.iloc[seal_fund_col]) else 0
+        cont_val = int(float(row.iloc[cont_col])) if cont_col and pd.notna(row.iloc[cont_col]) else 0
+        st = str(row.iloc[seal_time_col]) if seal_time_col and pd.notna(row.iloc[seal_time_col]) else ''
 
-        # 过滤 ST/688/8xx
-        if name.startswith(('ST', '*ST')) or code.startswith(('68', '8')): continue
-        if safe_float(row.iloc[6] if len(row) > 6 else 0) > 200 * 1e8: continue
+        # 信号描述
+        sigs = []
+        if total >= 60: sigs.append("高信号")
+        elif total >= 35: sigs.append("中等信号")
+        else: sigs.append("弱信号")
+        if turn_val > 10: sigs.append("高换手承接")
+        elif turn_val > 5: sigs.append("有换手")
+        if cont_val >= 3: sigs.append(f"N{cont_val}板超跌")
 
-        deal_val = safe_float(row.iloc[deal_col]) if deal_col else 0
-        seal_val = safe_float(row.iloc[seal_fund_col]) if seal_fund_col else 0
-        cont_val = int(safe_float(row.iloc[cont_col])) if cont_col else 0
-        turn_val = safe_float(row.iloc[turnover_col]) if turnover_col else 0
-
-        # 评分
-        total = 0
-        signals = []
-
-        # 放量信号 (0-25)
-        if deal_val > 5000e4: total += 25; signals.append("巨量翘板")
-        elif deal_val > 1000e4: total += 20; signals.append("放量翘板")
-        elif deal_val > 100e4: total += 12; signals.append("微量翘板")
-        else: total += 5; signals.append("无量跌停")
-
-        # 封单变化 (0-25)
-        if seal_val < 100e4: total += 25; signals.append("封单极小")
-        elif seal_val < 1000e4: total += 20; signals.append("封单偏小")
-        elif seal_val < 5000e4: total += 10; signals.append("封单适中")
-        else: total += 3; signals.append("封单巨大")
-
-        # 连续跌停 (0-25)
-        if cont_val >= 3: total += 25; signals.append(f"N{cont_val}板超跌")
-        elif cont_val == 2: total += 18; signals.append(f"连跌{cont_val}板")
-        elif cont_val == 1: total += 10; signals.append("首板跌停")
-        else: total += 5
-
-        # 换手 (0-15)
-        if turn_val > 10: total += 15; signals.append("高换手承接")
-        elif turn_val > 5: total += 10; signals.append("有换手")
-        elif turn_val > 1: total += 5; signals.append("少量换手")
-        else: total += 2
-
-        # 跌停时间 (0-10)
-        st = ''
-        if seal_time_col:
-            raw_t = row.iloc[seal_time_col]
-            if pd.notna(raw_t):
-                st = str(raw_t).strip()
-                try:
-                    h, m = int(st[:2]), int(st[2:4])
-                    mins = h * 60 + m
-                    if mins >= 840: total += 10; signals.append("尾盘跌停")
-                    elif mins >= 600: total += 7; signals.append("午后跌停")
-                    elif mins >= 330: total += 3; signals.append("早盘跌停")
-                    else: total += 1; signals.append("开盘跌停")
-                except: total += 5
-
-        total = min(100, total)
-
-        # 策略建议
         if total >= 70: advice = "竞价关注，放量高开可博弈反抽，目标+3%~+5%"
         elif total >= 50: advice = "竞价观察，需放量确认，否则观望"
         elif total >= 35: advice = "仅观望，需竞价放量确认方向"
         else: advice = "无量封死，不建议参与"
 
         items.append({
-            'code': code,
-            'name': name,
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
-            'score': total,
-            'price': safe_float(row.iloc[price_col]),
-            'change': safe_float(row.iloc[change_col]),
-            'turnover': round(turn_val, 1),
-            'seal_fund': seal_val,
-            'consecutive': cont_val,
-            'seal_time': st,
-            'signals': signals,
-            'advice': advice,
+            'code': code, 'name': name, 'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'score': int(total), 'price': float(row.iloc[price_col]),
+            'change': float(row.iloc[change_col]), 'turnover': round(turn_val, 1),
+            'seal_fund': seal_val, 'consecutive': cont_val, 'seal_time': st,
+            'signals': sigs, 'advice': advice,
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)
@@ -1044,7 +929,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             result[key] = 0
 
     result["fetched_at"] = _fetched_at()
-    daily_set("dashboard_latest", result)
+    daily_set("dashboard_latest", result, force=refresh)
     return result
 
 
@@ -1101,7 +986,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
                 if data and data.get('sentiment_ok'):
                     cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],
                                                     data['sentiment_level'], data['date'])
-                    daily_set(_cache_key, cache_data)
+                    daily_set(_cache_key, cache_data, force=refresh)
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
@@ -1216,7 +1101,7 @@ def api_indicators_stream(refresh: bool = Query(False, description="强制刷新
         df = pre_filter(df)
         result, _ = run_enhanced(df, today_str=today)
         return {"ok": True, "output": result}
-    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("indicators", d))), media_type="text/event-stream")
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("indicators", d, force=refresh))), media_type="text/event-stream")
 
 
 @app.get("/api/community/stream")
@@ -1236,7 +1121,7 @@ def api_community_stream(refresh: bool = Query(False, description="强制刷新"
         if df is None or df.empty: return {"ok": True, "output": "今日无涨停数据"}
         txt, _ = community.run(df, top_n=10)
         return {"ok": True, "output": txt if txt.strip() else "暂无舆情数据"}
-    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("community", d))), media_type="text/event-stream")
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("community", d, force=refresh))), media_type="text/event-stream")
 
 
 @app.get("/api/community/cards")
@@ -1339,7 +1224,7 @@ def api_sentiment_cards(refresh: bool = Query(False, description="强制刷新")
                   "promotion_rate": details.get("promotion_rate", 0),
                   "zhaban_rate": details.get("zhaban_rate", 0),
                   "fetched_at": _fetched_at()}
-        daily_set("sentiment_cards", result)
+        daily_set("sentiment_cards", result, force=refresh)
         return result
     except Exception as e:
         return {"ok": False, "error": str(e), "score": 0, "level": "未知", "icon": "📊",
@@ -1376,7 +1261,7 @@ async def api_sentiment_stream(refresh: bool = Query(False, description="强制�
                 "avg_premium": details.get("avg_premium", 0),
                 "promotion_rate": details.get("promotion_rate", 0),
                 "zhaban_rate": details.get("zhaban_rate", 0)}
-    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("sentiment_cards", d))), media_type="text/event-stream")
+    return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("sentiment_cards", d, force=refresh))), media_type="text/event-stream")
 
 
 
@@ -1443,7 +1328,7 @@ def _run_close_scan(principal=20000):
             threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
             return
         cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],
-                                        data['sentiment_level'], 1.0, data['date'])
+                                        data['sentiment_level'], data['date'])
         if data.get('sentiment_ok'):
             daily_set(_CLOSE_CACHE_KEY, cache_data, force=True)
             # 同步缓存市场概览（force=True 绕过盘后冻结）

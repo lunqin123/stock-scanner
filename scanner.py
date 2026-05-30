@@ -34,6 +34,36 @@ _CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
 _CACHE_TTL = 7200  # 默认 2 小时
 _CST = timezone(timedelta(hours=8))
 
+# ─── 交易时间常量（所有时间统一用距零点分钟数） ───
+MARKET_OPEN_MINUTES = 570       # 09:30
+MORNING_CLOSE_MINUTES = 690     # 11:30
+AFTERNOON_OPEN_MINUTES = 780    # 13:00
+AFTERNOON_CLOSE_MINUTES = 900   # 15:00
+SEAL_TIME_RANGE = 300           # 封板时间归一化范围: 09:30→14:30=300分钟
+MAX_LATE_SEAL = "143000"        # 最晚封板时间 (HHMMSS)
+
+def money_str(val) -> str:
+    """金额格式化：1亿以上→X.XX亿，1万以上→X万，否则→整数"""
+    try:
+        v = float(val)
+        if abs(v) >= 1e8: return f"{v/1e8:.2f}亿"
+        if abs(v) >= 1e4: return f"{v/1e4:.0f}万"
+        return f"{v:.0f}"
+    except (ValueError, TypeError):
+        return str(val)
+
+def seal_time_score(t: str) -> float:
+    """封板时间评分 0-10: 9:30=10分, 14:30=0分。所有扫描模式共享。"""
+    t = str(t).strip()
+    try:
+        if len(t) < 4:
+            return 5.0
+        minutes = int(t[:2]) * 60 + int(t[2:4])
+        raw = 1.0 - (minutes - MARKET_OPEN_MINUTES) / SEAL_TIME_RANGE
+        return max(0.0, min(10.0, raw * 10))
+    except Exception:
+        return 5.0
+
 def _fund_flow_ttl() -> int:
     """资金流缓存 TTL：盘中 5 分钟，盘后/非交易日不缓存"""
     from cache import _is_trading_day
@@ -41,7 +71,7 @@ def _fund_flow_ttl() -> int:
     if not _is_trading_day(now.strftime("%Y%m%d")):
         return 0
     minute = now.hour * 60 + now.minute
-    if (570 <= minute < 690) or (780 <= minute < 900):
+    if (MARKET_OPEN_MINUTES <= minute < MORNING_CLOSE_MINUTES) or (AFTERNOON_OPEN_MINUTES <= minute < AFTERNOON_CLOSE_MINUTES):
         return 300  # 盘中 5 分钟
     return 0
 
@@ -67,9 +97,29 @@ def _cache_get(name, ttl_override: int = None):
 
 # ─── 配置 ───
 MAX_MARKET_CAP = 200          # 流通市值上限 (亿)
-MAX_LATE_SEAL = "143000"      # 最晚封板时间 (HHMMSS)
 MAX_PRICE = 60                # 最高股价 (2万本金单票6000, 最少买100股)
 TOP_N = 10                    # 输出数量
+
+# ─── 板块黑名单：非主板代码前缀（统一过滤，唯一真相来源） ───
+# 科创板 68xxxx, 北交所 8xxxxx/92xxxx/94xxxx, 创业板 30xxxx/301xxx
+NON_MAIN_BOARD_PREFIXES = ('68', '8', '9', '30')
+
+def filter_non_main_board(df: pd.DataFrame,
+                          code_col: str = '代码',
+                          name_col: str = '名称') -> pd.DataFrame:
+    """统一板块过滤：排除 ST、科创板、北交所、创业板。
+    所有扫描模式/端点必须调用此函数，不重复发明过滤逻辑。"""
+    df = df.copy()
+    # ST / *ST
+    for nc in [name_col, '股票名称']:
+        if nc in df.columns:
+            st_mask = df[nc].astype(str).str.startswith(('ST', '*ST'), na=False)
+            df = df[~st_mask]
+            break
+    # 非主板代码
+    if code_col in df.columns:
+        df = df[~df[code_col].astype(str).str.startswith(NON_MAIN_BOARD_PREFIXES)]
+    return df
 
 # ─── 辅助函数 ───
 
@@ -107,19 +157,9 @@ def fetch_limit_up_pool() -> pd.DataFrame:
 
 def pre_filter(df: pd.DataFrame) -> pd.DataFrame:
     print("[2/5] 前置过滤...", file=sys.stderr)
-    df = df.copy()
     before = len(df)
 
-    name_col = '名称' if '名称' in df.columns else '股票名称'
-    st_mask = df[name_col].str.startswith(('ST', '*ST'), na=False)
-    df = df[~st_mask]
-
-    code_mask = df['代码'].astype(str).str.startswith('68')
-    df = df[~code_mask]
-
-    # 北交所排除 (8xxxxx)
-    code_mask_bj = df['代码'].astype(str).str.startswith('8')
-    df = df[~code_mask_bj]
+    df = filter_non_main_board(df)
 
     if '换手率' in df.columns and '封板资金' in df.columns and '流通市值' in df.columns:
         # 一字板: 换手极低 + 封单相对流通市值比例高
@@ -146,19 +186,7 @@ def score_seal_strength(df: pd.DataFrame) -> pd.Series:
     scores = pd.Series(0.0, index=df.index)
 
     if '首次封板时间' in df.columns:
-        def time_score(t):
-            t = str(t).strip()
-            try:
-                if len(t) < 4:
-                    return 0.5
-                hours = int(t[:2])
-                mins = int(t[2:4])
-                minutes = hours * 60 + mins
-                raw = 1.0 - (minutes - 570) / 300.0  # 9:30=1.0, 14:30=0.0
-                return max(0.0, min(1.0, raw))
-            except Exception:
-                return 0.5
-        time_scores = df['首次封板时间'].apply(time_score) * 9
+        time_scores = df['首次封板时间'].apply(lambda t: seal_time_score(t) * 0.9)
         scores += time_scores
 
     if '封板资金' in df.columns:
@@ -661,6 +689,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
     df['开盘可行性'] = s_buyability.round(1)
+    df['板块共振'] = s_res.round(1)
     def _pad(s, w, right=False):
         """CJK字符宽度补齐：中文占2格，英文/数字占1格"""
         s = str(s)
@@ -669,17 +698,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
         return (' ' * sp + s) if right else (s + ' ' * sp)
 
     if raw_money is not None:
-        def _money_str(val):
-            try:
-                v = float(val)
-                if abs(v) >= 1e8:
-                    return f"{v/1e8:.2f}亿"
-                elif abs(v) >= 1e4:
-                    return f"{v/1e4:.0f}万"
-                return f"{v:.0f}"
-            except (ValueError, TypeError):
-                return str(val)
-        df['净流入'] = df.index.map(lambda idx: _money_str(raw_money.get(idx, 0)))
+        df['净流入'] = df.index.map(lambda idx: money_str(raw_money.get(idx, 0)))
     else:
         df['净流入'] = ""
 
@@ -745,22 +764,13 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
     df['开盘可行性'] = s_buyability.round(1)
+    df['板块共振'] = s_res.round(1)
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     out = df.loc[top_indices]
 
     if raw_money is not None:
-        def _money_str(val):
-            try:
-                v = float(val)
-                if abs(v) >= 1e8:
-                    return f"{v/1e8:.2f}亿"
-                elif abs(v) >= 1e4:
-                    return f"{v/1e4:.0f}万"
-                return f"{v:.0f}"
-            except (ValueError, TypeError):
-                return str(val)
-        money_detail = lambda idx: _money_str(raw_money.get(idx, 0))
+        money_detail = lambda idx: money_str(raw_money.get(idx, 0))
     else:
         money_detail = lambda idx: "?"
 
@@ -847,7 +857,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         lines.append(f"\n{rank}. {code} {name} | 总分 {score:.1f}")
         lines.append(f"   封板: {seal_time} | 封单 {fund_str} | 换手 {turnover}%")
         lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w.get('sector_mom', 15):.0f})")
-        lines.append(f"   评分拆解: 涨停{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 舆情{community_val:.1f}")
+        lines.append(f"   评分拆解: 涨停{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
         lines.append(f"   {buy_logic}")
         lines.append(f"   {risk}")
 
@@ -1133,68 +1143,22 @@ def score_stock_history(df: pd.DataFrame, today_str: str):
 
 # ─── 炸板股反包潜力扫描 ───
 
-def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
-    """
-    炸板股反包潜力扫描。
-    从炸板股池中筛选出次日最有可能反包的标的。
-    评分维度：封板质量 + 资金承接 + 炸板特征 + 换手率 + 板块热度
-    """
-    n = top_n if top_n is not None else TOP_N
-    print("[炸板扫描] 获取炸板股池...", file=sys.stderr)
-    try:
-        zb_df = ak.stock_zt_pool_zbgc_em(date=today_str)
-    except Exception as e:
-        print(f"  炸板数据获取失败: {e}", file=sys.stderr)
-        return
-    if zb_df.empty:
-        print("no_data")
-        return
-    print(f"  → 炸板股共 {len(zb_df)} 只", file=sys.stderr)
+def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
+    """炸板反包纯评分函数（无print/格式化）。Web card端点和CLI共享。
+    返回带评分列的DataFrame（已排序、取TOP_N）。"""
+    df = df.copy()
 
-    df = zb_df.copy()
-    before = len(df)
-
-    # 过滤ST、688、8xx
-    name_col = '名称' if '名称' in df.columns else df.columns[2]
-    st_mask = df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
-    df = df[~st_mask]
-    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
-
-    # 过滤流通市值过大
-    if '流通市值' in df.columns:
-        df = df[df['流通市值'].astype(float) <= MAX_MARKET_CAP * 1e8]
-    # 过滤股价过高
-    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
-    df = df[df[price_col].astype(float) <= MAX_PRICE]
-
-    after = len(df)
-    print(f"  → 过滤后 {after}/{before} 只", file=sys.stderr)
-    if df.empty:
-        print("no_data")
-        return
-
-    # ── 评分 ──
-    # 1. 封板质量 (0-25): 封板时间早 + 封板资金大
-    seal_scores = pd.Series(0.0, index=df.index)
+    # ── 列识别 ──
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
     seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
     zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
     turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
     industry_col = '所属行业' if '所属行业' in df.columns else df.columns[15]
 
-    def _time_score(t):
-        t = str(t).strip()
-        try:
-            if len(t) < 4: return 5
-            h, m = int(t[:2]), int(t[2:4])
-            minutes = h * 60 + m
-            raw = 1.0 - (minutes - 570) / 300.0
-            return max(0, min(10, raw * 10))
-        except:
-            return 5
-    seal_scores += df[seal_time_col].apply(_time_score)
+    # 1. 封板质量 (0-25): 封板时间早 + 封板资金大
+    seal_scores = pd.Series(0.0, index=df.index)
+    seal_scores += df[seal_time_col].apply(seal_time_score)
 
-    # 封板资金得分 (0-10)
     fund_vals = df[seal_fund_col].fillna(0).astype(float)
     max_fund = fund_vals.max()
     if max_fund > 0:
@@ -1202,83 +1166,93 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
     else:
         seal_scores += 5
 
-    # 炸板次数负向得分 (0-5): 炸板越少越好
     zb_times = df[zhaban_count_col].fillna(0).astype(float)
     seal_scores += np.clip(1.0 - zb_times / 8.0, 0, 1) * 5
     seal_scores = seal_scores.clip(upper=25)
 
-    # 2. 资金承接 (0-20): 炸板后仍有主力净流入说明有承接
-    fund_df, _ = fetch_fund_flow_data()
+    # 2. 资金承接 (0-20)
+    fund_df_zb, _ = fetch_fund_flow_data()
     money_scores = pd.Series(0.0, index=df.index)
     raw_money = pd.Series(0.0, index=df.index)
-    if fund_df is not None:
-        money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df)
-        money_scores = money_scores * (20 / 20)  # scale to 0-20
+    if fund_df_zb is not None:
+        money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df_zb)
     else:
-        # 降级：用封板资金替代估算
         money_scores = np.clip(fund_vals / (fund_vals.max() + 1), 0, 1) * 10
         raw_money = fund_vals
 
-    # 3. 炸板特征分 (0-15):
-    #    - 换手率适中(10-25%): 说明有真实换手承接
-    #    - 封板时间早 + 炸板晚 = 主力运作痕迹
-    zhaban_feature = pd.Series(7.5, index=df.index)  # 基准
+    # 3. 炸板特征分 (0-15)
+    zhaban_feature = pd.Series(7.5, index=df.index)
     turnover_vals = df[turnover_col].fillna(0).astype(float)
     for idx in df.index:
         t = turnover_vals[idx]
-        if 10 <= t <= 25:
-            zhaban_feature[idx] += 5
-        elif 5 <= t <= 30:
-            zhaban_feature[idx] += 2
-        elif t > 40:
-            zhaban_feature[idx] -= 3
+        if 10 <= t <= 25:    zhaban_feature[idx] += 5
+        elif 5 <= t <= 30:   zhaban_feature[idx] += 2
+        elif t > 40:         zhaban_feature[idx] -= 3
     zhaban_feature = zhaban_feature.clip(0, 15)
 
     # 4. 换手率评分 (0-10)
     turn_scores = pd.Series(5.0, index=df.index)
     for idx in df.index:
         t = turnover_vals[idx]
-        if 8 <= t <= 20:
-            turn_scores[idx] = 10
-        elif 5 <= t <= 30:
-            turn_scores[idx] = 7
-        elif t <= 3:
-            turn_scores[idx] = 3  # 换手太低说明没承接
-        elif t > 40:
-            turn_scores[idx] = 2  # 换手太高说明分歧过大
+        if 8 <= t <= 20:     turn_scores[idx] = 10
+        elif 5 <= t <= 30:   turn_scores[idx] = 7
+        elif t <= 3:         turn_scores[idx] = 3
+        elif t > 40:         turn_scores[idx] = 2
 
-    # 5. 板块热度 (0-12): 用涨停池行业分布（反映真实板块热度）
+    # 5. 板块热度 (0-12)
     try:
         limit_pool = ak.stock_zt_pool_em(date=today_str)
         if not limit_pool.empty:
-            ind_col_lim = '所属行业' if '所属行业' in limit_pool.columns else limit_pool.columns[15]
-            limit_industry_counts = limit_pool[ind_col_lim].value_counts()
+            ind_col = '所属行业' if '所属行业' in limit_pool.columns else limit_pool.columns[15]
+            counts = limit_pool[ind_col].value_counts()
             sector_scores = pd.Series(0.0, index=df.index)
             for idx in df.index:
                 industry = df.loc[idx, industry_col] if industry_col in df.columns else df.iloc[idx, 15]
-                cnt = limit_industry_counts.get(industry, 0)
-                sector_scores[idx] = min(4 + cnt * 2, 12)
+                sector_scores[idx] = min(4 + counts.get(industry, 0) * 2, 12)
         else:
             sector_scores = get_sector_heat_scores(df, money_series=raw_money)
     except Exception:
         sector_scores = get_sector_heat_scores(df, money_series=raw_money)
 
-    # ── 总分 ──
+    # ── 总分 + 列 ──
     raw_total = seal_scores + money_scores + zhaban_feature + turn_scores + sector_scores
-    max_raw = 25 + 20 + 15 + 10 + 12  # = 82
-    total_scores = raw_total / max_raw * 100
+    max_raw = 25 + 20 + 15 + 10 + 12
+    df['总分'] = (raw_total / max_raw * 100).round(1)
+    df['封板质量'] = seal_scores.round(1)
+    df['资金承接'] = money_scores.round(1)
+    df['炸板特征'] = zhaban_feature.round(1)
+    df['换手评分'] = turn_scores.round(1)
+    df['板块热度'] = sector_scores.round(1)
+    df['净流入'] = raw_money
 
-    # ── 输出 ──
-    out_df = df.copy()
-    out_df['总分'] = total_scores.round(1)
-    out_df['封板质量'] = seal_scores.round(1)
-    out_df['资金承接'] = money_scores.round(1)
-    out_df['炸板特征'] = zhaban_feature.round(1)
-    out_df['换手评分'] = turn_scores.round(1)
-    out_df['板块热度'] = sector_scores.round(1)
-    if raw_money is not None:
-        out_df['净流入'] = raw_money
-    out_df = out_df.sort_values('总分', ascending=False).head(n)
+    return df.sort_values('总分', ascending=False).head(TOP_N)
+
+
+def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
+    n = top_n if top_n is not None else TOP_N
+    print("[炸板扫描] 获取炸板股池...", file=sys.stderr)
+    try:
+        zb_df = ak.stock_zt_pool_zbgc_em(date=today_str)
+    except Exception as e:
+        print(f"  炸板数据获取失败: {e}", file=sys.stderr)
+        return
+    if zb_df.empty: print("no_data"); return
+    print(f"  → 炸板股共 {len(zb_df)} 只", file=sys.stderr)
+
+    df = zb_df.copy()
+    before = len(df)
+    df = filter_non_main_board(df)
+    if '流通市值' in df.columns:
+        df = df[df['流通市值'].astype(float) <= MAX_MARKET_CAP * 1e8]
+    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
+    df = df[df[price_col].astype(float) <= MAX_PRICE]
+    after = len(df)
+    print(f"  → 过滤后 {after}/{before} 只", file=sys.stderr)
+    if df.empty: print("no_data"); return
+
+    # 统一评分
+    out_df = score_zhaban_data(df, today_str)
+    if n < TOP_N: out_df = out_df.head(n)
 
     today_display = date.today().strftime('%Y-%m-%d')
     lines = [f"炸板股反包潜力 TOP{n} ({today_display})", "=" * 70]
@@ -1292,9 +1266,12 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
         feat_s = float(row['炸板特征'])
         turn_s = float(row['换手评分'])
         sec_s = float(row['板块热度'])
-        seal_time = str(row[seal_time_col])[:4]
-        zhaban_cnt = int(float(row[zhaban_count_col])) if pd.notna(row[zhaban_count_col]) else 0
-        turnover = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+        st_col = '首次封板时间' if '首次封板时间' in out_df.columns else out_df.columns[11]
+        zb_col = '炸板次数' if '炸板次数' in out_df.columns else out_df.columns[12]
+        to_col = '换手率' if '换手率' in out_df.columns else out_df.columns[9]
+        seal_time = str(row.get(st_col, ''))[:4]
+        zhaban_cnt = int(float(row.get(zb_col, 0))) if pd.notna(row.get(zb_col, None)) else 0
+        turnover = float(row.get(to_col, 0)) if pd.notna(row.get(to_col, None)) else 0
 
         # 净流入文本
         net = float(row.get('净流入', 0))
@@ -1386,9 +1363,7 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
         change_col = prev.columns[3]
         name_col_p = prev.columns[2]
         df = prev.copy()
-        st_mask = df[name_col_p].astype(str).str.startswith(('ST', '*ST'), na=False)
-        df = df[~st_mask]
-        df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
+        df = filter_non_main_board(df)
         # 涨幅3-9%之间 → 强势但未涨停
         changes = df[change_col].astype(float)
         df = df[(changes >= 3) & (changes < 9)]
@@ -1430,10 +1405,7 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
     turnover_col = df.columns[5] if '换手率' not in df.columns else '换手率'
     volume_col = df.columns[6] if '成交额' not in df.columns else '成交额'
 
-    # 过滤ST、688、8xx
-    st_mask = df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
-    df = df[~st_mask]
-    df = df[~df[code_col].astype(str).str.startswith(('68', '8'))]
+    df = filter_non_main_board(df, code_col=code_col)
 
     # 过滤股价和市值
     if '流通市值' in df.columns:
@@ -1515,17 +1487,53 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
     return trend_results
 
 
+# ─── 板块联动纯评分函数 ───
+
+def score_sector_data(limit_df: pd.DataFrame, zhaban_df: pd.DataFrame,
+                      dieting_df: pd.DataFrame, top_n: int = TOP_N) -> list[dict]:
+    """板块联动强度纯评分（无print）。Web card端点和CLI共享。
+    输入三个涨停/炸板/跌停DataFrame，返回按联动强度排序的板块列表。"""
+    # 涨停行业分布
+    limit_counts = {}
+    if not limit_df.empty:
+        ind_col = '所属行业' if '所属行业' in limit_df.columns else (limit_df.columns[15] if len(limit_df.columns) > 15 else None)
+        if ind_col: limit_counts = limit_df[ind_col].value_counts().to_dict()
+    # 炸板行业分布
+    zhaban_counts = {}
+    if not zhaban_df.empty:
+        ind_col2 = '所属行业' if '所属行业' in zhaban_df.columns else (zhaban_df.columns[15] if len(zhaban_df.columns) > 15 else None)
+        if ind_col2: zhaban_counts = zhaban_df[ind_col2].value_counts().to_dict()
+    # 跌停行业分布
+    dieting_counts = {}
+    if not dieting_df.empty:
+        ind_col3 = '所属行业' if '所属行业' in dieting_df.columns else (dieting_df.columns[15] if len(dieting_df.columns) > 15 else None)
+        if ind_col3: dieting_counts = dieting_df[ind_col3].value_counts().to_dict()
+
+    all_industries = set(list(limit_counts.keys()) + list(zhaban_counts.keys()) + list(dieting_counts.keys()))
+    if not all_industries: return []
+
+    stats = []
+    for industry in all_industries:
+        lc = limit_counts.get(industry, 0)
+        zc = zhaban_counts.get(industry, 0)
+        dc = dieting_counts.get(industry, 0)
+        total = lc + zc + dc
+        stats.append({
+            'industry': industry,
+            'limit_cnt': lc, 'zhaban_cnt': zc, 'dieting_cnt': dc,
+            'link_strength': round(lc - zc * 0.3 - dc * 0.5, 1),
+            'profit_effect': round(lc / total * 100, 0) if total > 0 else 0,
+            'seal_rate': round(lc / (lc + zc) * 100, 0) if (lc + zc) > 0 else 50,
+        })
+    stats.sort(key=lambda x: x['link_strength'], reverse=True)
+    return stats[:top_n]
+
+
 # ═══════════════════════════════════════════
 #  模式4: 板块联动强度 (--sector)
 # ═══════════════════════════════════════════
 
 def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
-    """
-    板块联动强度分析。
-    综合涨停池和炸板股的行业分布，计算各板块的联动强度、
-    赚钱效应和资金集中度。
-    不依赖板块API（复用涨停池数据），自动降级鲁棒。
-    """
     n = top_n if top_n is not None else TOP_N
     print("[板块扫描] 获取涨停池+炸板池行业分布...", file=sys.stderr)
 
@@ -1568,67 +1576,8 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
         print("no_data")
         return
 
-    # ── 解析行业分布 ──
-    # 涨停行业
-    limit_industry_counts = {}
-    if not limit_df.empty:
-        ind_col = '所属行业' if '所属行业' in limit_df.columns else (limit_df.columns[15] if len(limit_df.columns) > 15 else None)
-        if ind_col:
-            limit_industry_counts = limit_df[ind_col].value_counts().to_dict()
-
-    # 炸板行业
-    zhaban_industry_counts = {}
-    if not zhaban_df.empty:
-        ind_col2 = '所属行业' if '所属行业' in zhaban_df.columns else (zhaban_df.columns[15] if len(zhaban_df.columns) > 15 else None)
-        if ind_col2:
-            zhaban_industry_counts = zhaban_df[ind_col2].value_counts().to_dict()
-
-    # 跌停行业
-    dieting_industry_counts = {}
-    if not dieting_df.empty:
-        ind_col3 = '所属行业' if '所属行业' in dieting_df.columns else (dieting_df.columns[15] if len(dieting_df.columns) > 15 else None)
-        if ind_col3:
-            dieting_industry_counts = dieting_df[ind_col3].value_counts().to_dict()
-
-    # ── 合并行业列表 ──
-    all_industries = set(list(limit_industry_counts.keys()) +
-                         list(zhaban_industry_counts.keys()) +
-                         list(dieting_industry_counts.keys()))
-    if not all_industries:
-        print("no_data")
-        return
-
-    # ── 计算联动强度 ──
-    industry_stats = []
-    for industry in all_industries:
-        limit_cnt = limit_industry_counts.get(industry, 0)
-        zhaban_cnt = zhaban_industry_counts.get(industry, 0)
-        dieting_cnt = dieting_industry_counts.get(industry, 0)
-
-        # 联动强度 = 涨停数 - 炸板数/2 - 跌停数
-        # 涨停多+炸板少+跌停少 = 强联动
-        link_strength = limit_cnt - zhaban_cnt * 0.3 - dieting_cnt * 0.5
-
-        # 赚钱效应: 涨停/(涨停+炸板+跌停)
-        total = limit_cnt + zhaban_cnt + dieting_cnt
-        profit_effect = limit_cnt / total if total > 0 else 0
-
-        # 涨停封板率(估算): 涨停/(涨停+炸板)
-        seal_rate = limit_cnt / (limit_cnt + zhaban_cnt) if (limit_cnt + zhaban_cnt) > 0 else 0.5
-
-        industry_stats.append({
-            'industry': industry,
-            'limit_cnt': limit_cnt,
-            'zhaban_cnt': zhaban_cnt,
-            'dieting_cnt': dieting_cnt,
-            'link_strength': round(link_strength, 1),
-            'profit_effect': round(profit_effect * 100, 0),
-            'seal_rate': round(seal_rate * 100, 0),
-        })
-
-    # 排序：联动强度降序
-    industry_stats.sort(key=lambda x: x['link_strength'], reverse=True)
-    top_sectors = industry_stats[:n]
+    # 统一评分
+    top_sectors = score_sector_data(limit_df, zhaban_df, dieting_df, top_n=n)
 
     # ── 获取资金流 (可选增强) ──
     fund_df, _ = fetch_fund_flow_data()
@@ -1670,14 +1619,81 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
 
 # ═══════════════════════════════════════════
 #  模式5: 跌停翘板信号 (--dtqiaoban)
+# ─── 跌停翘板纯评分函数 ───
+
+def score_dtqiaoban_data(df: pd.DataFrame) -> pd.DataFrame:
+    """跌停翘板纯评分函数（无print/格式化）。Web card端点和CLI共享。
+    返回带'翘板评分'列的DataFrame（已排序、取TOP_N）。"""
+    df = df.copy()
+    # 列识别
+    deal_col = df.columns[12] if len(df.columns) > 12 else None
+    seal_fund_col = df.columns[10] if len(df.columns) > 10 else None
+    cont_dieting_col = df.columns[13] if len(df.columns) > 13 else None
+    turnover_col = df.columns[9] if len(df.columns) > 9 else None
+    seal_time_col = df.columns[11] if len(df.columns) > 11 else None
+
+    scores = pd.Series(0.0, index=df.index)
+    raw_details = {}
+
+    for idx in df.index:
+        total = 0
+        details = []
+        # 1. 放量信号 (0-25)
+        deal_val = 0
+        if deal_col is not None:
+            try:    deal_val = float(df.loc[idx, deal_col]) if pd.notna(df.loc[idx, deal_col]) else 0
+            except: pass
+        if deal_val > 5000e4:       total += 25; details.append("巨量翘板")
+        elif deal_val > 1000e4:     total += 20; details.append("放量翘板")
+        elif deal_val > 100e4:      total += 12; details.append("微量翘板")
+        else:                       total += 5;  details.append("无量跌停")
+        # 2. 封单变化 (0-25)
+        seal_fund_val = 0
+        if seal_fund_col is not None:
+            try:    seal_fund_val = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
+            except: pass
+        if seal_fund_val < 100e4:        total += 25; details.append("封单极小")
+        elif seal_fund_val < 1000e4:     total += 20; details.append("封单偏小")
+        elif seal_fund_val < 5000e4:     total += 10; details.append("封单适中")
+        else:                            total += 3;  details.append("封单巨大")
+        # 3. 连续跌停 (0-25)
+        cont_val = 0
+        if cont_dieting_col is not None:
+            try:    cont_val = int(float(df.loc[idx, cont_dieting_col])) if pd.notna(df.loc[idx, cont_dieting_col]) else 0
+            except: pass
+        if cont_val >= 3:       total += 25; details.append(f"N{cont_val}板超跌")
+        elif cont_val == 2:     total += 18; details.append(f"连跌{cont_val}板")
+        elif cont_val == 1:     total += 10; details.append("首板跌停")
+        else:                   total += 5
+        # 4. 换手率 (0-15)
+        turnover_val = 0
+        if turnover_col is not None:
+            try:    turnover_val = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 0
+            except: pass
+        if turnover_val > 10:       total += 15; details.append("高换手承接")
+        elif turnover_val > 5:      total += 10; details.append("有换手")
+        elif turnover_val > 1:      total += 5;  details.append("少量换手")
+        else:                       total += 2
+        # 5. 跌停时间 (0-10)
+        if seal_time_col is not None:
+            try:
+                t = str(df.loc[idx, seal_time_col]).strip()
+                if len(t) >= 4:
+                    minutes = int(t[:2]) * 60 + int(t[2:4])
+                    if minutes >= 840:          total += 10; details.append("尾盘跌停")
+                    elif minutes >= 750:        total += 5;  details.append("午后跌停")
+                    else:                       total += 2;  details.append("早盘跌停")
+            except: total += 3
+        scores[idx] = min(total, 100)
+        raw_details[idx] = details
+
+    df['翘板评分'] = scores.round(1)
+    return df.sort_values('翘板评分', ascending=False).head(TOP_N)
+
+
 # ═══════════════════════════════════════════
 
 def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
-    """
-    跌停翘板信号扫描。
-    从跌停股池中筛选出有翘板/开板/反抽潜力的标的。
-    关注放量跌停（有承接）、封单减少（开板迹象）、连板跌停（过度杀跌）。
-    """
     n = top_n if top_n is not None else TOP_N
     print("[翘板扫描] 获取跌停股池...", file=sys.stderr)
     try:
@@ -1693,11 +1709,7 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
     df = dt_df.copy()
     before = len(df)
 
-    # 过滤ST、688、8xx
-    name_col = '名称' if '名称' in df.columns else df.columns[2]
-    st_mask = df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
-    df = df[~st_mask]
-    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
+    df = filter_non_main_board(df)
 
     # 过滤市值过大（市值小的更容易翘板）
     if '流通市值' in df.columns:
@@ -1714,127 +1726,17 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
         print("no_data")
         return
 
-    # ── 列识别 ──
+    # 统一评分
+    df = score_dtqiaoban_data(df)
+    if n < TOP_N: df = df.head(n)
+
+    # ── 列识别（用于输出） ──
     code_col = df.columns[1]
     name_col = df.columns[2]
     change_col = df.columns[3]
-    price_col = df.columns[4]
     turnover_col = df.columns[9] if len(df.columns) > 9 else None
-    seal_fund_col = df.columns[10] if len(df.columns) > 10 else None  # 封单资金
-    seal_time_col = df.columns[11] if len(df.columns) > 11 else None  # 炸板/封板时间
-    deal_col = df.columns[12] if len(df.columns) > 12 else None  # 板上成交
-    cont_dieting_col = df.columns[13] if len(df.columns) > 13 else None  # 连续跌停
-
-    # ── 评分 ──
-    scores = pd.Series(0.0, index=df.index)
-    raw_details = {}
-
-    for idx in df.index:
-        total = 0
-        details = []
-
-        # 1. 放量信号 (0-25): 成交额大、有板上成交 = 有人翘板
-        deal_val = 0
-        if deal_col is not None:
-            try:
-                deal_val = float(df.loc[idx, deal_col]) if pd.notna(df.loc[idx, deal_col]) else 0
-            except:
-                pass
-        if deal_val > 5000e4:  # 板上成交>5000万
-            total += 25
-            details.append("巨量翘板")
-        elif deal_val > 1000e4:
-            total += 20
-            details.append("放量翘板")
-        elif deal_val > 100e4:
-            total += 12
-            details.append("微量翘板")
-        else:
-            total += 5
-            details.append("无量跌停")
-
-        # 2. 封单变化 (0-25): 封单小 = 容易开板
-        seal_fund_val = 0
-        if seal_fund_col is not None:
-            try:
-                seal_fund_val = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
-            except:
-                pass
-        if seal_fund_val < 100e4:
-            total += 25
-            details.append("封单极小")
-        elif seal_fund_val < 1000e4:
-            total += 20
-            details.append("封单偏小")
-        elif seal_fund_val < 5000e4:
-            total += 10
-            details.append("封单适中")
-        else:
-            total += 3
-            details.append("封单巨大")
-
-        # 3. 连续跌停 (0-25): 连续跌停N板后开板概率递增
-        cont_val = 0
-        if cont_dieting_col is not None:
-            try:
-                cont_val = int(float(df.loc[idx, cont_dieting_col])) if pd.notna(df.loc[idx, cont_dieting_col]) else 0
-            except:
-                pass
-        if cont_val >= 3:
-            total += 25
-            details.append(f"N{cont_val}板超跌")
-        elif cont_val == 2:
-            total += 18
-            details.append(f"连跌{cont_val}板")
-        elif cont_val == 1:
-            total += 10
-            details.append("首板跌停")
-        else:
-            total += 5
-
-        # 4. 换手率 (0-15): 跌停换手率高说明有资金承接
-        turnover_val = 0
-        if turnover_col is not None:
-            try:
-                turnover_val = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 0
-            except:
-                pass
-        if turnover_val > 10:
-            total += 15
-            details.append("高换手承接")
-        elif turnover_val > 5:
-            total += 10
-            details.append("有换手")
-        elif turnover_val > 1:
-            total += 5
-            details.append("少量换手")
-        else:
-            total += 2
-
-        # 5. 跌停时间(0-10): 尾盘跌停比开盘跌停更容易次日反抽
-        if seal_time_col is not None:
-            try:
-                t = str(df.loc[idx, seal_time_col]).strip()
-                if len(t) >= 4:
-                    h, m = int(t[:2]), int(t[2:4])
-                    minutes = h * 60 + m
-                    if minutes >= 840:  # 14:00+
-                        total += 10
-                        details.append("尾盘跌停")
-                    elif minutes >= 750:  # 13:30+
-                        total += 5
-                        details.append("午后跌停")
-                    else:
-                        total += 2
-                        details.append("早盘跌停")
-            except:
-                total += 3
-
-        scores[idx] = min(total, 100)
-        raw_details[idx] = details
-
-    df['翘板评分'] = scores.round(1)
-    df = df.sort_values('翘板评分', ascending=False).head(n)
+    seal_fund_col = df.columns[10] if len(df.columns) > 10 else None
+    cont_dieting_col = df.columns[13] if len(df.columns) > 13 else None
 
     today_display = date.today().strftime('%Y-%m-%d')
     lines = [f"跌停翘板信号 TOP{n} ({today_display})", "=" * 70]
@@ -1845,9 +1747,13 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
         score = float(row['翘板评分'])
         chg = float(row[change_col]) if pd.notna(row[change_col]) else -10
         turn = float(row[turnover_col]) if turnover_col and pd.notna(row.get(turnover_col)) else 0
-        idx = row.name
-        details = raw_details.get(idx, [])
-        detail_str = " + ".join(details) if details else "标准跌停"
+        # 信号描述：基于评分和换手
+        sigs = []
+        if score >= 60: sigs.append("高信号")
+        elif score >= 35: sigs.append("中等信号")
+        else: sigs.append("弱信号")
+        if turn > 10: sigs.append("高换手")
+        detail_str = " + ".join(sigs)
 
         # 封单信息
         seal_str = ""
@@ -1912,9 +1818,7 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
         if '代码' in str(c): code_col = c
     name_col = name_col or df.columns[2]
     code_col = code_col or df.columns[1]
-    st_mask = df[name_col].astype(str).str.startswith(('ST', '*ST'), na=False)
-    df = df[~st_mask]
-    df = df[~df.iloc[:, 1].astype(str).str.startswith(('68', '8'))]
+    df = filter_non_main_board(df)
     if df.empty:
         return df, {"count": 0}
 

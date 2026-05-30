@@ -1,11 +1,11 @@
 {
-  "version": "1.7.1",
+  "version": "1.8.0",
   "date": "2026-05-30",
   "changes": [
-    "buyability 权重从8→12(首板可买性更重要)，seal 8→7, money 6→5, history 12→10",
-    "风险提示增强：高连板但低可买性时标注「明天买不到」",
-    "修复 format_output/format_table_output apply_weights 位置参数错位 bug",
-    "修复 main() 未计算 buyability_scores 和 sector_res_scores 的遗漏",
+    "buyability 权重从12→18(首板可买性成第二大因子)",
+    "seal 7→6, money 5→3, history 10→8, sector_res 10→9(从低预测力因子匀额度)",
+    "修复 app.py _run_limit_up_scan 未传 buyability_scores/sector_res 导致显示缺失",
+    "评分拆解行新增「可买」和「共振」因子分数显示",
     "57项不变性测试全部通过"
   ],
   "history": [

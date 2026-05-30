@@ -14,15 +14,20 @@ const _dom = {
 };
 const _navItems = () => document.querySelectorAll('.nav-item');
 
+// 版本化缓存：每次大版本更新 +1，旧缓存自动失效
+const _CACHE_VER = '3';
+
 function _savePageCache(key, html, url) {
     try {
-        localStorage.setItem('_cache_' + key, JSON.stringify({url: url || '', html: html}));
+        localStorage.setItem('_cache_' + key, JSON.stringify({url: url || '', html: html, ver: _CACHE_VER}));
     } catch(e) {}
 }
 function _loadPageCache(key) {
     try {
         var s = localStorage.getItem('_cache_' + key);
-        return s ? JSON.parse(s) : null;
+        var d = s ? JSON.parse(s) : null;
+        if (d && d.ver !== _CACHE_VER) return null;  // 版本不匹配 → 废弃
+        return d;
     } catch(e) { return null; }
 }
 
@@ -165,8 +170,10 @@ async function refreshCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
-    var url = info.api + '?refresh=1&principal=' + getPrincipal();
+    var t = Date.now();
+    var url = info.api + '?refresh=1&_t=' + t + '&principal=' + getPrincipal();
     _lastUrl[currentPage] = '';  // 强制重新拉取
+    _outputCache[currentPage] = '';  // 清除内存缓存
     await callApi(url, currentPage);
 }
 
@@ -174,6 +181,7 @@ async function callApi(apiUrl, pageKey) {
     const output = _dom.output();
 
     const info = PAGES[pageKey] || PAGES['scan-limit'];
+    _lastUrl[pageKey] = apiUrl || '';
 
     if (info.textApi) {
         await loadCardView(output, pageKey, apiUrl);
@@ -289,6 +297,10 @@ async function loadCardView(output, pageKey, apiUrl) {
         return;
     }
 
+    // 非涨停扫描也显示加载状态
+    showProgress('正在拉取数据...', 30);
+    output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
+
     try {
         const resp = await fetch(url);
         const data = await resp.json();
@@ -389,6 +401,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
         if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
         var pMatch = apiUrl && apiUrl.match(/principal=(\d+)/);
         if (pMatch) params.push('principal=' + pMatch[1]);
+        params.push('_t=' + Date.now());  // 浏览器缓存打散
         if (params.length) streamUrl += '?' + params.join('&');
         const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
@@ -437,6 +450,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             // 用 requestAnimationFrame + 微任务分离 DOM 操作和渲染
                             requestAnimationFrame(() => {
                                 output.innerHTML = html;
+                                _lastUrl[pageKey] = apiUrl || '';
                                 _outputCache[pageKey] = output.innerHTML;
                             });
                             return;

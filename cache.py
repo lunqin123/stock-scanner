@@ -29,7 +29,7 @@ def get(name):
 def put(name, data):
     try:
         os.makedirs(_CACHE_DIR, exist_ok=True)
-        with open(os.path.join(_CACHE_DIR, f"{name}.pkl"), 'wb') as f:
+        with open(os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl"), 'wb') as f:
             _pickle.dump(data, f)
     except Exception:
         pass
