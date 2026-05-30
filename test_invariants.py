@@ -60,7 +60,7 @@ import weight_manager as wm
 
 w = wm.load_weights()
 check(isinstance(w, dict), "load_weights 应返回 dict")
-check(w['seal'] == 8.0, f"seal 默认权重应为 8.0，实际 {w['seal']}")
+check(w['seal'] == 7.0, f"seal 默认权重应为 7.0，实际 {w['seal']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
 check('principal' not in w, "DEFAULT_WEIGHTS 不应含 principal")
 check('buyability' in w, "DEFAULT_WEIGHTS 应含 buyability")

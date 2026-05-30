@@ -639,12 +639,16 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
                         sentiment_level: str = "未知",
                         sentiment_detail: dict = None,
                         history_scores: pd.Series = None,
+                        buyability_scores: pd.Series = None,
+                        sector_res_scores: pd.Series = None,
                         weights: dict = None) -> str:
     import weight_manager
     w = weights if weights else weight_manager.DEFAULT_WEIGHTS
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
+    s_buyability = buyability_scores if buyability_scores is not None else pd.Series(6.0, index=df.index)
+    s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -656,6 +660,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
+    df['开盘可行性'] = s_buyability.round(1)
     def _pad(s, w, right=False):
         """CJK字符宽度补齐：中文占2格，英文/数字占1格"""
         s = str(s)
@@ -717,13 +722,17 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
                   sentiment_level: str = "未知",
                   sentiment_detail: dict = None,
                   history_scores: pd.Series = None,
+                  buyability_scores: pd.Series = None,
+                  sector_res_scores: pd.Series = None,
                   weights: dict = None) -> str:
     """详细文本输出。"""
     import weight_manager
     w = weights if weights else weight_manager.DEFAULT_WEIGHTS
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
+    s_buyability = buyability_scores if buyability_scores is not None else pd.Series(6.0, index=df.index)
+    s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -735,6 +744,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
+    df['开盘可行性'] = s_buyability.round(1)
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     out = df.loc[top_indices]
@@ -815,6 +825,16 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         try:
             if float(turnover) > 20:
                 risk_parts.append('换手过高')
+        except (ValueError, TypeError):
+            pass
+        # 连板可买性风险提示：高连板但可买性低 = 明天买不到
+        try:
+            lb_val = float(lianban) if lianban != '?' else 0
+            by_val = float(row.get('开盘可行性', 0))
+            if lb_val >= 4 and by_val < 6:
+                risk_parts.append(f'{int(lb_val)}连板可买性仅{by_val:.0f}分，明天买不到')
+            elif lb_val >= 3 and by_val < 4:
+                risk_parts.append(f'{int(lb_val)}连板可买性低，大概率被堵')
         except (ValueError, TypeError):
             pass
         risk = '; '.join(risk_parts) if risk_parts else '关注次日竞价'
@@ -2298,8 +2318,12 @@ def main():
         money_scores = pd.Series(0.0, index=filtered.index)
         sector_scores = get_sector_heat_scores(filtered)
         tech_scores = score_tech_form(filtered)
+        buyability_scores = score_buyability(filtered)
+        sector_res_scores = get_sector_resonance(filtered)
         fmt = format_table_output if table_mode else format_output
-        output = fmt(filtered, money_scores, sector_scores, score_seal_strength(filtered), tech_scores)
+        output = fmt(filtered, money_scores, sector_scores, score_seal_strength(filtered), tech_scores,
+                      buyability_scores=buyability_scores,
+                      sector_res_scores=sector_res_scores)
         print(output)
         return
 
@@ -2315,6 +2339,8 @@ def main():
     money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
     sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
     tech_scores = score_tech_form(filtered)
+    buyability_scores = score_buyability(filtered)
+    sector_res_scores = get_sector_resonance(filtered)
 
     print("[4/5] 预测: 市场情绪 + 龙虎榜 + 历史股性 + 舆情...", file=sys.stderr)
     today_raw = date.today().strftime("%Y%m%d")
@@ -2361,6 +2387,8 @@ def main():
                   sentiment_level=sentiment_level,
                   sentiment_detail=sentiment_detail,
                   history_scores=history_scores,
+                  buyability_scores=buyability_scores,
+                  sector_res_scores=sector_res_scores,
                   weights=weights)
     print(output)
 
@@ -2374,7 +2402,7 @@ def main():
 
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, pd.Series(4, index=df.index), sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
