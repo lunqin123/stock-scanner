@@ -87,6 +87,58 @@ def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
 def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
     return {"ok": True, "stocks": stocks, "sentiment": {"score": sentiment_score, "level": sentiment_level}, "date": date_str, "fetched_at": _fetched_at()}
 
+# ─── 原始数据缓存（分离「拉取」和「运行」） ───
+
+_RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+                                 "claude_stock_cache", "raw_scan_data.pkl")
+
+def _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level, sentiment_detail,
+                    sentiment_ok, history_scores, lhb_bonus, today_str):
+    """保存原始扫描数据（过滤后的 DataFrame + 资金流 + 情绪等），供「运行」读取"""
+    try:
+        import pickle as _pk
+        os.makedirs(os.path.dirname(_RAW_CACHE_PATH), exist_ok=True)
+        data = {
+            'filtered': filtered,
+            'fund_df': fund_df,
+            'sentiment_score': sentiment_score,
+            'sentiment_level': sentiment_level,
+            'sentiment_detail': sentiment_detail,
+            'sentiment_ok': sentiment_ok,
+            'history_scores': history_scores,
+            'lhb_bonus': lhb_bonus,
+            'date': today_str,
+            'fetched_at': _fetched_at(),
+        }
+        with open(_RAW_CACHE_PATH, 'wb') as f:
+            _pk.dump(data, f)
+        print("  [缓存] 原始数据已保存", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"  [缓存] 保存失败: {e}", file=sys.stderr)
+        return False
+
+def _load_raw_cache():
+    """加载原始扫描数据，供「运行」读取。过期或不存在返回 None。"""
+    try:
+        import pickle as _pk
+        if not os.path.exists(_RAW_CACHE_PATH):
+            print("  [缓存] 无原始数据，请先「拉取」", file=sys.stderr)
+            return None
+        # 缓存有效期：当天有效
+        mtime = datetime.fromtimestamp(os.path.getmtime(_RAW_CACHE_PATH), _CST)
+        now = datetime.now(_CST)
+        if mtime.date() != now.date():
+            print("  [缓存] 原始数据已过期（非当天），请重新拉取", file=sys.stderr)
+            return None
+        with open(_RAW_CACHE_PATH, 'rb') as f:
+            data = _pk.load(f)
+        print("  [缓存] 原始数据加载成功", file=sys.stderr)
+        return data
+    except Exception as e:
+        print(f"  [缓存] 加载失败: {e}", file=sys.stderr)
+        return None
+
 
 def _principal_filter(df, principal):
     """本金过滤：买不了 0.5 手的排除（不参与评分，直接过滤）"""
@@ -225,6 +277,11 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     history_scores = res.get("history")
     history_scores = history_scores[0] if history_scores is not None else pd.Series(2.5, index=filtered.index)
 
+    # 保存原始数据缓存（供「运行」按钮重跑评分用）
+    _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level,
+                    sentiment_detail, sentiment_ok, history_scores,
+                    lhb_bonus, today_str)
+
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
     sentiment_series = pd.Series(sentiment_score, index=filtered.index)
 
@@ -293,6 +350,98 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         'sentiment_detail': sentiment_detail,
         'sentiment_ok': sentiment_ok,
         'date': today_str,
+    }
+
+
+def _scan_from_raw_cache(principal: float = 20000):
+    """从缓存的原始数据重跑评分逻辑（不拉取 akshare，秒出）。
+    用户改 scoring/权重后点「运行」即可看到新逻辑效果。"""
+    import pandas as pd
+    raw = _load_raw_cache()
+    if raw is None:
+        return None
+
+    filtered = raw['filtered']
+    fund_df = raw['fund_df']
+    sentiment_score = raw['sentiment_score']
+    sentiment_level = raw['sentiment_level']
+    sentiment_detail = raw['sentiment_detail']
+    sentiment_ok = raw['sentiment_ok']
+    history_scores = raw['history_scores']
+    lhb_bonus = raw['lhb_bonus']
+
+    from scanner import (score_seal_strength, get_money_flow_scores, get_sector_heat_scores,
+                         score_tech_form, score_buyability, get_sector_resonance, TOP_N)
+
+    # 本金过滤
+    filtered = _principal_filter(filtered, principal)
+    if filtered.empty:
+        print("  [运行] 本金过滤后为空", file=sys.stderr)
+        return None
+
+    # 用当前最新评分函数重跑
+    degraded = fund_df is None
+    seal_scores = score_seal_strength(filtered)
+    if not degraded:
+        money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
+    else:
+        money_scores = pd.Series(0.0, index=filtered.index)
+        raw_money = pd.Series(0.0, index=filtered.index)
+    sector_mom = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
+    sector_res = get_sector_resonance(filtered)
+    tech_scores = score_tech_form(filtered)
+    buyability_scores = score_buyability(filtered)
+
+    money_scores = (money_scores + lhb_bonus.loc[filtered.index] if not lhb_bonus.empty
+                    else money_scores).clip(upper=20.0)
+    sentiment_series = pd.Series(sentiment_score, index=filtered.index)
+
+    import weight_manager
+    weights = weight_manager.load_weights()
+    base_totals = weight_manager.apply_weights(
+        seal_scores, money_scores, sector_res, sector_mom,
+        buyability_scores,
+        tech_scores, history_scores.loc[filtered.index] if hasattr(history_scores, 'loc')
+                                          else pd.Series(2.5, index=filtered.index),
+        sentiment_series, weights=weights)
+    total_scores = base_totals
+
+    top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
+    from scanner import money_str
+
+    stocks = []
+    for rank, idx in enumerate(top_indices, 1):
+        row = filtered.loc[idx]
+        code = str(row.get('代码', '')).strip().zfill(6)
+        name = str(row.get('名称', ''))
+        net = float(raw_money.get(idx, 0))
+        stocks.append({
+            'rank': rank, 'code': code, 'name': name,
+            'total_score': round(float(total_scores[idx]), 1),
+            'base_score': round(float(base_totals[idx]), 1),
+            'seal_score': round(float(seal_scores.get(idx, 0)), 1),
+            'money_score': round(float(money_scores.get(idx, 0)), 1),
+            'sector_mom': round(float(sector_mom.get(idx, 0)), 1),
+            'sector_res': round(float(sector_res.get(idx, 0)), 1),
+            'tech_score': round(float(tech_scores.get(idx, 0)), 1),
+            'history_score': round(float(history_scores.get(idx, 2.5)), 1),
+            'sentiment_score': sentiment_score,
+            'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
+            'net_money': net, 'net_money_str': money_str(net),
+            'turnover': f"{float(row.get('换手率', 0)):.1f}",
+            'seal_time': str(row.get('首次封板时间', ''))[:4],
+            'url': f"https://m.10jqka.com.cn/stock/{code}/",
+        })
+
+    return {
+        'stocks': stocks, 'df': filtered,
+        'seal_scores': seal_scores, 'money_scores': money_scores,
+        'raw_money': raw_money, 'sector_mom': sector_mom,
+        'sector_res': sector_res, 'tech_scores': tech_scores,
+        'history_scores': history_scores, 'buyability_scores': buyability_scores,
+        'sentiment_score': sentiment_score, 'sentiment_level': sentiment_level,
+        'sentiment_detail': sentiment_detail, 'sentiment_ok': sentiment_ok,
+        'date': raw['date'], '_from_cache': True,
     }
 
 
@@ -1015,6 +1164,28 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
         else:
             yield f"data: {json.dumps({'type':'error','text':'无数据'})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+@app.get("/api/scan/limit-up/run")
+async def api_scan_limit_up_run(principal: float = Query(20000, description="本金(元)")):
+    """涨停扫描「运行」— 从缓存的原始数据重跑评分（秒出，不拉取 akshare）"""
+    async def _generate():
+        data = _scan_from_raw_cache(principal=principal)
+        if data is None or not data.get('stocks'):
+            yield f"data: {json.dumps({'type':'error','text':'无缓存数据，请先「拉取」'})}\n\n"
+            return
+        fet = _fetched_at()
+        yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...'})}\n\n"
+        await asyncio.sleep(0.05)
+        yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
+        # 更新每日缓存
+        if data.get('sentiment_ok'):
+            cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],
+                                            data['sentiment_level'], data['date'])
+            from cache import daily_set
+            daily_set(f"limit_up_cards_{int(principal)}", cache_data, force=True)
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 

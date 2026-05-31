@@ -166,15 +166,30 @@ async function runCurrent() {
     await callApi(url, currentPage);
 }
 
-async function refreshCurrent() {
+// 「运行」—— 从缓存的原始数据重跑评分（秒出，不拉 akshare）
+async function runFromCache() {
+    const info = PAGES[currentPage];
+    if (!info) return;
+    savePrincipal();
+    var t = Date.now();
+    var url = '/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + t;
+    _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
+    await callApi(url, currentPage);
+}
+
+// 「拉取」—— 从 akshare 拉取最新原始数据并缓存（耗时 10-15 秒）
+async function fetchFreshData() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
     var t = Date.now();
     var url = info.api + '?refresh=1&_t=' + t + '&principal=' + getPrincipal();
-    _lastUrl[currentPage] = '';  // 强制重新拉取
-    _outputCache[currentPage] = '';  // 清除内存缓存
+    _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
     await callApi(url, currentPage);
+}
+
+async function refreshCurrent() {
+    await fetchFreshData();
 }
 
 async function callApi(apiUrl, pageKey) {
@@ -396,9 +411,11 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
     await new Promise(r => setTimeout(r, 40));  // 给浏览器一点时间渲染初始状态
 
     try {
-        var streamUrl = '/api/scan/limit-up/stream';
+        // 自动检测「运行」vs「拉取」→ 选择对应 SSE 端点
+        var isRun = apiUrl && apiUrl.indexOf('/run') >= 0;
+        var streamUrl = isRun ? '/api/scan/limit-up/run' : '/api/scan/limit-up/stream';
         var params = [];
-        if (apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
+        if (!isRun && apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
         var pMatch = apiUrl && apiUrl.match(/principal=(\d+)/);
         if (pMatch) params.push('principal=' + pMatch[1]);
         params.push('_t=' + Date.now());  // 浏览器缓存打散
@@ -683,6 +700,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('keydown', e => {
         if (e.key === 'Enter' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT')
-            runCurrent();
+            refreshCurrent();
     });
 });

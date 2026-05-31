@@ -97,8 +97,8 @@ window.addEventListener('unhandledrejection', function(e) {
     <!-- 输出区（与操作按钮在同一卡片） -->
     <div class="card">
         <div class="card-header-bar" id="param-bar">
-            <button class="btn" onclick="runCurrent()">▶ 运行</button>
-            <button class="btn btn-orange btn-sm" onclick="refreshCurrent()" title="强制重新拉取数据并更新缓存">🔄 刷新</button>
+            <button class="btn" onclick="runFromCache()" title="从缓存的原始数据重跑评分（秒出，改代码后用这个）">▶ 运行</button>
+            <button class="btn btn-orange" onclick="fetchFreshData()" title="从 akshare 拉取最新原始数据并缓存（耗时 10-15 秒）">📡 拉取</button>
             <span class="principal-group">
                 本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
             </span>
