@@ -184,13 +184,13 @@ async function fetchAllRawData() {
     updateCacheStatus();
 }
 
-// 「运行」—— 全局：所有板块统一走 SSE 流式端点（进度条体验一致）
+// 「运行」—— 所有板块统一走流式端点，非流式 tab 也强制刷新
 async function runCurrentFromCache() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
     var t = Date.now();
-    // 流式端点映射表（全部有进度条）
+    // 流式端点（5个 scan 板块，有进度条）
     var streamMap = {
         'scan-limit':   '/api/scan/limit-up/run',
         'scan-zhaban':  '/api/scan/zhaban/stream',
@@ -198,7 +198,11 @@ async function runCurrentFromCache() {
         'scan-dtqiaoban':'/api/scan/dtqiaoban/stream',
         'scan-sector':  '/api/scan/sector/stream',
     };
-    var url = (streamMap[currentPage] || info.api) + '?principal=' + getPrincipal() + '&_t=' + t;
+    var base = streamMap[currentPage] || info.api;
+    var params = '?principal=' + getPrincipal() + '&_t=' + t;
+    // 非流式端点加 refresh=1 强制拉最新（舆情/龙虎榜/情绪等）
+    if (!streamMap[currentPage]) params += '&refresh=1';
+    var url = base + params;
     _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
     await callApi(url, currentPage);
 }

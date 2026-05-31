@@ -917,7 +917,7 @@ def api_community(top_n: int = Query(10, description="分析前N只股票")):
 
 
 @app.get("/api/indicators/cards")
-def api_indicators_cards():
+def api_indicators_cards(refresh: bool = Query(False, description="强制刷新")):
     from indicators import run_enhanced, calc_seal_ratio, calc_sector_leadership, calc_sector_leader_label
     from scanner import fetch_limit_up_pool, pre_filter
     from datetime import date
@@ -1375,7 +1375,7 @@ def api_community_stream(refresh: bool = Query(False, description="强制刷新"
 
 
 @app.get("/api/community/cards")
-def api_community_cards():
+def api_community_cards(refresh: bool = Query(False, description="强制刷新")):
     """舆情监测 — 结构化卡片数据（含评分解析、行情背景）"""
     from datetime import date
     import community as comm
