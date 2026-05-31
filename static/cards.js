@@ -475,14 +475,17 @@ function renderTrendCards(items) {
         var sig = item.signals || [];
 
         var tags = [];
-        if (chg >= 7) tags.push(['强势续涨','tag-green']);
-        else if (chg >= 5) tags.push(['量价齐升','tag-blue']);
-        else tags.push(['温和上涨','tag-yellow']);
         for (var si = 0; si < sig.length && tags.length < 5; si++) {
             var s = sig[si];
             if (s.indexOf('连板') >= 0) tags.push([s, 'tag-green']);
             else if (s.indexOf('活跃') >= 0 || s.indexOf('健康') >= 0) tags.push([s, 'tag-blue']);
             else tags.push([s, 'tag-gray']);
+        }
+        // signals 为空时用 chg 做默认标签
+        if (!tags.length) {
+            if (chg >= 7) tags.push(['强势续涨','tag-green']);
+            else if (chg >= 5) tags.push(['量价齐升','tag-blue']);
+            else tags.push(['温和上涨','tag-yellow']);
         }
         if (item.industry) tags.push([esc(item.industry), 'tag-blue']);
 
