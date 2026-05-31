@@ -208,13 +208,17 @@ async function refreshCurrent() {
 function updateCacheStatus() {
     var el = document.getElementById('cache-status');
     if (!el) return;
-    fetch('/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + Date.now())
-        .catch(function() {
-            if (el) el.textContent = '服务器离线';
-        });
+    el.textContent = '⏳ 检查中...';
     fetch('/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + Date.now())
-        .then(function() { el.textContent = '✅ 缓存就绪'; el.style.color = '#4ade80'; })
-        .catch(function() { el.textContent = '⚠ 需拉取数据'; el.style.color = '#fbbf24'; });
+        .then(function(r) {
+            // SSE流返回200=有缓存或服务正常
+            el.textContent = '✅ 缓存就绪';
+            el.style.color = '#4ade80';
+        })
+        .catch(function() {
+            el.textContent = '⚠ 需拉取数据';
+            el.style.color = '#fbbf24';
+        });
 }
 
 async function callApi(apiUrl, pageKey) {
@@ -712,6 +716,7 @@ function expandOlderVersions() {
 
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
+    updateCacheStatus();
     loadMarketStatus();
     loadDashboard();
     loadVersion();
