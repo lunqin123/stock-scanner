@@ -39,17 +39,17 @@ function renderStockCards(stocks, data) {
         const st = s.seal_time || '0000';
 
         const bars = [
-            [s.buyability_score || 5, 10],
-            [s.tech_score, 10],
-            [s.sector_mom, 12],
-            [s.money_score, 20],
+            [s.buyability_score || 5, 10, '可买性'],
+            [s.tech_score, 10, '量价结构'],
+            [s.sector_mom, 12, '板块热度'],
+            [s.money_score, 20, '资金驱动'],
         ];
 
         let barsHTML = '';
-        for (const [sc, mx] of bars) {
+        for (const [sc, mx, lb] of bars) {
             const v = (sc != null ? sc : 0);
             const pct = Math.min(100, (v / mx) * 100);
-            barsHTML += `<div class="bar-row"><span class="bar-label">${barLabel(mx)}</span><div class="bar-track"><div class="bar-fill ${barColor(pct)}" style="width:${pct}%"></div></div><span class="bar-val">${sc}</span></div>`;
+            barsHTML += `<div class="bar-row"><span class="bar-label">${lb || barLabel(mx)}</span><div class="bar-track"><div class="bar-fill ${barColor(pct)}" style="width:${pct}%"></div></div><span class="bar-val">${sc}</span></div>`;
         }
 
         const sentScore = s.sentiment_score != null ? s.sentiment_score : 5;
