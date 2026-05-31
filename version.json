@@ -1,13 +1,21 @@
 {
-  "version": "1.8.4",
+  "version": "1.8.5",
   "date": "2026-05-31",
   "changes": [
-    "修复非涨停板块「运行」按钮报错：SSE流被当JSON解析",
-    "runCurrentFromCache 按 tab 适配路由：涨停走 /run，其他走 cards API refresh=1",
-    "拉取后自动切到涨停扫描 tab 看结果",
-    "callApi SSE 检测修复：fetch-all 和 /run 正确走流式加载"
+    "修复 fetchAllRawData const重赋值→TypeError崩溃（拉取按钮完全不可用）",
+    "修复 loadCardView空数据提前return进度条卡死",
+    "修复拉取时 location.hash 触发额外重复请求",
+    "tab交互统一：所有tab「运行」正确路由到对应API"
   ],
   "history": [
+    {
+      "version": "1.8.4",
+      "date": "2026-05-31",
+      "changes": [
+        "修复非涨停板块「运行」报错：SSE流当JSON解析",
+        "runCurrentFromCache tab适配：涨停/run，其他cards API"
+      ]
+    },
     {
       "version": "1.8.3",
       "date": "2026-05-31",
