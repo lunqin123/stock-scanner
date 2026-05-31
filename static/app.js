@@ -172,17 +172,25 @@ async function fetchAllRawData() {
     var t = Date.now();
     var url = '/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + t;
     _lastUrl = {}; _outputCache = {};  // 清空所有缓存
-    var bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
-    bar.style.display = 'block'; fill.style.width = '3%'; txt.textContent = '正在拉取全部数据...';
-    await callApi(url, currentPage);
+    // 拉取结果总是显示在涨停扫描页
+    if (currentPage !== 'scan-limit') location.hash = 'scan-limit';
+    await callApi(url, 'scan-limit');
     updateCacheStatus();
 }
 
 // 「运行」—— 全局：从缓存重跑当前板块评分（秒出）
 async function runCurrentFromCache() {
+    const info = PAGES[currentPage];
+    if (!info) return;
     savePrincipal();
     var t = Date.now();
-    var url = '/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + t;
+    // 涨停扫描有专用的 /run 端点（从原始缓存重跑），其他板块用 refresh=1 强制拉取
+    var url;
+    if (currentPage === 'scan-limit') {
+        url = '/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + t;
+    } else {
+        url = (info.api || info.textApi) + '?refresh=1&principal=' + getPrincipal() + '&_t=' + t;
+    }
     _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
     await callApi(url, currentPage);
 }
@@ -209,7 +217,12 @@ async function callApi(apiUrl, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     _lastUrl[pageKey] = apiUrl || '';
 
-    if (info.textApi) {
+    // SSE 流式端点 → 走流式加载（涨停 scan-limit + 全局 fetch-all）
+    var isStream = apiUrl && (apiUrl.indexOf('/run') >= 0 || apiUrl.indexOf('fetch-all') >= 0 || (apiUrl.indexOf('/stream') >= 0 && pageKey === 'scan-limit'));
+
+    if (isStream) {
+        await loadCardViewStream(output, pageKey, apiUrl);
+    } else if (info.textApi) {
         await loadCardView(output, pageKey, apiUrl);
     } else if (info.streamApi) {
         await loadTextViewStream(output, pageKey, apiUrl);
