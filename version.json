@@ -1,11 +1,20 @@
 {
-  "version": "1.8.6",
+  "version": "1.8.7",
   "date": "2026-05-31",
   "changes": [
-    "修复缓存状态指示器一直「加载中」：页面加载时未调 updateCacheStatus",
-    "updateCacheStatus 精简：只查 /run 端点，不再触发完整 fetch-all"
+    "全部板块统一 SSE 流式进度条体验（炸板/趋势/翘板/板块也有了）",
+    "新增 4 个流式端点：/api/scan/{zhaban,trend,dtqiaoban,sector}/stream",
+    "loadCardViewStream 按 tab 类型渲染对应卡片",
+    "runCurrentFromCache 全部板块走流式"
   ],
   "history": [
+    {
+      "version": "1.8.6",
+      "date": "2026-05-31",
+      "changes": [
+        "修复缓存状态指示器一直「加载中」"
+      ]
+    },
     {
       "version": "1.8.5",
       "date": "2026-05-31",
