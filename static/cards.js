@@ -227,10 +227,25 @@ function renderSectorCards(items) {
         else if (lc >= 3) tags.push(['板块活跃','tag-blue']);
         if (dc >= 2) tags.push(['有跌停','tag-red']);
 
-        const stockStr = (item.stocks || []).map(s =>
-            `<a href="https://stockpage.10jqka.com.cn/${s.code}/" target="_blank" class="sector-stock-link" onclick="event.stopPropagation()">${esc(s.name)} <small>${s.code}</small></a>`
-        ).join(' ');
-        const more = (item.limit_count || 0) > (item.stocks || []).length;
+        // 涨停成分股（可展开，防嵌套<a>）
+        var stockListHtml = '';
+        var stocks = item.stocks || [];
+        if (stocks.length) {
+            var sid = 'ss-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,5);
+            stockListHtml = '<div class="card-stock-list" style="padding:8px 0 2px 0;display:flex;flex-wrap:wrap;align-items:center;gap:4px">';
+            stockListHtml += '<span class="tag tag-blue" style="font-size:11px;margin:0 4px 0 0;display:inline-flex;align-items:center;height:22px;line-height:1">成分股</span>';
+            for (var si = 0; si < stocks.length; si++) {
+                var stk = stocks[si];
+                var hid = (si >= 3) ? ' id="' + sid + '-' + si + '" style="display:none"' : '';
+                stockListHtml += '<span' + hid + ' class="sector-stock-pill" onclick="event.stopPropagation();event.preventDefault();window.open(\'https://stockpage.10jqka.com.cn/' + esc(stk.code) + '/\',\'_blank\')">' + esc(stk.name) + '<em>' + esc(stk.code) + '</em></span>';
+            }
+            if (stocks.length > 3) {
+                var nMore = stocks.length - 3;
+                stockListHtml += '<span id="' + sid + '-btn" class="sector-expand-btn" onclick="event.stopPropagation();event.preventDefault();this.style.display=\'none\';var e=document.getElementById(\'' + sid + '-fold\');if(e)e.style.display=\'\';for(var j=3;j<' + stocks.length + ';j++){var el=document.getElementById(\'' + sid + '-\'+j);if(el)el.style.display=\'\'}">+展开' + nMore + '只</span>';
+                stockListHtml += '<span id="' + sid + '-fold" class="sector-fold-btn" onclick="event.stopPropagation();event.preventDefault();this.style.display=\'none\';var b=document.getElementById(\'' + sid + '-btn\');if(b)b.style.display=\'\';for(var j=3;j<' + stocks.length + ';j++){var el=document.getElementById(\'' + sid + '-\'+j);if(el)el.style.display=\'none\'}">收起</span>';
+            }
+            stockListHtml += '</div>';
+        }
 
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
@@ -250,7 +265,7 @@ function renderSectorCards(items) {
             total > 0 ? '<div class="info-row"><span class="label">赚钱效应</span><span class="value" style="color:' + (eff>=70?RING_COLORS.high:RING_COLORS.poor) + '">' + (eff>=80?'强':eff>=60?'中':'弱') + '</span></div>' : '',
             '</div></div>',
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
-            stockStr ? '<div class="card-analysis" style="border-top:none;padding-top:4px;margin-top:2px;gap:4px;align-items:center"><span class="tag tag-blue" style="font-size:11px">涨停成分</span> ' + stockStr + (more ? ' <span style="font-size:11px;color:var(--text-muted)">…</span>' : '') + '</div>' : '',
+            stockListHtml,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );

@@ -543,7 +543,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
         stock_list = []
         if ind_col:
             sector_stocks = limit_df[limit_df[ind_col] == s['industry']]
-            for _, r in sector_stocks.head(6).iterrows():
+            for _, r in sector_stocks.head(20).iterrows():
                 stock_list.append({
                     'code': str(r.iloc[1]).strip().zfill(6),
                     'name': str(r.iloc[2]),

@@ -906,4 +906,22 @@ body {
     .sr-ring { width: 28px; height: 28px; }
     .sr-inner { width: 20px; height: 20px; font-size: 8px; }
 }
+/* ─── 板块成分股标签 ─── */
+.sector-stock-pill {
+    display:inline-flex;align-items:center;gap:3px;
+    cursor:pointer;font-size:12px;color:var(--text-secondary);
+    background:rgba(79,140,255,0.07);border:1px solid rgba(79,140,255,0.15);
+    border-radius:12px;padding:3px 8px;white-space:nowrap;
+    transition:background .15s,border-color .15s;
+}
+.sector-stock-pill:hover { background:rgba(79,140,255,0.14); border-color:rgba(79,140,255,0.3); }
+.sector-stock-pill em { font-style:normal;font-size:10px;color:var(--text-muted);margin-left:1px; }
+.sector-expand-btn,.sector-fold-btn {
+    cursor:pointer;font-size:11px;padding:3px 6px;border-radius:8px;
+    transition:background .15s;
+}
+.sector-expand-btn { color:var(--accent,#4f8cff); }
+.sector-expand-btn:hover { background:rgba(79,140,255,0.08); }
+.sector-fold-btn { color:var(--text-muted); }
+.sector-fold-btn:hover { background:rgba(255,255,255,0.05); }
 
