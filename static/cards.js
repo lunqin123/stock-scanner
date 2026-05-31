@@ -134,16 +134,16 @@ function renderCommunityCards(items) {
         if (ctx.consecutive >= 2) tags.push([ctx.consecutive + '连板','tag-green']);
         if (ctx.industry) tags.push([esc(ctx.industry),'tag-blue']);
 
-        // 新闻项
+        // 新闻项（不能嵌套 <a>，改用 onclick 跳转）
         var newsHtml = '';
         if (item.news && item.news.length) {
             newsHtml = '<div class="card-analysis" style="border-top:none;padding-top:4px;gap:3px;flex-direction:column">';
             for (var ni = 0; ni < item.news.length; ni++) {
                 var n = item.news[ni];
                 var nurl = n.url || 'https://www.10jqka.com.cn/#/search/' + encodeURIComponent(n.title);
-                newsHtml += '<a href="' + esc(nurl) + '" target="_blank" style="font-size:12px;color:var(--text-secondary);text-decoration:none;padding:2px 0" onclick="event.stopPropagation()">';
+                newsHtml += '<span onclick="event.stopPropagation();event.preventDefault();window.open(\'' + esc(nurl) + '\',\'_blank\')" style="cursor:pointer;font-size:12px;color:var(--text-secondary);padding:2px 0">';
                 if (n.source) newsHtml += '<span style="color:var(--text-muted);font-size:10px">[' + esc(n.source) + ']</span> ';
-                newsHtml += esc(n.title.length > 50 ? n.title.slice(0,50) + '...' : n.title) + '</a>';
+                newsHtml += esc(n.title.length > 50 ? n.title.slice(0,50) + '...' : n.title) + '</span>';
             }
             newsHtml += '</div>';
         }
