@@ -1,13 +1,20 @@
 {
-  "version": "1.8.5",
+  "version": "1.8.6",
   "date": "2026-05-31",
   "changes": [
-    "修复 fetchAllRawData const重赋值→TypeError崩溃（拉取按钮完全不可用）",
-    "修复 loadCardView空数据提前return进度条卡死",
-    "修复拉取时 location.hash 触发额外重复请求",
-    "tab交互统一：所有tab「运行」正确路由到对应API"
+    "修复缓存状态指示器一直「加载中」：页面加载时未调 updateCacheStatus",
+    "updateCacheStatus 精简：只查 /run 端点，不再触发完整 fetch-all"
   ],
   "history": [
+    {
+      "version": "1.8.5",
+      "date": "2026-05-31",
+      "changes": [
+        "修复 fetchAllRawData const重赋值→TypeError崩溃",
+        "修复 loadCardView空数据进度条卡死",
+        "修复拉取时 location.hash 重复请求"
+      ]
+    },
     {
       "version": "1.8.4",
       "date": "2026-05-31",
