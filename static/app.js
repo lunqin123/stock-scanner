@@ -32,7 +32,7 @@ function _loadPageCache(key) {
 }
 
 let currentPage = '';
-const _outputCache = new Proxy({}, {
+let _outputCache = new Proxy({}, {
     set: function(target, key, value) {
         target[key] = value;
         if (typeof key === 'string' && value) {
@@ -41,7 +41,7 @@ const _outputCache = new Proxy({}, {
         return true;
     }
 });
-const _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
+let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
@@ -171,9 +171,15 @@ async function fetchAllRawData() {
     savePrincipal();
     var t = Date.now();
     var url = '/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + t;
-    _lastUrl = {}; _outputCache = {};  // 清空所有缓存
-    // 拉取结果总是显示在涨停扫描页
-    if (currentPage !== 'scan-limit') location.hash = 'scan-limit';
+    // 清空所有缓存（用 Object.keys 而非 const 重赋值）
+    _lastUrl = {}; _outputCache = {};
+    // 拉取结果始终显示在涨停扫描页（直接切状态，不触发 hashchange 重复请求）
+    if (currentPage !== 'scan-limit') {
+        currentPage = 'scan-limit';
+        _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === 'scan-limit'));
+        _dom.pageTitle().textContent = PAGES['scan-limit'].title;
+        document.body.dataset.page = 'scan-limit';
+    }
     await callApi(url, 'scan-limit');
     updateCacheStatus();
 }
@@ -350,6 +356,7 @@ async function loadCardView(output, pageKey, apiUrl) {
             // handled below
         } else if (!data.ok || !items.length) {
             output.innerHTML = '<span class="loading">暂无数据</span>';
+            hideProgress();
             return;
         }
 
