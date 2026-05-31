@@ -47,7 +47,8 @@ function renderStockCards(stocks, data) {
 
         let barsHTML = '';
         for (const [sc, mx] of bars) {
-            const pct = Math.min(100, (sc / mx) * 100);
+            const v = (sc != null ? sc : 0);
+            const pct = Math.min(100, (v / mx) * 100);
             barsHTML += `<div class="bar-row"><span class="bar-label">${barLabel(mx)}</span><div class="bar-track"><div class="bar-fill ${barColor(pct)}" style="width:${pct}%"></div></div><span class="bar-val">${sc}</span></div>`;
         }
 
@@ -63,7 +64,7 @@ function renderStockCards(stocks, data) {
             `<span class="card-rank">#${s.rank}</span>`,
             `<span class="card-name">${esc(s.name)}</span>`,
             `<span class="card-code">${s.code}</span>`,
-            `<span class="copy-btn" onclick="copyCode('${s.code}','${esc(s.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
+            `<span class="copy-btn" onclick="copyCode('${esc(s.code)}','${esc(s.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
             scoreRingHTML(s.total_score),
             `</div>`,
             `<div class="card-body"><div class="card-bars">${barsHTML}</div>`,

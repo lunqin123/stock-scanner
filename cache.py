@@ -60,11 +60,17 @@ def daily_get(key: str):
     path = _daily_path(key)
     try:
         if os.path.exists(path):
-            # 检查缓存是否过期：交易日开盘前写入的缓存视为过期
             now = datetime.now(_CST)
-            if _is_trading_day(now.strftime("%Y%m%d")):
-                mtime = os.path.getmtime(path)
-                mtime_dt = datetime.fromtimestamp(mtime, _CST)
+            mtime = os.path.getmtime(path)
+            mtime_dt = datetime.fromtimestamp(mtime, _CST)
+            # 缓存文件是前一个交易日创建的 → 过期（如周五缓存周一看）
+            today_t = _trading_date()
+            mtime_file_date = mtime_dt.strftime("%Y-%m-%d")
+            if mtime_file_date < today_t:
+                os.remove(path)
+                return None
+            # 今日但开盘前（9:30前）写入的缓存视为过期
+            if _is_trading_day(now.strftime("%Y%m%d")) and mtime_file_date == today_t:
                 if mtime_dt.hour < 9 or (mtime_dt.hour == 9 and mtime_dt.minute < 30):
                     os.remove(path)
                     return None

@@ -2260,6 +2260,10 @@ def main():
         history_scores, _ = res["history"]
     else:
         history_scores = pd.Series(2.5, index=filtered.index)
+    if res.get("community"):
+        community_scores = res["community"]
+    else:
+        community_scores = None
 
     # 龙虎榜加分并入资金质量（仅加分不扣分，满分20）
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
@@ -2289,7 +2293,7 @@ def main():
 
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]

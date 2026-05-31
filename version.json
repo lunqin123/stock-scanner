@@ -1,11 +1,16 @@
 {
-  "version": "1.8.7",
+  "version": "1.9.0",
   "date": "2026-05-31",
   "changes": [
-    "全部板块统一 SSE 流式进度条体验（炸板/趋势/翘板/板块也有了）",
-    "新增 4 个流式端点：/api/scan/{zhaban,trend,dtqiaoban,sector}/stream",
-    "loadCardViewStream 按 tab 类型渲染对应卡片",
-    "runCurrentFromCache 全部板块走流式"
+    "审计修复：4个致命/高危bug + 4个中低危bug",
+    "修复 loadCardViewStream 硬编码URL→非涨停tab运行走错误端点",
+    "修复 scanner.py main() 中 df/community_scores 未定义→CLI崩溃",
+    "修复 daily_get 周五缓存周一仍返回→周末数据过期",
+    "修复 apply_weights 权重调整后归一化分母漂移→分数膨胀",
+    "修复 _mode_stream_endpoint 不捕获stderr→无进度条",
+    "修复 renderStockCards XSS + NaN% 进度条",
+    "_CACHE_VER 3→4 清除旧缓存",
+    "minor: 评分逻辑变化（权重归一化 fix）→ version bump to 1.9"
   ],
   "history": [
     {

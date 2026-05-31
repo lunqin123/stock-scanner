@@ -15,7 +15,7 @@ const _dom = {
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 // 版本化缓存：每次大版本更新 +1，旧缓存自动失效
-const _CACHE_VER = '3';
+const _CACHE_VER = '4';
 
 function _savePageCache(key, html, url) {
     try {
@@ -452,18 +452,18 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
     await new Promise(r => setTimeout(r, 40));  // 给浏览器一点时间渲染初始状态
 
     try {
-        // 自动检测「运行」vs「全局拉取」→ 选择对应 SSE 端点
-        var isRun = apiUrl && apiUrl.indexOf('/run') >= 0;
-        var isFetchAll = apiUrl && apiUrl.indexOf('fetch-all') >= 0;
-        var streamUrl = isFetchAll ? '/api/scan/fetch-all' :
-                        isRun ? '/api/scan/limit-up/run' :
-                        '/api/scan/limit-up/stream';
+        // 从 apiUrl 提取基础路径和参数（不再硬编码端点）
+        var qIdx = (apiUrl || '').indexOf('?');
+        var streamUrl = qIdx >= 0 ? apiUrl.substring(0, qIdx) : (apiUrl || '/api/scan/limit-up/stream');
         var params = [];
-        if (!isRun && !isFetchAll && apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
-        var pMatch = apiUrl && apiUrl.match(/principal=(\d+)/);
-        if (pMatch) params.push('principal=' + pMatch[1]);
-        params.push('_t=' + Date.now());  // 浏览器缓存打散
-        if (params.length) streamUrl += '?' + params.join('&');
+        if (qIdx >= 0) {
+            var qs = apiUrl.substring(qIdx + 1);
+            qs.split('&').forEach(function(p) {
+                var kv = p.split('=');
+                if (kv[0] !== '_t') params.push(p);  // 去掉旧时间戳
+            });
+        }
+        params.push('_t=' + Date.now());  // 新时间戳防缓存
         const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();

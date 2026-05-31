@@ -139,6 +139,8 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
     w = weights if weights else DEFAULT_WEIGHTS
 
     # 不含情绪的基础加权得分
+    non_sentiment = ['seal', 'money', 'sector_res', 'sector_mom', 'tech', 'history', 'buyability']
+    actual_sum = sum(w[k] for k in non_sentiment)
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
                 sector_res * (w['sector_res'] / _RAW_MAX['sector_res']) +
@@ -146,7 +148,7 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
                 buyability_scores * (w['buyability'] / _RAW_MAX['buyability']))
-    base_scores = weighted / (TOTAL_WEIGHT - w['sentiment']) * 100
+    base_scores = weighted / max(1, actual_sum) * 100
 
     # 情绪乘法调节 (0.7 ~ 1.3)
     if isinstance(sentiment_score, pd.Series):

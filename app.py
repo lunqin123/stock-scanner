@@ -1530,21 +1530,41 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
     async def _gen():
         q = queue.Queue()
         result = {}
+        # 捕获 stderr 输出作为进度推送
+        class _Cap:
+            def __init__(self): self._b = ""
+            def write(self, t):
+                self._b += t
+                while '\n' in self._b:
+                    idx = self._b.index('\n'); line = self._b[:idx].strip('\r').strip()
+                    self._b = self._b[idx+1:]
+                    if line: q.put(("progress", line))
+            def flush(self): pass
+            def reconfigure(self, **kw): pass
+        cap = _Cap()
         def _run():
+            import sys
+            old = sys.stderr
             try:
+                sys.stderr = cap
                 items, extra = run_fn()
                 result['items'] = items
                 result.update(extra or {})
             except Exception as e:
                 result['error'] = str(e)
             finally:
+                sys.stderr = old
                 q.put(("done", None))
         import threading
         threading.Thread(target=_run, daemon=True).start()
         while True:
             try: typ, val = q.get(timeout=0.2)
             except queue.Empty: continue
-            if typ == "done": break
+            if typ == "progress":
+                yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+                await asyncio.sleep(0.03)
+            elif typ == "done":
+                break
         if result.get('error'):
             yield f"data: {json.dumps({'type':'error','text':result['error']})}\n\n"
         else:
