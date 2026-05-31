@@ -184,19 +184,21 @@ async function fetchAllRawData() {
     updateCacheStatus();
 }
 
-// 「运行」—— 全局：从缓存重跑当前板块评分（秒出）
+// 「运行」—— 全局：所有板块统一走 SSE 流式端点（进度条体验一致）
 async function runCurrentFromCache() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
     var t = Date.now();
-    // 涨停扫描有专用的 /run 端点（从原始缓存重跑），其他板块用 refresh=1 强制拉取
-    var url;
-    if (currentPage === 'scan-limit') {
-        url = '/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + t;
-    } else {
-        url = (info.api || info.textApi) + '?refresh=1&principal=' + getPrincipal() + '&_t=' + t;
-    }
+    // 流式端点映射表（全部有进度条）
+    var streamMap = {
+        'scan-limit':   '/api/scan/limit-up/run',
+        'scan-zhaban':  '/api/scan/zhaban/stream',
+        'scan-trend':   '/api/scan/trend/stream',
+        'scan-dtqiaoban':'/api/scan/dtqiaoban/stream',
+        'scan-sector':  '/api/scan/sector/stream',
+    };
+    var url = (streamMap[currentPage] || info.api) + '?principal=' + getPrincipal() + '&_t=' + t;
     _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
     await callApi(url, currentPage);
 }
@@ -227,8 +229,8 @@ async function callApi(apiUrl, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     _lastUrl[pageKey] = apiUrl || '';
 
-    // SSE 流式端点 → 走流式加载（涨停 scan-limit + 全局 fetch-all）
-    var isStream = apiUrl && (apiUrl.indexOf('/run') >= 0 || apiUrl.indexOf('fetch-all') >= 0 || (apiUrl.indexOf('/stream') >= 0 && pageKey === 'scan-limit'));
+    // SSE 流式端点 → 走卡片流式加载（scan 板块统一）
+    var isStream = apiUrl && (apiUrl.indexOf('/run') >= 0 || apiUrl.indexOf('fetch-all') >= 0 || (apiUrl.indexOf('/scan/') >= 0 && apiUrl.indexOf('/stream') >= 0));
 
     if (isStream) {
         await loadCardViewStream(output, pageKey, apiUrl);
@@ -500,7 +502,19 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                                 html += '</div>';
                             }
                             if (fet) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(fet)}</div>`;
-                            html += renderStockCards(msg.stocks, msg);
+                            // 按 tab 类型渲染对应卡片
+                            var items = msg.stocks || msg.items || [];
+                            if (pageKey === 'scan-zhaban') {
+                                html += renderZhabanCards(items);
+                            } else if (pageKey === 'scan-trend') {
+                                html += renderTrendCards(items);
+                            } else if (pageKey === 'scan-dtqiaoban') {
+                                html += renderDtqiaobanCards(items);
+                            } else if (pageKey === 'scan-sector') {
+                                html += renderSectorCards(items);
+                            } else {
+                                html += renderStockCards(msg.stocks || [], msg);
+                            }
 
                             // 用 requestAnimationFrame + 微任务分离 DOM 操作和渲染
                             requestAnimationFrame(() => {

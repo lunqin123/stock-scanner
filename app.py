@@ -1514,6 +1514,168 @@ async def api_sentiment_stream(refresh: bool = Query(False, description="强制�
     return StreamingResponse(_cached_stream(_stream_scan_generic(run, lambda d: d, on_success=lambda d: daily_set("sentiment_cards", d, force=refresh))), media_type="text/event-stream")
 
 
+# ═══ 各板块流式端点（炸板/趋势/跌停/板块 — 统一进度条体验） ═══
+
+def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
+    """通用模式流式端点工厂。run_fn 执行扫描，stderr 输出实时推送为进度。"""
+    if not refresh:
+        cached = daily_get(cache_key)
+        if cached:
+            async def _cached():
+                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存...'})}\n\n"
+                await asyncio.sleep(0.03)
+                yield f"data: {json.dumps({'type':'complete', 'items': cached.get('items',[]), 'fetched_at': cached.get('fetched_at','')})}\n\n"
+            return StreamingResponse(_cached(), media_type="text/event-stream")
+
+    async def _gen():
+        q = queue.Queue()
+        result = {}
+        def _run():
+            try:
+                items, extra = run_fn()
+                result['items'] = items
+                result.update(extra or {})
+            except Exception as e:
+                result['error'] = str(e)
+            finally:
+                q.put(("done", None))
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+        while True:
+            try: typ, val = q.get(timeout=0.2)
+            except queue.Empty: continue
+            if typ == "done": break
+        if result.get('error'):
+            yield f"data: {json.dumps({'type':'error','text':result['error']})}\n\n"
+        else:
+            fet = _fetched_at()
+            complete = complete_fn(result, fet)
+            if complete:
+                from cache import daily_set
+                daily_set(cache_key, complete, force=True)
+            yield f"data: {json.dumps({'type':'complete', 'items': result.get('items',[]), 'fetched_at': fet})}\n\n"
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@app.get("/api/scan/zhaban/stream")
+async def api_zhaban_stream(refresh: bool = Query(False)):
+    today = _today_trading()
+    def run():
+        print("  [炸板] 拉取数据...", file=sys.stderr)
+        df = api_zhaban_cards(refresh=True).body  if False else None
+        import akshare as ak; import pandas as pd
+        zb = ak.stock_zt_pool_zbgc_em(date=today)
+        if zb.empty: return [], {}
+        df = zb.copy()
+        from scanner import filter_non_main_board
+        df = filter_non_main_board(df)
+        if '流通市值' in df.columns: df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+        price_col = df.columns[4]; df = df[df[price_col].astype(float) <= 60]
+        if df.empty: return [], {}
+        print(f"  [炸板] 共 {len(df)} 只, 评分中...", file=sys.stderr)
+        from scanner import score_zhaban_data
+        scored = score_zhaban_data(df, today)
+        items = []
+        for _, row in scored.iterrows():
+            code = str(row.iloc[1]).strip().zfill(6)
+            name = str(row.iloc[2])
+            seal_time = str(row.get('首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11], ''))[:4]
+            total = float(row.get('总分', 0))
+            items.append({'code': code, 'name': name, 'score': int(total),
+                          'seal_time': seal_time, 'turnover': round(float(row.get('换手率', scored.columns[9] if len(scored.columns)>9 else 0) or 0),1),
+                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+        return items[:10], {}
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream', refresh)
+
+
+@app.get("/api/scan/trend/stream")
+async def api_trend_stream(refresh: bool = Query(False)):
+    today = _today_trading()
+    def run():
+        print("  [趋势] 拉取昨日涨停数据...", file=sys.stderr)
+        import akshare as ak; import pandas as pd
+        from datetime import datetime, timedelta
+        prev = pd.DataFrame()
+        for attempt in [today, None]:
+            try:
+                if attempt is None:
+                    wd = datetime.now().weekday()
+                    db = 3 if wd == 0 else (2 if wd == 6 else 1)
+                    attempt = (datetime.now() - timedelta(days=db)).strftime("%Y%m%d")
+                prev = ak.stock_zt_pool_previous_em(date=attempt)
+                if not prev.empty: break
+            except: continue
+        if prev.empty: return [], {}
+        print(f"  [趋势] 共 {len(prev)} 只, 过滤评分中...", file=sys.stderr)
+        from scanner import filter_non_main_board, money_str
+        df = filter_non_main_board(prev)
+        chg_col = prev.columns[3]; name_col = prev.columns[2]; code_col = prev.columns[1]
+        df['涨幅'] = df[chg_col].astype(float)
+        trend = df[(df['涨幅'] >= 3) & (df['涨幅'] < 9)].sort_values('涨幅', ascending=False).head(10)
+        items = []
+        for _, row in trend.iterrows():
+            code = str(row[code_col]).strip().zfill(6)
+            items.append({'code': code, 'name': str(row[name_col]), 'change_pct': round(float(row['涨幅']),1),
+                          'url': f"https://m.10jqka.com.cn/stock/{code}/",
+                          'turnover': round(float(row.iloc[9]) if pd.notna(row.iloc[9]) else 0, 1)})
+        return items, {}
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
+
+
+@app.get("/api/scan/dtqiaoban/stream")
+async def api_dtqiaoban_stream(refresh: bool = Query(False)):
+    today = _today_trading()
+    def run():
+        print("  [翘板] 拉取跌停数据...", file=sys.stderr)
+        import akshare as ak; import pandas as pd
+        dt = ak.stock_zt_pool_dtgc_em(date=today)
+        if dt.empty: return [], {}
+        print(f"  [翘板] 共 {len(dt)} 只, 评分中...", file=sys.stderr)
+        from scanner import filter_non_main_board, score_dtqiaoban_data
+        df = filter_non_main_board(dt)
+        if len(df.columns) > 6 and '流通市值' in df.columns:
+            df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+        elif len(df.columns) > 6:
+            df = df[df.iloc[:, 6].astype(float) <= 200 * 1e8]
+        if df.empty: return [], {}
+        scored = score_dtqiaoban_data(df)
+        items = []
+        for _, row in scored.iterrows():
+            code = str(row.iloc[1]).strip().zfill(6)
+            items.append({'code': code, 'name': str(row.iloc[2]),
+                          'score': int(row.get('翘板评分', 0)),
+                          'change': float(row.iloc[3]) if pd.notna(row.iloc[3]) else -10,
+                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+        return items[:10], {}
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream', refresh)
+
+
+@app.get("/api/scan/sector/stream")
+async def api_sector_stream(refresh: bool = Query(False)):
+    today = _today_trading()
+    def run():
+        print("  [板块] 拉取涨停+炸板+跌停池...", file=sys.stderr)
+        from scanner import score_sector_data
+        import akshare as ak; import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        pools = {}
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            futs = {ex.submit(ak.stock_zt_pool_em, date=today): 'limit',
+                    ex.submit(ak.stock_zt_pool_zbgc_em, date=today): 'zhaban',
+                    ex.submit(ak.stock_zt_pool_dtgc_em, date=today): 'dieting'}
+            for f in as_completed(futs):
+                try: pools[futs[f]] = f.result() or pd.DataFrame()
+                except: pools[futs[f]] = pd.DataFrame()
+        print(f"  [板块] 涨停{len(pools.get('limit',pd.DataFrame()))} 炸板{len(pools.get('zhaban',pd.DataFrame()))} 跌停{len(pools.get('dieting',pd.DataFrame()))}, 计算中...", file=sys.stderr)
+        stats = score_sector_data(pools.get('limit',pd.DataFrame()), pools.get('zhaban',pd.DataFrame()), pools.get('dieting',pd.DataFrame()), top_n=15)
+        items = []
+        for s in stats:
+            items.append({'name': s['industry'], 'limit_count': s['limit_cnt'],
+                          'zhaban_count': s['zhaban_cnt'], 'dieting_count': s['dieting_cnt'],
+                          'score': min(12, 4 + s['limit_cnt'] * 2), 'efficiency': s['seal_rate'],
+                          'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}"})
+        return items, {}
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream', refresh)
 
 
 def _comment_score_note(score):
