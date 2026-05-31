@@ -166,10 +166,20 @@ async function runCurrent() {
     await callApi(url, currentPage);
 }
 
-// 「运行」—— 从缓存的原始数据重跑评分（秒出，不拉 akshare）
-async function runFromCache() {
-    const info = PAGES[currentPage];
-    if (!info) return;
+// 「拉取」—— 全局：一次性拉取所有板块原始数据并缓存
+async function fetchAllRawData() {
+    savePrincipal();
+    var t = Date.now();
+    var url = '/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + t;
+    _lastUrl = {}; _outputCache = {};  // 清空所有缓存
+    var bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
+    bar.style.display = 'block'; fill.style.width = '3%'; txt.textContent = '正在拉取全部数据...';
+    await callApi(url, currentPage);
+    updateCacheStatus();
+}
+
+// 「运行」—— 全局：从缓存重跑当前板块评分（秒出）
+async function runCurrentFromCache() {
     savePrincipal();
     var t = Date.now();
     var url = '/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + t;
@@ -177,19 +187,20 @@ async function runFromCache() {
     await callApi(url, currentPage);
 }
 
-// 「拉取」—— 从 akshare 拉取最新原始数据并缓存（耗时 10-15 秒）
-async function fetchFreshData() {
-    const info = PAGES[currentPage];
-    if (!info) return;
-    savePrincipal();
-    var t = Date.now();
-    var url = info.api + '?refresh=1&_t=' + t + '&principal=' + getPrincipal();
-    _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
-    await callApi(url, currentPage);
+async function refreshCurrent() {
+    await fetchAllRawData();
 }
 
-async function refreshCurrent() {
-    await fetchFreshData();
+function updateCacheStatus() {
+    var el = document.getElementById('cache-status');
+    if (!el) return;
+    fetch('/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + Date.now())
+        .catch(function() {
+            if (el) el.textContent = '服务器离线';
+        });
+    fetch('/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + Date.now())
+        .then(function() { el.textContent = '✅ 缓存就绪'; el.style.color = '#4ade80'; })
+        .catch(function() { el.textContent = '⚠ 需拉取数据'; el.style.color = '#fbbf24'; });
 }
 
 async function callApi(apiUrl, pageKey) {
@@ -411,11 +422,14 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
     await new Promise(r => setTimeout(r, 40));  // 给浏览器一点时间渲染初始状态
 
     try {
-        // 自动检测「运行」vs「拉取」→ 选择对应 SSE 端点
+        // 自动检测「运行」vs「全局拉取」→ 选择对应 SSE 端点
         var isRun = apiUrl && apiUrl.indexOf('/run') >= 0;
-        var streamUrl = isRun ? '/api/scan/limit-up/run' : '/api/scan/limit-up/stream';
+        var isFetchAll = apiUrl && apiUrl.indexOf('fetch-all') >= 0;
+        var streamUrl = isFetchAll ? '/api/scan/fetch-all' :
+                        isRun ? '/api/scan/limit-up/run' :
+                        '/api/scan/limit-up/stream';
         var params = [];
-        if (!isRun && apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
+        if (!isRun && !isFetchAll && apiUrl && apiUrl.indexOf('refresh=1') >= 0) params.push('refresh=1');
         var pMatch = apiUrl && apiUrl.match(/principal=(\d+)/);
         if (pMatch) params.push('principal=' + pMatch[1]);
         params.push('_t=' + Date.now());  // 浏览器缓存打散

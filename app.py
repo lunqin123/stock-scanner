@@ -93,8 +93,9 @@ _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tm
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
 def _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level, sentiment_detail,
-                    sentiment_ok, history_scores, lhb_bonus, today_str):
-    """保存原始扫描数据（过滤后的 DataFrame + 资金流 + 情绪等），供「运行」读取"""
+                    sentiment_ok, history_scores, lhb_bonus, today_str,
+                    **extra):
+    """保存原始扫描数据，供「运行」读取。extra 可包含 limit_df, zhaban_df, dieting_df 等。"""
     try:
         import pickle as _pk
         os.makedirs(os.path.dirname(_RAW_CACHE_PATH), exist_ok=True)
@@ -110,6 +111,7 @@ def _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level, sentime
             'date': today_str,
             'fetched_at': _fetched_at(),
         }
+        data.update(extra)
         with open(_RAW_CACHE_PATH, 'wb') as f:
             _pk.dump(data, f)
         print("  [缓存] 原始数据已保存", file=sys.stderr)
@@ -1164,6 +1166,83 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
         else:
             yield f"data: {json.dumps({'type':'error','text':'无数据'})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
+@app.get("/api/scan/fetch-all")
+async def api_scan_fetch_all(principal: float = Query(20000, description="本金(元)")):
+    """全局「拉取」— 一次性获取所有板块原始数据并缓存（涨停+炸板+跌停+资金流+情绪）"""
+    import akshare as ak
+    import pandas as pd
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    today = _today_trading()
+
+    async def _generate():
+        q = queue.Queue()
+        result = {}
+
+        def _run():
+            try:
+                q.put(("progress", "📡 拉取涨停池+炸板池+跌停池..."))
+                # 并行拉取三个池子
+                def _get_limit(): return ak.stock_zt_pool_em(date=today)
+                def _get_zhaban(): return ak.stock_zt_pool_zbgc_em(date=today)
+                def _get_dieting(): return ak.stock_zt_pool_dtgc_em(date=today)
+                pools = {}
+                with ThreadPoolExecutor(max_workers=3) as ex:
+                    futs = {ex.submit(f): k for f, k in [(_get_limit, 'limit'), (_get_zhaban, 'zhaban'), (_get_dieting, 'dieting')]}
+                    for f in as_completed(futs):
+                        try: pools[futs[f]] = f.result() or pd.DataFrame()
+                        except: pools[futs[f]] = pd.DataFrame()
+                limit_df = pools.get('limit', pd.DataFrame())
+                zhaban_df = pools.get('zhaban', pd.DataFrame())
+                dieting_df = pools.get('dieting', pd.DataFrame())
+                result['pools'] = {'limit': limit_df, 'zhaban': zhaban_df, 'dieting': dieting_df}
+                q.put(("progress", f"  涨停{len(limit_df)} 炸板{len(zhaban_df)} 跌停{len(dieting_df)} 只"))
+
+                # 拉取涨停扫描完整数据（含资金流 + 情绪等）
+                q.put(("progress", "📡 拉取资金流+情绪+龙虎榜..."))
+                scan_data = _scan_limit_up_data(today, principal=principal)
+                if scan_data:
+                    result['scan'] = scan_data
+                    q.put(("progress", f"  涨停扫描完成, {len(scan_data.get('stocks',[]))} 只上榜"))
+                else:
+                    result['scan'] = None
+                    q.put(("progress", "  ⚠ 涨停扫描无数据"))
+
+                result['ok'] = True
+                result['date'] = today
+                result['fetched_at'] = _fetched_at()
+            except Exception as e:
+                result['error'] = str(e)
+                result['ok'] = False
+            finally:
+                q.put(("done", None))
+
+        import threading
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+        while True:
+            try:
+                typ, val = q.get(timeout=0.2)
+                if typ == "done": break
+                yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+                await asyncio.sleep(0.03)
+            except queue.Empty:
+                continue
+
+        if result.get('ok'):
+            scan = result.get('scan', {})
+            if scan:
+                stocks = scan.get('stocks', [])
+                yield f"data: {json.dumps({'type':'complete','fetched_at':result['fetched_at'],'stocks':stocks,'sentiment':{'score':scan.get('sentiment_score',5),'level':scan.get('sentiment_level','未知')},'date':result['date'],'pools':{k:len(v) for k,v in result.get('pools',{}).items()}})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type':'complete','fetched_at':result['fetched_at'],'stocks':[],'pools':{k:len(v) for k,v in result.get('pools',{}).items()}})}\n\n"
+        else:
+            yield f"data: {json.dumps({'type':'error','text':result.get('error','未知错误')})}\n\n"
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 

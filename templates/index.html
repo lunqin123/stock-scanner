@@ -89,20 +89,24 @@ window.addEventListener('unhandledrejection', function(e) {
     </div>
 
     <!-- ═══ 当前模块 ═══ -->
+    <!-- ═══ 全局工具栏（所有板块共享） ═══ -->
+    <div class="global-toolbar" style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--card-bg,#1e2233);border-radius:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn btn-orange" onclick="fetchAllRawData()" title="从 akshare 拉取全部原始数据（涨停+炸板+跌停+资金流+情绪）并缓存 — 耗时 15-20 秒" style="font-size:14px;padding:8px 16px">📡 拉取数据</button>
+        <button class="btn" onclick="runCurrentFromCache()" title="从缓存重跑当前板块评分（秒出，改代码后用）" style="font-size:14px;padding:8px 16px">▶ 运行</button>
+        <span class="principal-group">
+            本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
+        </span>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:auto" id="cache-status">加载中...</span>
+    </div>
+
     <div class="module-page">
         <div class="main-header">
             <h1 id="page-title">🛡️ 涨停扫描</h1>
         </div>
 
-    <!-- 输出区（与操作按钮在同一卡片） -->
+    <!-- 输出区 -->
     <div class="card">
-        <div class="card-header-bar" id="param-bar">
-            <button class="btn" onclick="runFromCache()" title="从缓存的原始数据重跑评分（秒出，改代码后用这个）">▶ 运行</button>
-            <button class="btn btn-orange" onclick="fetchFreshData()" title="从 akshare 拉取最新原始数据并缓存（耗时 10-15 秒）">📡 拉取</button>
-            <span class="principal-group">
-                本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
-            </span>
-        </div>
+        <div class="card-header-bar" id="param-bar" style="display:none"></div>
 
     <!-- 快捷操作（自选页面隐藏） -->
     <div class="quick-actions" id="quick-actions">
