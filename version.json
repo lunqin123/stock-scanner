@@ -1,18 +1,25 @@
 {
-  "version": "1.9.0",
+  "version": "1.9.1",
   "date": "2026-05-31",
   "changes": [
-    "审计修复：4个致命/高危bug + 4个中低危bug",
-    "修复 loadCardViewStream 硬编码URL→非涨停tab运行走错误端点",
-    "修复 scanner.py main() 中 df/community_scores 未定义→CLI崩溃",
-    "修复 daily_get 周五缓存周一仍返回→周末数据过期",
-    "修复 apply_weights 权重调整后归一化分母漂移→分数膨胀",
-    "修复 _mode_stream_endpoint 不捕获stderr→无进度条",
-    "修复 renderStockCards XSS + NaN% 进度条",
-    "_CACHE_VER 3→4 清除旧缓存",
-    "minor: 评分逻辑变化（权重归一化 fix）→ version bump to 1.9"
+    "修复舆情监测卡片嵌套<a>→HTML撕裂，文字溢出卡片外"
   ],
   "history": [
+    {
+      "version": "1.9.0",
+      "date": "2026-05-31",
+      "changes": [
+        "审计修复4致命2高危：流式URL硬编码/CLI崩溃/周缓存过期/权重归一化/XSS/NaN"
+      ]
+    },
+    {
+      "version": "1.8.7",
+      "date": "2026-05-31",
+      "changes": [
+        "全部板块统一SSE流式进度条",
+        "新增4个流式端点 + _mode_stream_endpoint工厂"
+      ]
+    },
     {
       "version": "1.8.6",
       "date": "2026-05-31",
