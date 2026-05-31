@@ -232,17 +232,19 @@ function renderSectorCards(items) {
         var stocks = item.stocks || [];
         if (stocks.length) {
             var sid = 'ss-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,5);
-            stockListHtml = '<div class="card-stock-list" style="padding:8px 0 2px 0;display:flex;flex-wrap:wrap;align-items:center;gap:4px">';
-            stockListHtml += '<span class="tag tag-blue" style="font-size:11px;margin:0 4px 0 0;display:inline-flex;align-items:center;height:22px;line-height:1">成分股</span>';
+            stockListHtml = '<div class="sector-stock-wrap" style="padding:10px 0 4px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;line-height:1.8">';
+            stockListHtml += '<span class="sector-stock-label">🧩 成分股</span>';
+            var storedPills = '';
             for (var si = 0; si < stocks.length; si++) {
                 var stk = stocks[si];
-                var hid = (si >= 3) ? ' id="' + sid + '-' + si + '" style="display:none"' : '';
-                stockListHtml += '<span' + hid + ' class="sector-stock-pill" onclick="event.stopPropagation();event.preventDefault();window.open(\'https://stockpage.10jqka.com.cn/' + esc(stk.code) + '/\',\'_blank\')">' + esc(stk.name) + '<em>' + esc(stk.code) + '</em></span>';
+                var cls = (si >= 3) ? ' sector-stock-pill-hide' : '';
+                var tag = '<span data-ss="' + sid + '-' + si + '" class="sector-stock-pill' + cls + '" onclick="event.stopPropagation();event.preventDefault();window.open(\'https://stockpage.10jqka.com.cn/' + esc(stk.code) + '/\',\'_blank\')">' + esc(stk.name) + '<em>' + esc(stk.code) + '</em></span>';
+                stockListHtml += tag;
             }
             if (stocks.length > 3) {
                 var nMore = stocks.length - 3;
-                stockListHtml += '<span id="' + sid + '-btn" class="sector-expand-btn" onclick="event.stopPropagation();event.preventDefault();this.style.display=\'none\';var e=document.getElementById(\'' + sid + '-fold\');if(e)e.style.display=\'\';for(var j=3;j<' + stocks.length + ';j++){var el=document.getElementById(\'' + sid + '-\'+j);if(el)el.style.display=\'\'}">+展开' + nMore + '只</span>';
-                stockListHtml += '<span id="' + sid + '-fold" class="sector-fold-btn" onclick="event.stopPropagation();event.preventDefault();this.style.display=\'none\';var b=document.getElementById(\'' + sid + '-btn\');if(b)b.style.display=\'\';for(var j=3;j<' + stocks.length + ';j++){var el=document.getElementById(\'' + sid + '-\'+j);if(el)el.style.display=\'none\'}">收起</span>';
+                stockListHtml += '<span id="' + sid + '-btn" class="sector-expand-btn" onclick="document.getElementById(\'' + sid + '-fold\').style.display=\'\';this.style.display=\'none\';var h=this.parentElement.querySelectorAll(\'.sector-stock-pill-hide\');for(var i=0;i<h.length;i++)h[i].classList.remove(\'sector-stock-pill-hide\')">+展开' + nMore + '只</span>';
+                stockListHtml += '<span id="' + sid + '-fold" class="sector-fold-btn" style="display:none" onclick="this.style.display=\'none\';document.getElementById(\'' + sid + '-btn\').style.display=\'\';var h=this.parentElement.querySelectorAll(\'.sector-stock-pill-hide\');for(var i=0;i<h.length;i++)h[i].classList.add(\'sector-stock-pill-hide\')">收起</span>';
             }
             stockListHtml += '</div>';
         }
