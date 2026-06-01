@@ -512,6 +512,8 @@ def _scan_from_raw_cache(principal: float = 20000):
     from scanner import money_str
 
     pool = raw.get('pool')  # 原始涨停池，供龙头检测用
+    if pool is None:
+        pool = filtered  # 旧缓存无pool→降级用filtered（同行业对比够用）
 
     stocks = []
     for rank, idx in enumerate(top_indices, 1):
