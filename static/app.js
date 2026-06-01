@@ -187,8 +187,10 @@ async function fetchAllRawData() {
 // 「运行」—— 所有板块统一走流式端点，非流式 tab 也强制刷新
 async function runCurrentFromCache() {
     const info = PAGES[currentPage];
-    if (!info) return;
+    if (!info) { console.error('[运行] 无当前页', currentPage); return; }
     savePrincipal();
+    // 强制显示进度条
+    showProgress('正在运行...', 5);
     var t = Date.now();
     // 流式端点（5个 scan 板块，有进度条）
     var streamMap = {
