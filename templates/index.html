@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>A股超短线选股扫描器</title>
-<link rel="stylesheet" href="/static/style.css?v=1.14.1">
+<link rel="stylesheet" href="/static/style.css?v=1.15.0">
 <script>
 // 全局错误捕获：将 JS 错误显示在页面上，避免静默崩溃
 window.addEventListener('error', function(e) {
@@ -96,6 +96,11 @@ window.addEventListener('unhandledrejection', function(e) {
         <span class="principal-group">
             本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
         </span>
+        <span class="principal-group">
+            方案 <select id="plan-select" class="principal-input" style="width:auto;text-align:left" title="切换评分方案" onchange="savePlan()">
+                <option value="">Plan A</option>
+            </select>
+        </span>
         <span style="font-size:11px;color:var(--text-muted);margin-left:auto" id="cache-status">加载中...</span>
     </div>
 
@@ -127,8 +132,8 @@ window.addEventListener('unhandledrejection', function(e) {
     </div> <!-- /module-page -->
 </main>
 
-<script src="/static/cards.js?v=1.14.1"></script>
-<script src="/static/dashboard.js?v=1.14.1"></script>
-<script src="/static/app.js?v=1.14.1"></script>
+<script src="/static/cards.js?v=1.15.0"></script>
+<script src="/static/dashboard.js?v=1.15.0"></script>
+<script src="/static/app.js?v=1.15.0"></script>
 </body>
 </html>

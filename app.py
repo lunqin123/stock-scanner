@@ -68,6 +68,13 @@ def _capture(fn, *args, **kwargs):
 #  API 端点
 # ═══════════════════════════════════════════
 
+@app.get("/api/plans")
+def api_list_plans():
+    """列出所有可用评分方案"""
+    from plans import list_plans
+    return {"ok": True, "plans": list_plans()}
+
+
 @app.get("/api/scan/limit-up")
 def api_scan_limit_up(table: bool = Query(False, description="表格模式")):
     """涨停池扫描"""
@@ -161,98 +168,17 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
-def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
-    """生成次日竞价验证条件（板块龙头=同行业最高连板+最早封板，用原始池找）"""
-    st = str(row.get('首次封板时间', ''))[:4]
-    try: turnover = float(row.get('换手率', 10))
-    except: turnover = 10.0
-    sm = float(sector_mom.get(idx, 8))
-    mn = float(money_scores.get(idx, 5))
-    parts = []
-    if st and int(st[:2]) < 10: parts.append("高开5-7%")
-    elif st and int(st[:2]) < 11: parts.append("高开3-5%")
-    elif st and int(st[:2]) < 13: parts.append("高开2-3%")
-    else: parts.append("平开或高开1-2%")
-    if turnover > 15: parts.append("竞价量>昨日成交8%")
-    elif turnover > 5: parts.append("竞价量>昨日成交5%")
-    else: parts.append("竞价量>昨日成交3%")
-    # ── 板块双龙头: 情绪龙头(连板最高,游资) + 中军龙头(大市值,机构) ──
-    if sm >= 10 and pool is not None and not pool.empty:
-        ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
-        lb_col = '连板数' if '连板数' in pool.columns else (pool.columns[14] if len(pool.columns) > 14 else None)
-        st_col = '首次封板时间' if '首次封板时间' in pool.columns else pool.columns[11]
-        cap_col = '流通市值' if '流通市值' in pool.columns else None
-        if ind_col and lb_col and st_col:
-            industry = str(row.get(ind_col, ''))
-            if not industry:
-                ind_col2 = '所属行业' if '所属行业' in filtered.columns else filtered.columns[15]
-                industry = str(row.get(ind_col2, ''))
-            if industry:
-                same = pool[pool[ind_col].astype(str) == industry].copy()
-                if len(same) >= 2:
-                    same['_lb'] = same[lb_col].fillna(1).astype(float)
-                    same['_st'] = same[st_col].fillna('9999').astype(str)
-                    same['_st_min'] = same['_st'].apply(lambda t: int(t[:2])*60+int(t[2:4]) if len(str(t))>=4 else 9999)
-                    if cap_col:
-                        same['_cap'] = same[cap_col].fillna(0).astype(float)
-                    else:
-                        same['_cap'] = 0
-                    # 1) 情绪龙头: 连板最高+封板最早+跟风验证(市值通常<200亿)
-                    qx = same.copy()
-                    candidates = qx.sort_values(['_lb', '_st_min'], ascending=[False, True])
-                    emo_leader, is_emo = None, False
-                    for ci in candidates.index:
-                        c = candidates.loc[ci]
-                        followers = sum(1 for i in same.index
-                                       if i != ci and int(same.loc[i, '_st_min']) > int(c['_st_min']))
-                        if followers >= 2 or float(c['_lb']) >= 3:
-                            emo_leader, is_emo = c, True; break
-                    if emo_leader is None:
-                        emo_leader = candidates.iloc[0]
-                        is_emo = len(same) >= 2
-                    # 2) 中军龙头: 板块内大市值(>100亿)+趋势强(连板或涨幅)
-                    big = same[same['_cap'] > 100 * 1e8].copy()
-                    jun_leader = None
-                    if not big.empty:
-                        big = big.sort_values('_cap', ascending=False)
-                        jun_leader = big.iloc[0]  # 板块市值最大的票
-                    # 输出
-                    m_code = str(row.get('代码', '')).strip().zfill(6)
-                    el_code = str(emo_leader.get('代码', '')).strip().zfill(6)
-                    el_name = str(emo_leader.get('名称', ''))
-                    el_lb = int(float(emo_leader.get('_lb', 1)))
-                    # 情绪龙头条件 (橙色高亮名字)
-                    if el_code == m_code:
-                        parts.append("情绪龙(<span class=\"ld-emo\">" + str(el_lb) + "连板</span>)自身竞价不绿，高开3-7%确认")
-                    else:
-                        parts.append("情绪龙<span class=\"ld-emo\">" + el_name + "</span>(" + el_code + " " + str(el_lb) + "连板)竞价不绿")
-                    # 中军龙头条件 (蓝色高亮名字)
-                    if jun_leader is not None:
-                        jl_code = str(jun_leader.get('代码', '')).strip().zfill(6)
-                        jl_name = str(jun_leader.get('名称', ''))
-                        jl_cap = float(jun_leader.get('_cap', 0)) / 1e8
-                        if jl_code != el_code:  # 不同票才显示
-                            if jl_code == m_code:
-                                parts.append("自身为中军<span class=\"ld-jun\">(" + str(int(jl_cap)) + "亿)</span>")
-                            else:
-                                parts.append("中军<span class=\"ld-jun\">" + jl_name + "</span>(" + jl_code + " " + str(int(jl_cap)) + "亿)趋势不破")
-    if mn >= 10: parts.append("竞价无大单净流出")
-    elif mn <= 3: parts.append("竞价放量确认,否则放弃")
-    return "；".join(parts)
-
-
-def _scan_limit_up_data(today_str: str, principal: float = 20000):
-    """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
-    from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
-                         get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, score_buyability, score_stock_sentiment,
-                         get_sector_resonance, can_buy_filter, score_by_principal,
-                         filter_by_price,
+def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str = None):
+    """涨停扫描核心逻辑：拉取数据 + 过滤 + 调用评分方案"""
+    from scanner import (fetch_limit_up_pool, pre_filter,
+                         filter_by_price, can_buy_filter,
                          fetch_fund_flow_data, detect_market_sentiment,
-                         analyze_dragon_tiger, score_stock_history, TOP_N)
-    import pandas as pd
+                         analyze_dragon_tiger, score_stock_history)
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    from plans import get_plan
+    import pandas as pd
 
+    # ── 拉取数据（基础设施，所有plan共享） ──
     print("  [扫描] 第1步: 获取涨停池...", file=sys.stderr)
     pool = fetch_limit_up_pool()
     if pool is None or pool.empty:
@@ -267,66 +193,28 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
 
     print(f"  [扫描] 剩余 {len(filtered)} 只, 第3步: 获取资金流...", file=sys.stderr)
     fund_df, _ = fetch_fund_flow_data()
-    degraded = fund_df is None
 
-    if not degraded:
+    if fund_df is not None:
         print("  [扫描] 第4步: 股价过滤...", file=sys.stderr)
         filtered = filter_by_price(filtered, fund_df)
         if filtered.empty:
             print("  [扫描] 过滤后为空", file=sys.stderr)
             return None
 
-    print(f"  [扫描] 剩余 {len(filtered)} 只, 第5步: 计算各维度评分...", file=sys.stderr)
-    seal_scores = score_seal_strength(filtered)
-    if not degraded:
-        money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
-    else:
-        print("  [扫描] 资金流不可用，降级评分", file=sys.stderr)
-        money_scores = pd.Series(0.0, index=filtered.index)
-        raw_money = pd.Series(0.0, index=filtered.index)
-    sector_mom = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
-    sector_res = get_sector_resonance(filtered)
-    tech_scores = score_tech_form(filtered)
-    buyability_scores = score_buyability(filtered)
-    stock_sent_scores = score_stock_sentiment(filtered, money_scores, buyability_scores)
-    principal_scores = score_by_principal(filtered, principal)
-
-    # 可买到过滤（硬过滤：排除次日大概率买不到的）
-    before_pf = len(filtered)
+    # 可买到过滤（硬过滤）
+    print(f"  [扫描] 第5步: 可买到过滤...", file=sys.stderr)
     filtered = can_buy_filter(filtered)
-    after_pf = len(filtered)
-    if after_pf < before_pf:
-        seal_scores = seal_scores.loc[filtered.index]
-        money_scores = money_scores.loc[filtered.index]
-        raw_money = raw_money.loc[filtered.index]
-        sector_mom = sector_mom.loc[filtered.index]
-        sector_res = sector_res.loc[filtered.index]
-        tech_scores = tech_scores.loc[filtered.index]
-        buyability_scores = buyability_scores.loc[filtered.index]
-        stock_sent_scores = stock_sent_scores.loc[filtered.index]
-        principal_scores = principal_scores.loc[filtered.index]
-        if filtered.empty:
-            print("  [扫描] 可买到过滤后为空", file=sys.stderr)
-            return None
+    if filtered.empty:
+        print("  [扫描] 可买到过滤后为空", file=sys.stderr)
+        return None
 
-    # 本金过滤（硬过滤，不参与评分）
-    before_pf = len(filtered)
+    # 本金过滤（硬过滤）
     filtered = _principal_filter(filtered, principal)
-    after_pf = len(filtered)
-    if after_pf < before_pf:
-        seal_scores = seal_scores.loc[filtered.index]
-        money_scores = money_scores.loc[filtered.index]
-        raw_money = raw_money.loc[filtered.index]
-        sector_mom = sector_mom.loc[filtered.index]
-        sector_res = sector_res.loc[filtered.index]
-        tech_scores = tech_scores.loc[filtered.index]
-        buyability_scores = buyability_scores.loc[filtered.index]
-        stock_sent_scores = stock_sent_scores.loc[filtered.index]
-        principal_scores = principal_scores.loc[filtered.index]
-        if filtered.empty:
-            print("  [扫描] 本金过滤后为空", file=sys.stderr)
-            return None
+    if filtered.empty:
+        print("  [扫描] 本金过滤后为空", file=sys.stderr)
+        return None
 
+    # 并行获取预测评分
     print("  [扫描] 第6步: 并行获取预测评分...", file=sys.stderr)
     with ThreadPoolExecutor(max_workers=3) as ex:
         futs = {
@@ -370,92 +258,28 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
                     sentiment_detail, sentiment_ok, history_scores,
                     lhb_bonus, today_str, pool=pool)
 
-    money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
-    sentiment_series = pd.Series(sentiment_score, index=filtered.index)
-
-    print("  [扫描] 第7步: 生成评分报告...", file=sys.stderr)
-    import weight_manager
-    weights = weight_manager.load_weights()
-    base_totals = weight_manager.apply_weights(
-        seal_scores, money_scores, sector_res, sector_mom,
-        buyability_scores,
-        tech_scores, history_scores, sentiment_series,
-        stock_sentiment_scores=stock_sent_scores, principal_scores=principal_scores, weights=weights)
-    total_scores = base_totals  # 情绪已是独立因子，不再做后置乘数
-
-    # 危险信号检测（虚板/三无/控盘/午后弱封等交叉惩罚）
-    from scanner import score_danger_signals
-    danger_penalty, danger_flags = score_danger_signals(filtered, raw_money, today_str)
-    total_scores = (total_scores + danger_penalty).clip(lower=0)
-
-    # 后台运行回测验证（周一至四存数据，周五调权）
-    try:
-        from scanner import auto_verify_backtest
-        threading.Thread(target=lambda: auto_verify_backtest(today_str, current_weights=weights),
-                        daemon=True).start()
-    except Exception:
-        pass
-
-    # 取 TOP_N
-    top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
-    from scanner import money_str
-
-
-    stocks = []
-    for rank, idx in enumerate(top_indices, 1):
-        row = filtered.loc[idx]
-        code = str(row.get('代码', '')).strip().zfill(6)
-        name = str(row.get('名称', ''))
-        net = float(raw_money.get(idx, 0))
-        stocks.append({
-            'rank': rank,
-            'code': code,
-            'name': name,
-            'total_score': round(float(total_scores[idx]), 1),
-            'base_score': round(float(base_totals[idx]), 1),
-            'seal_score': round(float(seal_scores.get(idx, 0)), 1),
-            'money_score': round(float(money_scores.get(idx, 0)), 1),
-            'sector_mom': round(float(sector_mom.get(idx, 0)), 1),
-            'sector_res': round(float(sector_res.get(idx, 0)), 1),
-            'tech_score': round(float(tech_scores.get(idx, 0)), 1),
-            'history_score': round(float(history_scores.get(idx, 0)), 1),
-            'sentiment_score': sentiment_score,
-            'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
-            'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
-            'principal_score': round(float(principal_scores.get(idx, 5)), 1),
-            'danger_flags': danger_flags.get(idx, []),
-            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool),
-            'net_money': net,
-            'net_money_str': money_str(net),
-            'turnover': f"{float(row.get('换手率', 0)):.1f}",
-            'seal_time': str(row.get('首次封板时间', ''))[:4],
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
-        })
-
-    return {
-        'stocks': stocks,
-        'df': filtered,
-        'seal_scores': seal_scores,
-        'money_scores': money_scores,
-        'raw_money': raw_money,
-        'sector_mom': sector_mom,
-        'sector_res': sector_res,
-        'tech_scores': tech_scores,
-        'history_scores': history_scores,
-        'buyability_scores': buyability_scores,
-        'stock_sent_scores': stock_sent_scores,
-        'principal_scores': principal_scores,
+    # ── 调用评分方案 ──
+    print(f"  [扫描] 第7步: 调用评分方案 [{plan_name or '默认'}]...", file=sys.stderr)
+    plan = get_plan(plan_name)
+    result = plan.score({
+        'filtered': filtered,
+        'fund_df': fund_df,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
         'sentiment_detail': sentiment_detail,
         'sentiment_ok': sentiment_ok,
-        'date': today_str,
-    }
+        'history_scores': history_scores,
+        'lhb_bonus': lhb_bonus,
+        'today_str': today_str,
+        'pool': pool,
+        'principal': principal,
+    })
+
+    return result
 
 
-def _scan_from_raw_cache(principal: float = 20000):
-    """从缓存的原始数据重跑评分逻辑（不拉取 akshare，秒出）。
-    用户改 scoring/权重后点「运行」即可看到新逻辑效果。"""
+def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
+    """从缓存的原始数据重跑评分逻辑。"""
     import pandas as pd
     raw = _load_raw_cache()
     if raw is None:
@@ -470,98 +294,34 @@ def _scan_from_raw_cache(principal: float = 20000):
     history_scores = raw['history_scores']
     lhb_bonus = raw['lhb_bonus']
 
-    from scanner import (score_seal_strength, get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, score_buyability, score_stock_sentiment,
-                         score_by_principal, get_sector_resonance, TOP_N)
-
-    # 本金过滤
+    # 本金过滤（硬过滤）
     filtered = _principal_filter(filtered, principal)
     if filtered.empty:
         print("  [运行] 本金过滤后为空", file=sys.stderr)
         return None
 
-    # 用当前最新评分函数重跑
-    degraded = fund_df is None
-    seal_scores = score_seal_strength(filtered)
-    if not degraded:
-        money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
-    else:
-        money_scores = pd.Series(0.0, index=filtered.index)
-        raw_money = pd.Series(0.0, index=filtered.index)
-    sector_mom = get_sector_heat_scores(filtered, money_series=raw_money if not degraded else None)
-    sector_res = get_sector_resonance(filtered)
-    tech_scores = score_tech_form(filtered)
-    buyability_scores = score_buyability(filtered)
-    stock_sent_scores = score_stock_sentiment(filtered, money_scores, buyability_scores)
-    principal_scores = score_by_principal(filtered, principal)
-
-    money_scores = (money_scores + lhb_bonus.loc[filtered.index] if not lhb_bonus.empty
-                    else money_scores).clip(upper=20.0)
-    sentiment_series = pd.Series(sentiment_score, index=filtered.index)
-
-    import weight_manager
-    weights = weight_manager.load_weights()
-    base_totals = weight_manager.apply_weights(
-        seal_scores, money_scores, sector_res, sector_mom,
-        buyability_scores,
-        tech_scores, history_scores.loc[filtered.index] if hasattr(history_scores, 'loc')
-                                          else pd.Series(2.5, index=filtered.index),
-        sentiment_series,
-        stock_sentiment_scores=stock_sent_scores, principal_scores=principal_scores, weights=weights)
-    total_scores = base_totals
-
-    # 危险信号检测
-    from scanner import score_danger_signals
-    danger_penalty, danger_flags = score_danger_signals(filtered, raw_money, raw.get('date', ''))
-    total_scores = (total_scores + danger_penalty).clip(lower=0)
-
-    top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
-    from scanner import money_str
-
-    pool = raw.get('pool')  # 原始涨停池，供龙头检测用
+    pool = raw.get('pool')
     if pool is None:
-        pool = filtered  # 旧缓存无pool→降级用filtered（同行业对比够用）
+        pool = filtered  # 旧缓存无pool→降级用filtered
 
-    stocks = []
-    for rank, idx in enumerate(top_indices, 1):
-        row = filtered.loc[idx]
-        code = str(row.get('代码', '')).strip().zfill(6)
-        name = str(row.get('名称', ''))
-        net = float(raw_money.get(idx, 0))
-        stocks.append({
-            'rank': rank, 'code': code, 'name': name,
-            'total_score': round(float(total_scores[idx]), 1),
-            'base_score': round(float(base_totals[idx]), 1),
-            'seal_score': round(float(seal_scores.get(idx, 0)), 1),
-            'money_score': round(float(money_scores.get(idx, 0)), 1),
-            'sector_mom': round(float(sector_mom.get(idx, 0)), 1),
-            'sector_res': round(float(sector_res.get(idx, 0)), 1),
-            'tech_score': round(float(tech_scores.get(idx, 0)), 1),
-            'history_score': round(float(history_scores.get(idx, 2.5)), 1),
-            'sentiment_score': sentiment_score,
-            'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
-            'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
-            'principal_score': round(float(principal_scores.get(idx, 5)), 1),
-            'danger_flags': danger_flags.get(idx, []),
-            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool),
-            'net_money': net, 'net_money_str': money_str(net),
-            'turnover': f"{float(row.get('换手率', 0)):.1f}",
-            'seal_time': str(row.get('首次封板时间', ''))[:4],
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
-        })
-
-    return {
-        'stocks': stocks, 'df': filtered,
-        'seal_scores': seal_scores, 'money_scores': money_scores,
-        'raw_money': raw_money, 'sector_mom': sector_mom,
-        'sector_res': sector_res, 'tech_scores': tech_scores,
-        'history_scores': history_scores, 'buyability_scores': buyability_scores,
-        'stock_sent_scores': stock_sent_scores,
-        'principal_scores': principal_scores,
-        'sentiment_score': sentiment_score, 'sentiment_level': sentiment_level,
-        'sentiment_detail': sentiment_detail, 'sentiment_ok': sentiment_ok,
-        'date': raw['date'], '_from_cache': True,
-    }
+    # ── 调用评分方案 ──
+    from plans import get_plan
+    plan = get_plan(plan_name)
+    result = plan.score({
+        'filtered': filtered,
+        'fund_df': fund_df,
+        'sentiment_score': sentiment_score,
+        'sentiment_level': sentiment_level,
+        'sentiment_detail': sentiment_detail,
+        'sentiment_ok': sentiment_ok,
+        'history_scores': history_scores,
+        'lhb_bonus': lhb_bonus,
+        'today_str': raw['date'],
+        'pool': pool,
+        'principal': principal,
+    })
+    result['_from_cache'] = True
+    return result
 
 
 def _run_limit_up_scan(today_str: str, table_mode: bool):
@@ -591,9 +351,11 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
 
 @app.get("/api/scan/limit-up/cards")
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
-                              principal: float = Query(20000, description="本金(元)")):
+                              principal: float = Query(20000, description="本金(元)"),
+                              plan: str = Query(None, description="评分方案(A/B/...)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
-    cache_key = f"limit_up_cards_{int(principal)}"
+    plan_name = plan or None
+    cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
     if not refresh:
         cached = daily_get(cache_key)
         if cached:
@@ -603,7 +365,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = _today_trading()
     try:
-        data = _scan_limit_up_data(today, principal=principal)
+        data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
         if data is None:
             print("  [涨停卡片] 无数据", file=sys.stderr)
             return {"ok": True, "stocks": [], "sentiment": {}}
@@ -1279,10 +1041,12 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 
 @app.get("/api/scan/limit-up/stream")
 async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新"),
-                                    principal: float = Query(20000, description="本金(元)")):
+                                    principal: float = Query(20000, description="本金(元)"),
+                                    plan: str = Query(None, description="评分方案(A/B/...)")):
     """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
+    plan_name = plan or None
     today = _today_trading()
-    _cache_key = f"limit_up_cards_{int(principal)}"
+    _cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
 
     async def _generate():
         # 检查每日缓存（refresh 时跳过）
@@ -1321,7 +1085,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             try:
                 sys.stderr = cap
                 sys.stdout = cap
-                data = _scan_limit_up_data(today, principal=principal)
+                data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
                 result_holder["data"] = data
                 if data and data.get('sentiment_ok'):
                     cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],
@@ -1360,8 +1124,10 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
 
 
 @app.get("/api/scan/fetch-all")
-async def api_scan_fetch_all(principal: float = Query(20000, description="本金(元)")):
+async def api_scan_fetch_all(principal: float = Query(20000, description="本金(元)"),
+                               plan: str = Query(None, description="评分方案(A/B/...)")):
     """全局「拉取」— 一次性获取所有板块原始数据并缓存（涨停+炸板+跌停+资金流+情绪）"""
+    plan_name = plan or None
     import akshare as ak
     import pandas as pd
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1393,7 +1159,7 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
 
                 # 拉取涨停扫描完整数据（含资金流 + 情绪等）
                 q.put(("progress", "📡 拉取资金流+情绪+龙虎榜..."))
-                scan_data = _scan_limit_up_data(today, principal=principal)
+                scan_data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
                 if scan_data:
                     result['scan'] = scan_data
                     q.put(("progress", f"  涨停扫描完成, {len(scan_data.get('stocks',[]))} 只上榜"))
@@ -1437,16 +1203,19 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
 
 
 @app.get("/api/scan/limit-up/run")
-async def api_scan_limit_up_run(principal: float = Query(20000, description="本金(元)")):
+async def api_scan_limit_up_run(principal: float = Query(20000, description="本金(元)"),
+                                  plan: str = Query(None, description="评分方案(A/B/...)")):
     """涨停扫描「运行」— 优先从缓存重跑，无缓存则自动拉取"""
+    plan_name = plan or None
     today = _today_trading()
+    cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
     async def _generate():
-        data = _scan_from_raw_cache(principal=principal)
+        data = _scan_from_raw_cache(principal=principal, plan_name=plan_name)
         if data is None or not data.get('stocks'):
             # 无缓存→自动降级为全量拉取
             yield f"data: {json.dumps({'type':'progress','text':'📡 无缓存，自动拉取数据...'})}\n\n"
             await asyncio.sleep(0.03)
-            data = _scan_limit_up_data(today, principal=principal)
+            data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
             if data is None or not data.get('stocks'):
                 yield f"data: {json.dumps({'type':'error','text':'无涨停数据'})}\n\n"
                 return
@@ -1454,7 +1223,7 @@ async def api_scan_limit_up_run(principal: float = Query(20000, description="本
             yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date']})}\n\n"
             if data.get('sentiment_ok'):
                 from cache import daily_set
-                daily_set(f"limit_up_cards_{int(principal)}", _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
+                daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
         else:
             fet = _fetched_at()
             yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...'})}\n\n"
@@ -1462,7 +1231,7 @@ async def api_scan_limit_up_run(principal: float = Query(20000, description="本
             yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
             if data.get('sentiment_ok'):
                 from cache import daily_set
-                daily_set(f"limit_up_cards_{int(principal)}", _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
+                daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 

@@ -335,6 +335,11 @@ body {
 .principal-input:focus {
     border-color: var(--accent);
 }
+#plan-select {
+    cursor: pointer;
+    appearance: auto;
+    -webkit-appearance: auto;
+}
 
 /* ════════════════════ 按钮 ════════════════════ */
 .btn {

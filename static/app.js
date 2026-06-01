@@ -118,19 +118,50 @@ function savePrincipal() {
     var el = document.getElementById('principal-input');
     if (el) localStorage.setItem('_principal', el.value);
 }
-// 加载时恢复上次本金
+function getPlan() {
+    var el = document.getElementById('plan-select');
+    return el ? el.value || '' : '';
+}
+function savePlan() {
+    var el = document.getElementById('plan-select');
+    if (el) localStorage.setItem('_plan', el.value || '');
+}
+function loadPlans() {
+    fetch('/api/plans')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok) return;
+            var sel = document.getElementById('plan-select');
+            if (!sel) return;
+            sel.innerHTML = '';
+            data.plans.forEach(function(p) {
+                var opt = document.createElement('option');
+                opt.value = p.name;
+                opt.textContent = (p.is_default ? '⭐ ' : '') + 'Plan ' + p.name + ' — ' + p.description;
+                sel.appendChild(opt);
+            });
+            var saved = localStorage.getItem('_plan');
+            if (saved && sel.querySelector('option[value="' + saved + '"]')) {
+                sel.value = saved;
+            }
+        })
+        .catch(function() {});
+}
+// 加载时恢复上次本金和方案
 document.addEventListener('DOMContentLoaded', function() {
     var el = document.getElementById('principal-input');
     var saved = localStorage.getItem('_principal');
     if (saved && el) el.value = saved;
     if (el) el.addEventListener('change', savePrincipal);
+    loadPlans();
 });
 
 async function runCurrent() {
     const info = PAGES[currentPage];
     if (!info) return;
     savePrincipal();
-    var url = info.api + '?principal=' + getPrincipal();
+    var plan = getPlan();
+    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '');
     if (_lastUrl[currentPage] === url && _outputCache[currentPage]) {
         return;
     }
@@ -169,8 +200,9 @@ async function runCurrent() {
 // 「拉取」—— 全局：一次性拉取所有板块原始数据并缓存
 async function fetchAllRawData() {
     savePrincipal();
+    var plan = getPlan();
     var t = Date.now();
-    var url = '/api/scan/fetch-all?principal=' + getPrincipal() + '&_t=' + t;
+    var url = '/api/scan/fetch-all?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
     // 清空所有缓存（用 Object.keys 而非 const 重赋值）
     _lastUrl = {}; _outputCache = {};
     // 拉取结果始终显示在涨停扫描页（直接切状态，不触发 hashchange 重复请求）
@@ -189,6 +221,7 @@ async function runCurrentFromCache() {
     const info = PAGES[currentPage];
     if (!info) { console.error('[运行] 无当前页', currentPage); return; }
     savePrincipal();
+    var plan = getPlan();
     // 强制显示进度条
     showProgress('正在运行...', 5);
     var t = Date.now();
@@ -201,7 +234,7 @@ async function runCurrentFromCache() {
         'scan-sector':  '/api/scan/sector/stream',
     };
     var base = streamMap[currentPage] || info.api;
-    var params = '?principal=' + getPrincipal() + '&_t=' + t;
+    var params = '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
     // 非流式端点加 refresh=1 强制拉最新（舆情/龙虎榜/情绪等）
     if (!streamMap[currentPage]) params += '&refresh=1';
     var url = base + params;
@@ -217,7 +250,8 @@ function updateCacheStatus() {
     var el = document.getElementById('cache-status');
     if (!el) return;
     el.textContent = '⏳ 检查中...';
-    fetch('/api/scan/limit-up/run?principal=' + getPrincipal() + '&_t=' + Date.now())
+    var plan = getPlan();
+    fetch('/api/scan/limit-up/run?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + Date.now())
         .then(function(r) {
             // SSE流返回200=有缓存或服务正常
             el.textContent = '✅ 缓存就绪';
