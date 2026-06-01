@@ -1405,22 +1405,31 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
 
 @app.get("/api/scan/limit-up/run")
 async def api_scan_limit_up_run(principal: float = Query(20000, description="本金(元)")):
-    """涨停扫描「运行」— 从缓存的原始数据重跑评分（秒出，不拉取 akshare）"""
+    """涨停扫描「运行」— 优先从缓存重跑，无缓存则自动拉取"""
+    today = _today_trading()
     async def _generate():
         data = _scan_from_raw_cache(principal=principal)
         if data is None or not data.get('stocks'):
-            yield f"data: {json.dumps({'type':'error','text':'无缓存数据，请先「拉取」'})}\n\n"
-            return
-        fet = _fetched_at()
-        yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...'})}\n\n"
-        await asyncio.sleep(0.05)
-        yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
-        # 更新每日缓存
-        if data.get('sentiment_ok'):
-            cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],
-                                            data['sentiment_level'], data['date'])
-            from cache import daily_set
-            daily_set(f"limit_up_cards_{int(principal)}", cache_data, force=True)
+            # 无缓存→自动降级为全量拉取
+            yield f"data: {json.dumps({'type':'progress','text':'📡 无缓存，自动拉取数据...'})}\n\n"
+            await asyncio.sleep(0.03)
+            data = _scan_limit_up_data(today, principal=principal)
+            if data is None or not data.get('stocks'):
+                yield f"data: {json.dumps({'type':'error','text':'无涨停数据'})}\n\n"
+                return
+            fet = _fetched_at()
+            yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date']})}\n\n"
+            if data.get('sentiment_ok'):
+                from cache import daily_set
+                daily_set(f"limit_up_cards_{int(principal)}", _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
+        else:
+            fet = _fetched_at()
+            yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...'})}\n\n"
+            await asyncio.sleep(0.05)
+            yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
+            if data.get('sentiment_ok'):
+                from cache import daily_set
+                daily_set(f"limit_up_cards_{int(principal)}", _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 
