@@ -59,26 +59,37 @@ function renderStockCards(stocks, data) {
 
         const tags = analyzeTags(s);
 
+        // 合并所有标签：分析标签 + 危险标签
+        var allTags = tags.slice();
+        if (s.danger_flags && s.danger_flags.length)
+            allTags = allTags.concat(s.danger_flags.map(function(f) { return [f, 'tag-red']; }));
+        var tagsHTML = allTags.length ? '<div class="card-analysis">' + allTags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>' : '';
+
+        // 竞价条件紧凑行
+        var auctionHTML = s.auction_check ? '<div class="card-auction" style="padding:6px 0 2px;font-size:11px;color:var(--yellow);border-top:1px solid rgba(255,200,50,0.15);margin-top:4px">📋 ' + esc(s.auction_check) + '</div>' : '';
+
         parts.push(
-            `<a href="https://stockpage.10jqka.com.cn/${s.code}/" target="_blank" class="stock-card">`,
-            `<div class="card-header">`,
-            `<span class="card-rank">#${s.rank}</span>`,
-            `<span class="card-name">${esc(s.name)}</span>`,
-            `<span class="card-code">${s.code}</span>`,
-            `<span class="copy-btn" onclick="copyCode('${esc(s.code)}','${esc(s.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
+            '<a href="https://stockpage.10jqka.com.cn/' + s.code + '/" target="_blank" class="stock-card">',
+            '<div class="card-header">',
+            '<span class="card-rank">#' + s.rank + '</span>',
+            '<span class="card-name">' + esc(s.name) + '</span>',
+            '<span class="card-code">' + s.code + '</span>',
+            '<span class="copy-btn" onclick="copyCode(\'' + esc(s.code) + '\',\'' + esc(s.name) + '\');event.stopPropagation();return false" title="复制代码">📋</span>',
             scoreRingHTML(s.total_score),
-            `</div>`,
-            `<div class="card-body"><div class="card-bars">${barsHTML}</div>`,
-            `<div class="card-info">`,
-            `<div class="info-row"><span class="label">基础分</span><span class="value">${s.base_score}</span></div>`,
-            `<div class="info-row"><span class="label">大盘情绪</span><span class="value ${sentCls}">${esc(sentDisplay)}</span></div>`,
-            `<div class="info-row"><span class="label">净流入</span><span class="value ${s.net_money>=0?'green':'red'}">${msgn}${esc(s.net_money_str)}</span></div>`,
-            `<div class="info-row"><span class="label">换手率</span><span class="value">${esc(s.turnover)}%</span></div>`,
-            `<div class="info-row"><span class="label">封板时间</span><span class="value">${st.slice(0,2)}:${st.slice(2)}</span></div>`,
-            s.auction_check ? `<div class="info-row" style="margin-top:2px"><span class="label">竞价条件</span><span class="value" style="font-size:11px;color:var(--yellow)">${esc(s.auction_check)}</span></div>` : '',
-            `</div></div>`,
-            (s.danger_flags && s.danger_flags.length) ? `<div class="card-analysis" style="border-color:rgba(255,100,100,0.3)">${s.danger_flags.map(f => '<span class="tag tag-red" style="font-size:10px">' + esc(f) + '</span>').join('')}</div>` : '',
-            `<div class="card-analysis">${tags.map(t => `<span class="tag ${t[1]}">${esc(t[0])}</span>`).join('')}</div>`,
+            '</div>',
+            // 双列信息（左:核心数据 右:评分条）
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
+            '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">',
+            '<div class="info-row"><span class="label">基础分</span><span class="value">' + s.base_score + '</span></div>',
+            '<div class="info-row"><span class="label">大盘情绪</span><span class="value ' + sentCls + '">' + esc(sentDisplay) + '</span></div>',
+            '<div class="info-row"><span class="label">净流入</span><span class="value ' + (s.net_money >= 0 ? 'green' : 'red') + '">' + msgn + esc(s.net_money_str) + '</span></div>',
+            '<div class="info-row"><span class="label">换手率</span><span class="value">' + esc(s.turnover) + '%</span></div>',
+            '<div class="info-row"><span class="label">封板时间</span><span class="value">' + st.slice(0, 2) + ':' + st.slice(2) + '</span></div>',
+            '</div>',
+            '<div class="card-bars" style="flex:1.5;min-width:150px">' + barsHTML + '</div>',
+            '</div>',
+            auctionHTML,
+            tagsHTML,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );

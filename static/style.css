@@ -931,4 +931,12 @@ body {
 .sector-expand-btn:hover { background:rgba(79,140,255,0.08); }
 .sector-fold-btn { color:var(--text-muted); }
 .sector-fold-btn:hover { background:rgba(255,255,255,0.05); }
+/* ─── 涨停卡片双列布局 ─── */
+.card-auction {
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+@media (max-width:480px) {
+    .card-body[style*="flex"] { flex-direction:column !important; }
+    .card-bars[style] { min-width:100% !important; }
+}
 
