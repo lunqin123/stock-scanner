@@ -607,10 +607,38 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     # 过滤 ST/科创板/北交所/创业板
     from scanner import filter_non_main_board
     prev = filter_non_main_board(prev)
-    trend = prev[(prev['涨幅'] >= 3) & (prev['涨幅'] < 9)].copy()
+
+    # ── 风控数据：拉取炸板池 + 今日热门板块（并行） ──
+    zhaban_codes = set()
+    hot_industries = set()
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import numpy as np
+        def _zb(): return ak.stock_zt_pool_zbgc_em(date=today)
+        def _lt(): return ak.stock_zt_pool_em(date=today)
+        pools = {}
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            futs = {ex.submit(_zb): 'zb', ex.submit(_lt): 'lt'}
+            for f in as_completed(futs):
+                try: pools[futs[f]] = f.result() or pd.DataFrame()
+                except: pools[futs[f]] = pd.DataFrame()
+        zb_df = pools.get('zb', pd.DataFrame())
+        lt_df = pools.get('lt', pd.DataFrame())
+        if not zb_df.empty:
+            zb_code_col = zb_df.columns[1] if len(zb_df.columns) > 1 else zb_df.columns[0]
+            zhaban_codes = set(zb_df[zb_code_col].astype(str).str.zfill(6))
+        if not lt_df.empty:
+            ind_col2 = '所属行业' if '所属行业' in lt_df.columns else (lt_df.columns[15] if len(lt_df.columns) > 15 else None)
+            if ind_col2:
+                hot = lt_df[ind_col2].value_counts().head(5)
+                hot_industries = set(hot[hot >= 3].index)
+    except Exception:
+        pass
+
+    trend = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
     if trend.empty:
         return {"ok": True, "items": []}
-    trend = trend.sort_values('涨幅', ascending=False).head(10)
+    trend = trend.sort_values('涨幅', ascending=False).head(15)
 
     items = []
     for _, row in trend.iterrows():
@@ -626,22 +654,61 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             try: consecutive = int(seal_stat.split('/')[1])
             except: pass
 
-        # 量价分析
+        # ── 风控评分 (0-20) ──
+        risk_score = 20  # 满分=无风险
+        risk_tags = []
+
+        # 风险1: 昨日炸板过 (扣8)
+        if code in zhaban_codes:
+            risk_score -= 8
+            risk_tags.append("⚠️ 昨日炸板")
+
+        # 风险2: 连板≥3但涨幅<5% → 出货嫌疑 (扣6)
+        if consecutive >= 3 and chg < 5:
+            risk_score -= 6
+            risk_tags.append("⚠️ 连板高位缩量")
+
+        # 风险3: 放量滞涨 (换手>15%但涨幅<3%) (扣6)
+        if turnover > 15 and chg < 3:
+            risk_score -= 6
+            risk_tags.append("⚠️ 放量滞涨")
+
+        # 风险4: 换手>30% → 过度博弈 (扣4)
+        if turnover > 30:
+            risk_score -= 4
+            risk_tags.append("⚠️ 换手过高")
+
+        # 风险5: 板块不在今日热门TOP5 (扣3)
+        if industry and hot_industries and industry not in hot_industries:
+            risk_score -= 3
+            risk_tags.append("⚠️ 板块退潮")
+
+        risk_score = max(0, risk_score)
+
+        # ── 信号标签 ──
         signals = []
         if chg >= 7: signals.append("强势续涨")
         elif chg >= 5: signals.append("量价齐升")
         else: signals.append("温和上涨")
-        if turnover > 15: signals.append("高换手活跃")
+        if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("放量健康")
-        elif turnover > 3: signals.append("温和放量")
-        else: signals.append("缩量整理")
+        else: signals.append("中性换手")
         if consecutive >= 2: signals.append(f"{consecutive}连板")
 
-        # 策略
-        if chg >= 7: advice = "沿5日线持有，破5日线止盈"
-        elif chg >= 5: advice = "趋势良好，持有为主"
-        elif chg >= 3: advice = "观察持续性，放量可加仓"
-        else: advice = "动能偏弱，等待放量确认"
+        # 风控标签追加
+        signals.extend(risk_tags)
+
+        # ── 策略建议 ──
+        if risk_score <= 5:
+            advice = "❌ 风险极高，不建议参与"
+        elif risk_score <= 12:
+            advice = "⚠️ 风控预警，轻仓试探"
+        elif chg >= 7:
+            advice = "沿5日线持有，破5日线止盈"
+        elif chg >= 5:
+            advice = "趋势良好，持有为主"
+        else:
+            advice = "观察持续性，放量可加仓"
 
         items.append({
             'code': code,
@@ -656,7 +723,11 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             'consecutive': consecutive,
             'signals': signals,
             'advice': advice,
+            'risk_score': risk_score,
         })
+    # 按风控后排序：涨幅高+风控好优先
+    items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
+    items = items[:10]
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     cache_put(key, result)
     return result

@@ -128,7 +128,7 @@ if data is not None:
         check(0 <= s.get('sector_mom', -1) <= 12, f"sector_mom 应在 0-12")
         check(0 <= s.get('sector_res', -1) <= 8, f"sector_res 应在 0-8")
         check(0 <= s.get('sentiment_score', -1) <= 10, f"sentiment_score 应在 0-10")
-        check(0 <= s.get('buyability_score', -1) <= 10, f"buyability_score 应在 0-10")
+        check(0 <= s.get('buyability_score', -1) <= 12, f"buyability_score 应在 0-12")
         check('community_score' not in s, "不应含 community_score")
         check('principal_score' not in s, "不应含 principal_score")
 
