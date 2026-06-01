@@ -161,8 +161,8 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
-def _gen_auction_check(row, idx, sector_mom, money_scores, filtered):
-    """生成次日竞价验证条件（含板块龙头名称）"""
+def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
+    """生成次日竞价验证条件（板块龙头=同行业最高连板+最早封板，用原始池找）"""
     st = str(row.get('首次封板时间', ''))[:4]
     try: turnover = float(row.get('换手率', 10))
     except: turnover = 10.0
@@ -176,23 +176,33 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered):
     if turnover > 15: parts.append("竞价量>昨日成交8%")
     elif turnover > 5: parts.append("竞价量>昨日成交5%")
     else: parts.append("竞价量>昨日成交3%")
-    # 板块龙头: 找同行业最早封板的票
-    if sm >= 10:
-        ind_col = '所属行业' if '所属行业' in filtered.columns else (filtered.columns[15] if len(filtered.columns) > 15 else None)
-        if ind_col:
-            industry = str(row.get(ind_col, ''))
-            same = filtered[filtered[ind_col].astype(str) == industry]
-            st_col = '首次封板时间' if '首次封板时间' in filtered.columns else filtered.columns[11]
-            if not same.empty and st_col:
-                times = same[st_col].astype(str)
-                leader_idx = times.sort_values().index[0]
-                leader_row = filtered.loc[leader_idx]
-                leader_code = str(leader_row.get('代码', '')).strip().zfill(6)
-                leader_name = str(leader_row.get('名称', ''))
-                if leader_code == str(row.get('代码', '')).strip().zfill(6):
-                    parts.append("作为板块龙自身竞价不绿")
-                else:
-                    parts.append(leader_name + "(" + leader_code + ")竞价不绿")
+    # 板块龙头: 用未过滤的原始涨停池，按连板数+封板时间找龙头
+    if sm >= 10 and pool is not None and not pool.empty:
+        ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
+        lb_col = '连板数' if '连板数' in pool.columns else (pool.columns[14] if len(pool.columns) > 14 else None)
+        st_col = '首次封板时间' if '首次封板时间' in pool.columns else pool.columns[11]
+        if ind_col and lb_col:
+            industry = str(row.get(ind_col.replace('pool.', ''), ''))
+            if not industry:
+                # fallback: 用 filtered 的行业
+                ind_col2 = '所属行业' if '所属行业' in filtered.columns else filtered.columns[15]
+                industry = str(row.get(ind_col2, ''))
+            if industry:
+                same = pool[pool[ind_col].astype(str) == industry]
+                if not same.empty:
+                    # 龙头=连板最高，同连板时封板最早
+                    same = same.copy()
+                    same['_lb'] = same[lb_col].fillna(1).astype(float)
+                    same['_st'] = same[st_col].fillna('9999').astype(str)
+                    leader = same.sort_values(['_lb', '_st'], ascending=[False, True]).iloc[0]
+                    l_code = str(leader.get('代码', '')).strip().zfill(6)
+                    l_name = str(leader.get('名称', ''))
+                    m_code = str(row.get('代码', '')).strip().zfill(6)
+                    llb = int(float(leader.get('_lb', 1)))
+                    if l_code == m_code:
+                        parts.append("自身为板块龙(" + str(llb) + "连板)")
+                    else:
+                        parts.append(l_name + "(" + l_code + " " + str(llb) + "连板)竞价不绿")
     if mn >= 10: parts.append("竞价无大单净流出")
     elif mn <= 3: parts.append("竞价放量确认,否则放弃")
     return "；".join(parts)
@@ -377,7 +387,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
             'danger_flags': danger_flags.get(idx, []),
-            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered),
+            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool),
             'net_money': net,
             'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
