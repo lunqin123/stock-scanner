@@ -176,31 +176,46 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
     if turnover > 15: parts.append("竞价量>昨日成交8%")
     elif turnover > 5: parts.append("竞价量>昨日成交5%")
     else: parts.append("竞价量>昨日成交3%")
-    # 板块龙头: 用未过滤的原始涨停池，按连板数+封板时间找龙头
+    # ── 板块龙头(3维判定): 空间高度+身位优势+带动效应 ──
     if sm >= 10 and pool is not None and not pool.empty:
         ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
         lb_col = '连板数' if '连板数' in pool.columns else (pool.columns[14] if len(pool.columns) > 14 else None)
         st_col = '首次封板时间' if '首次封板时间' in pool.columns else pool.columns[11]
-        if ind_col and lb_col:
-            industry = str(row.get(ind_col.replace('pool.', ''), ''))
+        if ind_col and lb_col and st_col:
+            industry = str(row.get(ind_col, ''))
             if not industry:
-                # fallback: 用 filtered 的行业
                 ind_col2 = '所属行业' if '所属行业' in filtered.columns else filtered.columns[15]
                 industry = str(row.get(ind_col2, ''))
             if industry:
-                same = pool[pool[ind_col].astype(str) == industry]
-                if not same.empty:
-                    # 龙头=连板最高，同连板时封板最早
-                    same = same.copy()
+                same = pool[pool[ind_col].astype(str) == industry].copy()
+                if len(same) >= 2:
                     same['_lb'] = same[lb_col].fillna(1).astype(float)
                     same['_st'] = same[st_col].fillna('9999').astype(str)
-                    leader = same.sort_values(['_lb', '_st'], ascending=[False, True]).iloc[0]
+                    same['_st_min'] = same['_st'].apply(lambda t: int(t[:2])*60+int(t[2:4]) if len(str(t))>=4 else 9999)
+                    # 按空间高度+身位排序
+                    candidates = same.sort_values(['_lb', '_st_min'], ascending=[False, True])
+                    # 3维判定：逐候选人检查带动效应(封板后有≥2只同板块跟风)
+                    leader, is_leader = None, False
+                    for ci in candidates.index:
+                        c = candidates.loc[ci]
+                        c_st = int(c['_st_min'])
+                        # 统计该票封板后同板块封板的票数(不含自身)
+                        followers = sum(1 for i in same.index
+                                       if i != ci and int(same.loc[i, '_st_min']) > c_st)
+                        if followers >= 2 or float(c['_lb']) >= 4:
+                            leader, is_leader = c, True
+                            break
+                    # 无带动效应的→取最高连板作为参考龙头
+                    if leader is None:
+                        leader = candidates.iloc[0]
+                        is_leader = len(same) >= 2  # 至少有板块存在
                     l_code = str(leader.get('代码', '')).strip().zfill(6)
                     l_name = str(leader.get('名称', ''))
                     m_code = str(row.get('代码', '')).strip().zfill(6)
                     llb = int(float(leader.get('_lb', 1)))
                     if l_code == m_code:
-                        parts.append("自身为板块龙(" + str(llb) + "连板)")
+                        tag = "龙" if is_leader else ""
+                        parts.append(("自身为板块龙(" + str(llb) + "连板)") if is_leader else ("自身为板块最高(" + str(llb) + "连板,跟风不足)"))
                     else:
                         parts.append(l_name + "(" + l_code + " " + str(llb) + "连板)竞价不绿")
     if mn >= 10: parts.append("竞价无大单净流出")
