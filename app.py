@@ -161,8 +161,8 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
-def _gen_auction_check(row, idx, sector_mom, money_scores):
-    """生成次日竞价验证条件"""
+def _gen_auction_check(row, idx, sector_mom, money_scores, filtered):
+    """生成次日竞价验证条件（含板块龙头名称）"""
     st = str(row.get('首次封板时间', ''))[:4]
     try: turnover = float(row.get('换手率', 10))
     except: turnover = 10.0
@@ -176,7 +176,23 @@ def _gen_auction_check(row, idx, sector_mom, money_scores):
     if turnover > 15: parts.append("竞价量>昨日成交8%")
     elif turnover > 5: parts.append("竞价量>昨日成交5%")
     else: parts.append("竞价量>昨日成交3%")
-    if sm >= 10: parts.append("板块龙头竞价不绿")
+    # 板块龙头: 找同行业最早封板的票
+    if sm >= 10:
+        ind_col = '所属行业' if '所属行业' in filtered.columns else (filtered.columns[15] if len(filtered.columns) > 15 else None)
+        if ind_col:
+            industry = str(row.get(ind_col, ''))
+            same = filtered[filtered[ind_col].astype(str) == industry]
+            st_col = '首次封板时间' if '首次封板时间' in filtered.columns else filtered.columns[11]
+            if not same.empty and st_col:
+                times = same[st_col].astype(str)
+                leader_idx = times.sort_values().index[0]
+                leader_row = filtered.loc[leader_idx]
+                leader_code = str(leader_row.get('代码', '')).strip().zfill(6)
+                leader_name = str(leader_row.get('名称', ''))
+                if leader_code == str(row.get('代码', '')).strip().zfill(6):
+                    parts.append("作为板块龙自身竞价不绿")
+                else:
+                    parts.append(leader_name + "(" + leader_code + ")竞价不绿")
     if mn >= 10: parts.append("竞价无大单净流出")
     elif mn <= 3: parts.append("竞价放量确认,否则放弃")
     return "；".join(parts)
@@ -361,7 +377,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
             'danger_flags': danger_flags.get(idx, []),
-            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores),
+            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered),
             'net_money': net,
             'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
