@@ -12,7 +12,7 @@ function animateCount(el, target, duration) {
 async function loadDashboard() {
     const bar = document.getElementById('dashboard');
     try {
-        const resp = await fetch('/api/dashboard');
+        const resp = await fetch('/api/dashboard?refresh=1');
         const d = await resp.json();
         if (!d.ok) throw new Error('no data');
 

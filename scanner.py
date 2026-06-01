@@ -963,66 +963,80 @@ def detect_market_sentiment(today_str: str):
         except Exception as e:
             print(f"  [情绪] 大盘数据获取异常: {e}", file=sys.stderr)
 
-        # 评分（基于昨日涨停股今日表现）
+        # ── 综合评分：昨天表现(40%) + 今天盘面(30%) + 涨跌停比(20%) + 炸板率(10%) ──
+        # 1. 基础分：昨日涨停今表现 (0-10)
         if avg_premium > 3 and promo_rate > 0.3:
-            level = "高潮"
-            score = 9.0
+            prev_score = 9.0
+            prev_label = "高潮"
         elif avg_premium > 1 and promo_rate > 0.2:
-            level = "活跃"
-            score = 7.0
+            prev_score = 7.0
+            prev_label = "活跃"
         elif avg_premium > -1 and promo_rate > 0.1:
-            level = "正常"
-            score = 5.0
+            prev_score = 5.0
+            prev_label = "正常"
         elif avg_premium > -3:
-            level = "低迷"
-            score = 3.0
+            prev_score = 3.0
+            prev_label = "低迷"
         else:
-            level = "冰点"
-            score = 1.0
+            prev_score = 1.0
+            prev_label = "冰点"
 
-        # 全市场涨跌比修正（更侧重整体市场感受）
+        # 2. 今日盘面修正：涨跌比 → 大幅加分/扣分 (-3~+3)
+        breadth_bonus = 0
         if all_up + all_down > 0:
             all_ratio = all_up / (all_up + all_down)
-            if all_ratio < 0.2:  # 极差
-                score -= 3
-                level = "冰点"
-            elif all_ratio < 0.3:  # 很差
-                score -= 2
-                if level not in ("冰点",):
-                    level = f"冰点({level})"
-            elif all_ratio < 0.4:  # 差
-                score -= 1
-                if level not in ("冰点", "低迷"):
-                    level = f"低迷({level})"
-            elif all_ratio > 0.7:  # 普涨
-                score += 1
-                if level not in ("高潮",):
-                    level = f"活跃({level})"
-            elif all_ratio > 0.8:  # 大涨
-                score += 2
-                level = "高潮"
+            if all_ratio > 0.75:
+                breadth_bonus = 3
+            elif all_ratio > 0.65:
+                breadth_bonus = 2
+            elif all_ratio > 0.55:
+                breadth_bonus = 1
+            elif all_ratio < 0.25:
+                breadth_bonus = -3
+            elif all_ratio < 0.35:
+                breadth_bonus = -2
+            elif all_ratio < 0.45:
+                breadth_bonus = -1
 
-        # 今日涨停/跌停修正
-        if today_limit_up >= 60:
-            score += 1
+        # 3. 今日涨停/跌停修正 (-2~+2)
+        limit_bonus = 0
+        if today_limit_up >= 80:
+            limit_bonus = 2
+        elif today_limit_up >= 60:
+            limit_bonus = 1
         elif today_limit_up >= 40:
-            score += 0.5
-        if today_limit_down > 30:
-            score -= 1
-        elif today_limit_down > 15:
-            score -= 0.5
+            limit_bonus = 0
+        elif today_limit_up >= 20:
+            limit_bonus = -1
+        else:
+            limit_bonus = -2
 
-        # 炸板率修正（用昨天的数据）
-        if zhaban_rate > 0.4:
-            score -= 2
-        elif zhaban_rate > 0.25:
-            score -= 1
+        if today_limit_down > 50:
+            limit_bonus -= 2
+        elif today_limit_down > 30:
+            limit_bonus -= 1
 
-        # 昨日跌停数修正
-        if dt_total > 20:
-            score -= 1
+        # 4. 炸板率修正 (-2~0)
+        zhaban_penalty = 0
+        if zhaban_rate > 0.45:
+            zhaban_penalty = -2
+        elif zhaban_rate > 0.35:
+            zhaban_penalty = -1
 
+        score = prev_score + breadth_bonus + limit_bonus + zhaban_penalty
         score = max(0, min(10, score))
+
+        # 最终等级
+        if score >= 8:
+            level = "高潮"
+        elif score >= 6:
+            level = "活跃"
+        elif score >= 4:
+            level = "正常"
+        elif score >= 2:
+            level = "低迷"
+        else:
+            level = "冰点"
 
         details = {
             'prev_limit_count': prev_total,
