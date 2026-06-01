@@ -1,9 +1,10 @@
 {
-  "version": "1.13.3",
+  "version": "1.14.0",
   "date": "2026-06-01",
   "changes": [
-    "修复「运行」丢失竞价条件+危险信号",
-    "raw cache无pool时自动降级用filtered（旧缓存兼容）"
+    "🆕 本金适配因子(principal_score)接入评分管线：价格可买性+流动性 0-10分 权重6%",
+    "apply_weights升级9因子：新增principal_scores参数(可选,默认5.0中性)",
+    "前端卡片加「本金适配」评分条，小资金(<10万)自动偏好低价高流动性标的"
   ],
   "history": [
     {

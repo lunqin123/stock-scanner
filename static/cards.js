@@ -44,6 +44,7 @@ function renderStockCards(stocks, data) {
             [s.tech_score, 10, '量价结构'],
             [s.sector_mom, 12, '板块热度'],
             [s.money_score, 20, '资金驱动'],
+            [s.principal_score || 5, 10, '本金适配'],
         ];
 
         let barsHTML = '';
