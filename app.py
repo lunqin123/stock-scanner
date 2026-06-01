@@ -161,6 +161,27 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
+def _gen_auction_check(row, idx, sector_mom, money_scores):
+    """生成次日竞价验证条件"""
+    st = str(row.get('首次封板时间', ''))[:4]
+    try: turnover = float(row.get('换手率', 10))
+    except: turnover = 10.0
+    sm = float(sector_mom.get(idx, 8))
+    mn = float(money_scores.get(idx, 5))
+    parts = []
+    if st and int(st[:2]) < 10: parts.append("高开5-7%")
+    elif st and int(st[:2]) < 11: parts.append("高开3-5%")
+    elif st and int(st[:2]) < 13: parts.append("高开2-3%")
+    else: parts.append("平开或高开1-2%")
+    if turnover > 15: parts.append("竞价量>昨日成交8%")
+    elif turnover > 5: parts.append("竞价量>昨日成交5%")
+    else: parts.append("竞价量>昨日成交3%")
+    if sm >= 10: parts.append("板块龙头竞价不绿")
+    if mn >= 10: parts.append("竞价无大单净流出")
+    elif mn <= 3: parts.append("竞价放量确认,否则放弃")
+    return "；".join(parts)
+
+
 def _scan_limit_up_data(today_str: str, principal: float = 20000):
     """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
     from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
@@ -300,6 +321,11 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         stock_sentiment_scores=stock_sent_scores, weights=weights)
     total_scores = base_totals  # 情绪已是独立因子，不再做后置乘数
 
+    # 危险信号检测（虚板/三无/控盘/午后弱封等交叉惩罚）
+    from scanner import score_danger_signals
+    danger_penalty, danger_flags = score_danger_signals(filtered, raw_money, today_str)
+    total_scores = (total_scores + danger_penalty).clip(lower=0)
+
     # 后台运行回测验证（周一至四存数据，周五调权）
     try:
         from scanner import auto_verify_backtest
@@ -311,6 +337,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     # 取 TOP_N
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     from scanner import money_str
+
 
     stocks = []
     for rank, idx in enumerate(top_indices, 1):
@@ -333,6 +360,8 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'sentiment_score': sentiment_score,
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
+            'danger_flags': danger_flags.get(idx, []),
+            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores),
             'net_money': net,
             'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
@@ -414,6 +443,11 @@ def _scan_from_raw_cache(principal: float = 20000):
         sentiment_series,
         stock_sentiment_scores=stock_sent_scores, weights=weights)
     total_scores = base_totals
+
+    # 危险信号检测
+    from scanner import score_danger_signals
+    danger_penalty, danger_flags = score_danger_signals(filtered, raw_money, raw.get('date', ''))
+    total_scores = (total_scores + danger_penalty).clip(lower=0)
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     from scanner import money_str

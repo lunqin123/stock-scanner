@@ -75,7 +75,9 @@ function renderStockCards(stocks, data) {
             `<div class="info-row"><span class="label">净流入</span><span class="value ${s.net_money>=0?'green':'red'}">${msgn}${esc(s.net_money_str)}</span></div>`,
             `<div class="info-row"><span class="label">换手率</span><span class="value">${esc(s.turnover)}%</span></div>`,
             `<div class="info-row"><span class="label">封板时间</span><span class="value">${st.slice(0,2)}:${st.slice(2)}</span></div>`,
+            s.auction_check ? `<div class="info-row" style="margin-top:2px"><span class="label">竞价条件</span><span class="value" style="font-size:11px;color:var(--yellow)">${esc(s.auction_check)}</span></div>` : '',
             `</div></div>`,
+            (s.danger_flags && s.danger_flags.length) ? `<div class="card-analysis" style="border-color:rgba(255,100,100,0.3)">${s.danger_flags.map(f => '<span class="tag tag-red" style="font-size:10px">' + esc(f) + '</span>').join('')}</div>` : '',
             `<div class="card-analysis">${tags.map(t => `<span class="tag ${t[1]}">${esc(t[0])}</span>`).join('')}</div>`,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'

@@ -511,6 +511,93 @@ def score_stock_sentiment(df: pd.DataFrame, money_scores: pd.Series,
 
     return scores.clip(0, 10)
 
+# ─── 危险信号检测 ───
+
+def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
+                         today_str: str) -> tuple:
+    """检测个股危险信号，返回 (penalty_scores, flag_dict)。
+    penalty_scores: 0=无问题, 负值=扣分（最多扣-30）
+    flag_dict: {idx: [标签列表]} 供前端显示"""
+    penalty = pd.Series(0.0, index=df.index)
+    flags = {idx: [] for idx in df.index}
+
+    # 列识别
+    turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
+    lb_col = '连板数' if '连板数' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
+    industry_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+
+    # 行业涨停数（用于检测板块效应）
+    sector_counts = {}
+    if industry_col:
+        sector_counts = df[industry_col].value_counts().to_dict()
+
+    for idx in df.index:
+        net = float(raw_money.get(idx, 0))
+        turnover = float(df.loc[idx, turnover_col]) if turnover_col and pd.notna(df.loc[idx, turnover_col]) else 0
+        seal_t = str(df.loc[idx, seal_time_col])[:4] if seal_time_col else ''
+        seal_f = float(df.loc[idx, seal_fund_col] or 0) if seal_fund_col else 0
+        lb = float(df.loc[idx, lb_col]) if lb_col and pd.notna(df.loc[idx, lb_col]) else 1
+        ind = str(df.loc[idx, industry_col]) if industry_col else ''
+        sc = sector_counts.get(ind, 0) if ind else 0
+
+        # 规则1: 资金背离 - 净流出>5000万但涨停 → "虚板" (-15)
+        if net < -5000e4:
+            penalty[idx] -= 15
+            flags[idx].append("⚠️ 虚板: 资金大幅流出")
+
+        # 规则2: 三无品种 - 午后板+资金<1000万+板块<2只 (-12)
+        if seal_t and int(seal_t[:2]) >= 13 and net < 1000e4 and sc < 2:
+            penalty[idx] -= 12
+            flags[idx].append("⚠️ 三无: 午后+无量+无板块")
+
+        # 规则3: 高位首板 - 昨天还是连板今天首板（高标反抽特征）(-8)
+        zt_stat = ''
+        for col in df.columns:
+            if '涨停' in str(col) and '统计' in str(col):
+                zt_stat = str(df.loc[idx, col]); break
+        if zt_stat:
+            parts = zt_stat.strip().split('/')
+            if len(parts) == 2:
+                try:
+                    recent_days = float(parts[1])
+                    recent_times = float(parts[0])
+                    # 最近5天涨停≥3次(=曾连板)+今天首板→高位反抽信号
+                    if recent_days <= 5 and recent_times >= 3 and lb == 1:
+                        penalty[idx] -= 10
+                        flags[idx].append("⚠️ 高位首板反抽")
+                    # 30天内涨停≥5次→老庄股/妖股活跃
+                    if recent_days <= 30 and recent_times >= 5:
+                        penalty[idx] -= 5
+                        flags[idx].append("⚠️ 高频涨停(庄股疑)")
+                except: pass
+
+        # 规则4: 换手过低控盘 - 换手<3%且无板块效应 (-8)
+        if turnover < 3 and sc < 2:
+            penalty[idx] -= 8
+            flags[idx].append("⚠️ 低换手控盘")
+
+        # 规则5: 午后板+封单最低+换手最高组合 (-10)
+        if seal_t and int(seal_t[:2]) >= 13 and turnover > 10 and seal_f < 5000e4:
+            penalty[idx] -= 10
+            flags[idx].append("⚠️ 午后弱封+高换手")
+
+        # 规则6: 资金极弱 - 净流入<500万 (-5)
+        if 0 <= net < 500e4:
+            penalty[idx] -= 5
+            flags[idx].append("⚠️ 资金极弱")
+
+        # 规则7: 股性差/超跌反弹 - 利用已解析的zt_stat (-5)
+        if zt_stat:
+            try:
+                if float(parts[1]) >= 10 and float(parts[0]) < 2:
+                    penalty[idx] -= 5
+                    flags[idx].append("⚠️ 股性差/超跌反弹")
+            except: pass
+
+    return penalty.clip(lower=-30), flags
+
 # ─── 本金适配评分 ───
 
 def _dynamic_positions(principal: float) -> int:
