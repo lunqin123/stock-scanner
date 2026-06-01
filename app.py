@@ -365,7 +365,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     # 保存原始数据缓存（供「运行」按钮重跑评分用）
     _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level,
                     sentiment_detail, sentiment_ok, history_scores,
-                    lhb_bonus, today_str)
+                    lhb_bonus, today_str, pool=pool)
 
     money_scores = (money_scores + lhb_bonus).clip(upper=20.0)
     sentiment_series = pd.Series(sentiment_score, index=filtered.index)
@@ -511,6 +511,8 @@ def _scan_from_raw_cache(principal: float = 20000):
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     from scanner import money_str
 
+    pool = raw.get('pool')  # 原始涨停池，供龙头检测用
+
     stocks = []
     for rank, idx in enumerate(top_indices, 1):
         row = filtered.loc[idx]
@@ -530,6 +532,8 @@ def _scan_from_raw_cache(principal: float = 20000):
             'sentiment_score': sentiment_score,
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
             'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
+            'danger_flags': danger_flags.get(idx, []),
+            'auction_check': _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool),
             'net_money': net, 'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
             'seal_time': str(row.get('首次封板时间', ''))[:4],

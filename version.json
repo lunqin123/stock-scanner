@@ -1,9 +1,9 @@
 {
-  "version": "1.13.1",
+  "version": "1.13.2",
   "date": "2026-06-01",
   "changes": [
-    "板块龙头名字颜色区分：情绪龙(暖橙#ff8c42) + 中军龙(亮蓝#4fc3f7)",
-    "竞价条件渲染改用innerHTML支持颜色标签"
+    "修复「运行」按钮丢失竞价条件+危险信号：_scan_from_raw_cache未生成auction_check/danger_flags",
+    "修复raw cache未保存原始涨停池pool导致龙头检测无数据"
   ],
   "history": [
     {
