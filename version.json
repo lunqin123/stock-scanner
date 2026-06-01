@@ -1,10 +1,8 @@
 {
-  "version": "1.15.0",
+  "version": "1.15.1",
   "date": "2026-06-01",
   "changes": [
-    "评分方案系统：plans/模块化接口，Plan A=当前逻辑，预留Plan B/C切换",
-    "前端方案选择器+API /api/plans+缓存按plan分key",
-    "卡片字体全局放大"
+    "BUG修复：loadCardViewStream丢弃所有query参数(本金+plan从未生效) + scoring_base归一化基准偏移"
   ],
   "history": [
     {

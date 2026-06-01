@@ -500,6 +500,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
             });
         }
         params.push('_t=' + Date.now());  // 新时间戳防缓存
+        streamUrl += '?' + params.join('&');
         const resp = await fetch(streamUrl);
         const reader = resp.body.getReader();
         const dec = new TextDecoder();

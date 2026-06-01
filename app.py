@@ -201,14 +201,17 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
             print("  [扫描] 过滤后为空", file=sys.stderr)
             return None
 
-    # 可买到过滤（硬过滤）
+    # 保存因子归一化基准集（过滤前，保证归一化不变）
+    scoring_base = filtered.copy() if not filtered.empty else filtered
+
+    # 可买到过滤（硬过滤，不改变归一化基准）
     print(f"  [扫描] 第5步: 可买到过滤...", file=sys.stderr)
     filtered = can_buy_filter(filtered)
     if filtered.empty:
         print("  [扫描] 可买到过滤后为空", file=sys.stderr)
         return None
 
-    # 本金过滤（硬过滤）
+    # 本金过滤（硬过滤，不改变归一化基准）
     filtered = _principal_filter(filtered, principal)
     if filtered.empty:
         print("  [扫描] 本金过滤后为空", file=sys.stderr)
@@ -256,13 +259,14 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
     # 保存原始数据缓存（供「运行」按钮重跑评分用）
     _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level,
                     sentiment_detail, sentiment_ok, history_scores,
-                    lhb_bonus, today_str, pool=pool)
+                    lhb_bonus, today_str, pool=pool, scoring_base=scoring_base)
 
-    # ── 调用评分方案 ──
+    # ── 调用评分方案（因子在 scoring_base 上计算，输出用 filtered） ──
     print(f"  [扫描] 第7步: 调用评分方案 [{plan_name or '默认'}]...", file=sys.stderr)
     plan = get_plan(plan_name)
     result = plan.score({
         'filtered': filtered,
+        'scoring_base': scoring_base,
         'fund_df': fund_df,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
@@ -303,12 +307,14 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
     pool = raw.get('pool')
     if pool is None:
         pool = filtered  # 旧缓存无pool→降级用filtered
+    scoring_base = raw.get('scoring_base', filtered)  # 旧缓存无此字段→降级用filtered
 
-    # ── 调用评分方案 ──
+    # ── 调用评分方案（因子在 scoring_base 上计算） ──
     from plans import get_plan
     plan = get_plan(plan_name)
     result = plan.score({
         'filtered': filtered,
+        'scoring_base': scoring_base,
         'fund_df': fund_df,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,

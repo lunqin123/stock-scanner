@@ -236,7 +236,8 @@ def score(inputs: dict) -> dict:
     Plan A 评分主入口。
 
     inputs 必须包含:
-        filtered       — 过滤后的 DataFrame（已通过 pre_filter + can_buy_filter + _principal_filter）
+        filtered       — 过滤后的 DataFrame（最终输出的股票集）
+        scoring_base   — 因子归一化基准集（>=filtered，保证归一化稳定）
         fund_df        — 资金流 DataFrame 或 None
         sentiment_score    — float
         sentiment_level    — str
@@ -255,6 +256,7 @@ def score(inputs: dict) -> dict:
         sentiment_score, sentiment_level, sentiment_detail, sentiment_ok, date
     """
     filtered = inputs['filtered']
+    scoring_base = inputs.get('scoring_base', filtered)
     fund_df = inputs['fund_df']
     sentiment_score = inputs['sentiment_score']
     sentiment_level = inputs['sentiment_level']
@@ -266,9 +268,17 @@ def score(inputs: dict) -> dict:
     pool = inputs['pool']
     principal = inputs['principal']
 
-    # 1. 计算因子
+    # 1. 在归一化基准集上计算因子，再缩到最终 filtered 集
     print("  [PlanA] 计算9因子...", file=sys.stderr)
-    factors = compute_factors(filtered, fund_df, principal)
+    factors_full = compute_factors(scoring_base, fund_df, principal)
+
+    # 缩到 filtered 的索引（如果 scoring_base > filtered）
+    if len(scoring_base) > len(filtered):
+        common_idx = filtered.index.intersection(scoring_base.index)
+        factors = {k: v.loc[common_idx] if hasattr(v, 'loc') and len(v) > 0 else v
+                   for k, v in factors_full.items()}
+    else:
+        factors = factors_full
 
     # 2. 加权 + 危险信号
     print("  [PlanA] 加权+危险信号...", file=sys.stderr)
