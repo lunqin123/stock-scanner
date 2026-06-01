@@ -176,11 +176,12 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
     if turnover > 15: parts.append("竞价量>昨日成交8%")
     elif turnover > 5: parts.append("竞价量>昨日成交5%")
     else: parts.append("竞价量>昨日成交3%")
-    # ── 板块龙头(3维判定): 空间高度+身位优势+带动效应 ──
+    # ── 板块双龙头: 情绪龙头(连板最高,游资) + 中军龙头(大市值,机构) ──
     if sm >= 10 and pool is not None and not pool.empty:
         ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
         lb_col = '连板数' if '连板数' in pool.columns else (pool.columns[14] if len(pool.columns) > 14 else None)
         st_col = '首次封板时间' if '首次封板时间' in pool.columns else pool.columns[11]
+        cap_col = '流通市值' if '流通市值' in pool.columns else None
         if ind_col and lb_col and st_col:
             industry = str(row.get(ind_col, ''))
             if not industry:
@@ -192,32 +193,49 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
                     same['_lb'] = same[lb_col].fillna(1).astype(float)
                     same['_st'] = same[st_col].fillna('9999').astype(str)
                     same['_st_min'] = same['_st'].apply(lambda t: int(t[:2])*60+int(t[2:4]) if len(str(t))>=4 else 9999)
-                    # 按空间高度+身位排序
-                    candidates = same.sort_values(['_lb', '_st_min'], ascending=[False, True])
-                    # 3维判定：逐候选人检查带动效应(封板后有≥2只同板块跟风)
-                    leader, is_leader = None, False
+                    if cap_col:
+                        same['_cap'] = same[cap_col].fillna(0).astype(float)
+                    else:
+                        same['_cap'] = 0
+                    # 1) 情绪龙头: 连板最高+封板最早+跟风验证(市值通常<200亿)
+                    qx = same.copy()
+                    candidates = qx.sort_values(['_lb', '_st_min'], ascending=[False, True])
+                    emo_leader, is_emo = None, False
                     for ci in candidates.index:
                         c = candidates.loc[ci]
-                        c_st = int(c['_st_min'])
-                        # 统计该票封板后同板块封板的票数(不含自身)
                         followers = sum(1 for i in same.index
-                                       if i != ci and int(same.loc[i, '_st_min']) > c_st)
-                        if followers >= 2 or float(c['_lb']) >= 4:
-                            leader, is_leader = c, True
-                            break
-                    # 无带动效应的→取最高连板作为参考龙头
-                    if leader is None:
-                        leader = candidates.iloc[0]
-                        is_leader = len(same) >= 2  # 至少有板块存在
-                    l_code = str(leader.get('代码', '')).strip().zfill(6)
-                    l_name = str(leader.get('名称', ''))
+                                       if i != ci and int(same.loc[i, '_st_min']) > int(c['_st_min']))
+                        if followers >= 2 or float(c['_lb']) >= 3:
+                            emo_leader, is_emo = c, True; break
+                    if emo_leader is None:
+                        emo_leader = candidates.iloc[0]
+                        is_emo = len(same) >= 2
+                    # 2) 中军龙头: 板块内大市值(>100亿)+趋势强(连板或涨幅)
+                    big = same[same['_cap'] > 100 * 1e8].copy()
+                    jun_leader = None
+                    if not big.empty:
+                        big = big.sort_values('_cap', ascending=False)
+                        jun_leader = big.iloc[0]  # 板块市值最大的票
+                    # 输出
                     m_code = str(row.get('代码', '')).strip().zfill(6)
-                    llb = int(float(leader.get('_lb', 1)))
-                    if l_code == m_code:
-                        tag = "龙" if is_leader else ""
-                        parts.append(("自身为板块龙(" + str(llb) + "连板)") if is_leader else ("自身为板块最高(" + str(llb) + "连板,跟风不足)"))
+                    el_code = str(emo_leader.get('代码', '')).strip().zfill(6)
+                    el_name = str(emo_leader.get('名称', ''))
+                    el_lb = int(float(emo_leader.get('_lb', 1)))
+                    # 情绪龙头条件
+                    if el_code == m_code:
+                        parts.append("情绪龙(" + str(el_lb) + "连板)自身竞价不绿，高开3-7%确认")
                     else:
-                        parts.append(l_name + "(" + l_code + " " + str(llb) + "连板)竞价不绿")
+                        parts.append("情绪龙" + el_name + "(" + el_code + " " + str(el_lb) + "连板)竞价不绿")
+                    # 中军龙头条件
+                    if jun_leader is not None:
+                        jl_code = str(jun_leader.get('代码', '')).strip().zfill(6)
+                        jl_name = str(jun_leader.get('名称', ''))
+                        jl_cap = float(jun_leader.get('_cap', 0)) / 1e8
+                        if jl_code != el_code:  # 不同票才显示
+                            if jl_code == m_code:
+                                parts.append("自身为中军(" + str(int(jl_cap)) + "亿)")
+                            else:
+                                parts.append("中军" + jl_name + "(" + jl_code + " " + str(int(jl_cap)) + "亿)趋势不破")
     if mn >= 10: parts.append("竞价无大单净流出")
     elif mn <= 3: parts.append("竞价放量确认,否则放弃")
     return "；".join(parts)
