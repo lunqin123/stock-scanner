@@ -933,9 +933,10 @@ body {
 .sector-fold-btn:hover { background:rgba(255,255,255,0.05); }
 /* ─── 涨停卡片双列布局 ─── */
 .card-auction {
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    word-break:break-all;line-height:1.5;
 }
 @media (max-width:480px) {
+    .card-auction { font-size:10px; }
     .card-body[style*="flex"] { flex-direction:column !important; }
     .card-bars[style] { min-width:100% !important; }
 }
