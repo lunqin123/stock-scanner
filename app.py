@@ -221,21 +221,21 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
                     el_code = str(emo_leader.get('代码', '')).strip().zfill(6)
                     el_name = str(emo_leader.get('名称', ''))
                     el_lb = int(float(emo_leader.get('_lb', 1)))
-                    # 情绪龙头条件
+                    # 情绪龙头条件 (橙色高亮名字)
                     if el_code == m_code:
-                        parts.append("情绪龙(" + str(el_lb) + "连板)自身竞价不绿，高开3-7%确认")
+                        parts.append("情绪龙(<span class=\"ld-emo\">" + str(el_lb) + "连板</span>)自身竞价不绿，高开3-7%确认")
                     else:
-                        parts.append("情绪龙" + el_name + "(" + el_code + " " + str(el_lb) + "连板)竞价不绿")
-                    # 中军龙头条件
+                        parts.append("情绪龙<span class=\"ld-emo\">" + el_name + "</span>(" + el_code + " " + str(el_lb) + "连板)竞价不绿")
+                    # 中军龙头条件 (蓝色高亮名字)
                     if jun_leader is not None:
                         jl_code = str(jun_leader.get('代码', '')).strip().zfill(6)
                         jl_name = str(jun_leader.get('名称', ''))
                         jl_cap = float(jun_leader.get('_cap', 0)) / 1e8
                         if jl_code != el_code:  # 不同票才显示
                             if jl_code == m_code:
-                                parts.append("自身为中军(" + str(int(jl_cap)) + "亿)")
+                                parts.append("自身为中军<span class=\"ld-jun\">(" + str(int(jl_cap)) + "亿)</span>")
                             else:
-                                parts.append("中军" + jl_name + "(" + jl_code + " " + str(int(jl_cap)) + "亿)趋势不破")
+                                parts.append("中军<span class=\"ld-jun\">" + jl_name + "</span>(" + jl_code + " " + str(int(jl_cap)) + "亿)趋势不破")
     if mn >= 10: parts.append("竞价无大单净流出")
     elif mn <= 3: parts.append("竞价放量确认,否则放弃")
     return "；".join(parts)

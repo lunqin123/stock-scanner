@@ -935,6 +935,9 @@ body {
 .card-auction {
     word-break:break-all;line-height:1.5;
 }
+/* 板块龙头名字高亮 */
+.ld-emo { color:#ff8c42;font-weight:600; }  /* 情绪龙头-暖橙 */
+.ld-jun { color:#4fc3f7;font-weight:600; }  /* 中军龙头-亮蓝 */
 @media (max-width:480px) {
     .card-auction { font-size:10px; }
     .card-body[style*="flex"] { flex-direction:column !important; }

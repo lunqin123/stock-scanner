@@ -66,7 +66,7 @@ function renderStockCards(stocks, data) {
         var tagsHTML = allTags.length ? '<div class="card-analysis">' + allTags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>' : '';
 
         // 竞价条件紧凑行
-        var auctionHTML = s.auction_check ? '<div class="card-auction" style="padding:6px 0 2px;font-size:11px;color:var(--yellow);border-top:1px solid rgba(255,200,50,0.15);margin-top:4px">📋 ' + esc(s.auction_check) + '</div>' : '';
+        var auctionHTML = s.auction_check ? '<div class="card-auction" style="padding:6px 0 2px;font-size:11px;color:var(--yellow);border-top:1px solid rgba(255,200,50,0.15);margin-top:4px">📋 ' + s.auction_check + '</div>' : '';
 
         parts.push(
             '<a href="https://stockpage.10jqka.com.cn/' + s.code + '/" target="_blank" class="stock-card">',
