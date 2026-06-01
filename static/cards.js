@@ -40,6 +40,7 @@ function renderStockCards(stocks, data) {
 
         const bars = [
             [s.buyability_score || 5, 10, '可买性'],
+            [s.stock_sentiment_score || 5, 10, '个股情绪'],
             [s.tech_score, 10, '量价结构'],
             [s.sector_mom, 12, '板块热度'],
             [s.money_score, 20, '资金驱动'],
@@ -70,7 +71,7 @@ function renderStockCards(stocks, data) {
             `<div class="card-body"><div class="card-bars">${barsHTML}</div>`,
             `<div class="card-info">`,
             `<div class="info-row"><span class="label">基础分</span><span class="value">${s.base_score}</span></div>`,
-            `<div class="info-row"><span class="label">情绪加成</span><span class="value ${sentCls}">${esc(sentDisplay)}</span></div>`,
+            `<div class="info-row"><span class="label">大盘情绪</span><span class="value ${sentCls}">${esc(sentDisplay)}</span></div>`,
             `<div class="info-row"><span class="label">净流入</span><span class="value ${s.net_money>=0?'green':'red'}">${msgn}${esc(s.net_money_str)}</span></div>`,
             `<div class="info-row"><span class="label">换手率</span><span class="value">${esc(s.turnover)}%</span></div>`,
             `<div class="info-row"><span class="label">封板时间</span><span class="value">${st.slice(0,2)}:${st.slice(2)}</span></div>`,

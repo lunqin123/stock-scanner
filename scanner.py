@@ -477,6 +477,40 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
     return np.clip(scores, 0, 10)
 
 
+# ─── 个股情绪评分 ───
+
+def score_stock_sentiment(df: pd.DataFrame, money_scores: pd.Series,
+                          buyability_scores: pd.Series) -> pd.Series:
+    """个股情绪 0-10: 资金态度 + 确定性 + 板块地位。每只票独立评分。"""
+    scores = pd.Series(5.0, index=df.index)
+
+    # 1. 资金态度 (0-3): 主力净流入越大→情绪越高
+    scores += (money_scores / 20.0).clip(0, 1) * 3
+
+    # 2. 确定性 (0-3): 首板+封板时机→稳定性
+    scores += (buyability_scores / 12.0) * 3
+
+    # 3. 板块领先度 (0-2): 同板块最早封板的加分
+    industry_col = '所属行业' if '所属行业' in df.columns else None
+    if not industry_col and len(df.columns) > 15:
+        industry_col = df.columns[15]
+    if industry_col:
+        for ind in df[industry_col].unique():
+            mask = df[industry_col] == ind
+            group = df[mask]
+            seal_times = group['首次封板时间'] if '首次封板时间' in df.columns else group.iloc[:, 11]
+            times = seal_times.astype(str).str.strip()
+            # 最早封板的2只加分
+            sorted_idx = times.sort_values().index
+            if len(sorted_idx) >= 1:
+                scores.loc[sorted_idx[0]] += 2.0
+            if len(sorted_idx) >= 2:
+                scores.loc[sorted_idx[1]] += 1.0
+            if len(sorted_idx) >= 3:
+                scores.loc[sorted_idx[2]] += 0.5
+
+    return scores.clip(0, 10)
+
 # ─── 本金适配评分 ───
 
 def _dynamic_positions(principal: float) -> int:
@@ -652,14 +686,16 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
                         history_scores: pd.Series = None,
                         buyability_scores: pd.Series = None,
                         sector_res_scores: pd.Series = None,
+                        stock_sentiment_scores: pd.Series = None,
                         weights: dict = None) -> str:
     import weight_manager
     w = weights if weights else weight_manager.DEFAULT_WEIGHTS
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
     s_buyability = buyability_scores if buyability_scores is not None else pd.Series(6.0, index=df.index)
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
+    s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -672,6 +708,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
     df['开盘可行性'] = s_buyability.round(1)
+    df['个股情绪'] = s_ss.round(1)
     df['板块共振'] = s_res.round(1)
     def _pad(s, w, right=False):
         """CJK字符宽度补齐：中文占2格，英文/数字占1格"""
@@ -733,8 +770,9 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=df.index)
     s_buyability = buyability_scores if buyability_scores is not None else pd.Series(6.0, index=df.index)
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
+    s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -747,6 +785,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df['历史股性'] = s_history.round(1)
     df['舆情评分'] = pd.Series(0, index=df.index)
     df['开盘可行性'] = s_buyability.round(1)
+    df['个股情绪'] = s_ss.round(1)
     df['板块共振'] = s_res.round(1)
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
@@ -840,7 +879,8 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         lines.append(f"\n{rank}. {code} {name} | 总分 {score:.1f}")
         lines.append(f"   封板: {seal_time} | 封单 {fund_str} | 换手 {turnover}%")
         lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w.get('sector_mom', 15):.0f})")
-        lines.append(f"   评分拆解: 封板{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
+        ss_val = float(row.get('个股情绪', 5))
+        lines.append(f"   评分拆解: 封板{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 个情{ss_val:.1f}/{w.get('stock_sentiment', 10):.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
         lines.append(f"   {buy_logic}")
         lines.append(f"   {risk}")
 

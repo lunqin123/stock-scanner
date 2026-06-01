@@ -165,7 +165,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     """涨停扫描核心逻辑，返回结构化数据用于 JSON 和文本输出"""
     from scanner import (fetch_limit_up_pool, pre_filter, score_seal_strength,
                          get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, score_buyability,
+                         score_tech_form, score_buyability, score_stock_sentiment,
                          get_sector_resonance, can_buy_filter,
                          filter_by_price,
                          fetch_fund_flow_data, detect_market_sentiment,
@@ -208,6 +208,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
     sector_res = get_sector_resonance(filtered)
     tech_scores = score_tech_form(filtered)
     buyability_scores = score_buyability(filtered)
+    stock_sent_scores = score_stock_sentiment(filtered, money_scores, buyability_scores)
 
     # 可买到过滤（硬过滤：排除次日大概率买不到的）
     before_pf = len(filtered)
@@ -221,6 +222,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         sector_res = sector_res.loc[filtered.index]
         tech_scores = tech_scores.loc[filtered.index]
         buyability_scores = buyability_scores.loc[filtered.index]
+        stock_sent_scores = stock_sent_scores.loc[filtered.index]
         if filtered.empty:
             print("  [扫描] 可买到过滤后为空", file=sys.stderr)
             return None
@@ -237,6 +239,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         sector_res = sector_res.loc[filtered.index]
         tech_scores = tech_scores.loc[filtered.index]
         buyability_scores = buyability_scores.loc[filtered.index]
+        stock_sent_scores = stock_sent_scores.loc[filtered.index]
         if filtered.empty:
             print("  [扫描] 本金过滤后为空", file=sys.stderr)
             return None
@@ -294,7 +297,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         seal_scores, money_scores, sector_res, sector_mom,
         buyability_scores,
         tech_scores, history_scores, sentiment_series,
-        weights=weights)
+        stock_sentiment_scores=stock_sent_scores, weights=weights)
     total_scores = base_totals  # 情绪已是独立因子，不再做后置乘数
 
     # 后台运行回测验证（周一至四存数据，周五调权）
@@ -329,6 +332,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
             'history_score': round(float(history_scores.get(idx, 0)), 1),
             'sentiment_score': sentiment_score,
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
+            'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
             'net_money': net,
             'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
@@ -347,6 +351,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000):
         'tech_scores': tech_scores,
         'history_scores': history_scores,
         'buyability_scores': buyability_scores,
+        'stock_sent_scores': stock_sent_scores,
         'sentiment_score': sentiment_score,
         'sentiment_level': sentiment_level,
         'sentiment_detail': sentiment_detail,
@@ -373,7 +378,7 @@ def _scan_from_raw_cache(principal: float = 20000):
     lhb_bonus = raw['lhb_bonus']
 
     from scanner import (score_seal_strength, get_money_flow_scores, get_sector_heat_scores,
-                         score_tech_form, score_buyability, get_sector_resonance, TOP_N)
+                         score_tech_form, score_buyability, score_stock_sentiment, get_sector_resonance, TOP_N)
 
     # 本金过滤
     filtered = _principal_filter(filtered, principal)
@@ -393,6 +398,7 @@ def _scan_from_raw_cache(principal: float = 20000):
     sector_res = get_sector_resonance(filtered)
     tech_scores = score_tech_form(filtered)
     buyability_scores = score_buyability(filtered)
+    stock_sent_scores = score_stock_sentiment(filtered, money_scores, buyability_scores)
 
     money_scores = (money_scores + lhb_bonus.loc[filtered.index] if not lhb_bonus.empty
                     else money_scores).clip(upper=20.0)
@@ -405,7 +411,8 @@ def _scan_from_raw_cache(principal: float = 20000):
         buyability_scores,
         tech_scores, history_scores.loc[filtered.index] if hasattr(history_scores, 'loc')
                                           else pd.Series(2.5, index=filtered.index),
-        sentiment_series, weights=weights)
+        sentiment_series,
+        stock_sentiment_scores=stock_sent_scores, weights=weights)
     total_scores = base_totals
 
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
@@ -429,6 +436,7 @@ def _scan_from_raw_cache(principal: float = 20000):
             'history_score': round(float(history_scores.get(idx, 2.5)), 1),
             'sentiment_score': sentiment_score,
             'buyability_score': round(float(buyability_scores.get(idx, 5)), 1),
+            'stock_sentiment_score': round(float(stock_sent_scores.get(idx, 5)), 1),
             'net_money': net, 'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
             'seal_time': str(row.get('首次封板时间', ''))[:4],
@@ -441,6 +449,7 @@ def _scan_from_raw_cache(principal: float = 20000):
         'raw_money': raw_money, 'sector_mom': sector_mom,
         'sector_res': sector_res, 'tech_scores': tech_scores,
         'history_scores': history_scores, 'buyability_scores': buyability_scores,
+        'stock_sent_scores': stock_sent_scores,
         'sentiment_score': sentiment_score, 'sentiment_level': sentiment_level,
         'sentiment_detail': sentiment_detail, 'sentiment_ok': sentiment_ok,
         'date': raw['date'], '_from_cache': True,
@@ -468,6 +477,7 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
         history_scores=data['history_scores'],
         buyability_scores=data['buyability_scores'],
         sector_res_scores=data['sector_res'],
+        stock_sentiment_scores=data.get('stock_sent_scores'),
     ))
 
 
