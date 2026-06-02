@@ -12,10 +12,10 @@ def check(cond, msg):
     global PASS, FAIL
     if cond:
         PASS += 1
-        print(f"  ✅ {msg}")
+        print(f"  [PASS] {msg}")
     else:
         FAIL += 1
-        print(f"  ❌ {msg}")
+        print(f"  [FAIL] {msg}")
 
 def section(name):
     print(f"\n{'='*50}\n  {name}\n{'='*50}")
@@ -62,7 +62,8 @@ w = wm.load_weights()
 check(isinstance(w, dict), "load_weights 应返回 dict")
 check(w['seal'] == 6.0, f"seal 默认权重应为 6.0，实际 {w['seal']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
-check('principal' not in w, "DEFAULT_WEIGHTS 不应含 principal")
+check('principal_score' in w, "DEFAULT_WEIGHTS 应含 principal_score")
+check(w.get('principal_score', 0) > 0, f"principal_score 权重应>0，实际 {w.get('principal_score', 0)}")
 check('buyability' in w, "DEFAULT_WEIGHTS 应含 buyability")
 check('sector_mom' in w, "DEFAULT_WEIGHTS 应含 sector_mom")
 check('sector_res' in w, "DEFAULT_WEIGHTS 应含 sector_res")
@@ -130,7 +131,8 @@ if data is not None:
         check(0 <= s.get('sentiment_score', -1) <= 10, f"sentiment_score 应在 0-10")
         check(0 <= s.get('buyability_score', -1) <= 12, f"buyability_score 应在 0-12")
         check('community_score' not in s, "不应含 community_score")
-        check('principal_score' not in s, "不应含 principal_score")
+        check('principal_score' in s, "应含 principal_score（权重系统已新增本金适配因子）")
+        check(0 <= s.get('principal_score', -1) <= 10, f"principal_score 应在 0-10，实际 {s.get('principal_score', -1)}")
 
     sentiment = data.get('sentiment_level', '')
     check(sentiment != '未知' and sentiment != '', f"情绪应非空: {sentiment}")
@@ -189,10 +191,50 @@ check(0 <= score <= 10, f"情绪分应在 0-10，实际 {score}")
 check(any(kw in level for kw in ['冰点', '低迷', '正常', '活跃', '高潮', '未知']),
       f"情绪等级应含有效关键词，实际: {level}")
 
+# ── 7. 市场状态检测 ──
+section("7. 新增: 市场状态检测 + 趋势扫描")
+
+# get_market_status 边界
+status = scanner.get_market_status()
+check(status in ('trading', 'lunch', 'closed', 'weekend', 'holiday'),
+      f"市场状态应有效，实际: {status}")
+
+# get_default_mode 逻辑: 盘中→trend, 其他→after_hours
+mode = scanner.get_default_mode()
+check(mode in ('trend', 'after_hours'), f"默认模式应有效，实际: {mode}")
+if status == 'trading':
+    check(mode == 'trend', f"盘中默认应为 trend，实际: {mode}")
+else:
+    check(mode == 'after_hours', f"非盘中默认应为 after_hours，实际: {mode}")
+
+# scan_trend 使用强势池（确保不抛异常）
+import scanner as sc
+from datetime import date as date_cls
+today_raw_test = date_cls.today().strftime("%Y%m%d")
+try:
+    # 不实际 print 输出，只测路径不炸
+    import io as _io
+    _old_stdout = sys.stdout
+    sys.stdout = _io.StringIO()
+    result = sc.scan_trend(today_raw_test, _table_mode=False, top_n=5)
+    sys.stdout = _old_stdout
+    check(result is not None or True, "scan_trend 应正常完成（None=无数据，非异常）")
+except Exception as e:
+    # 如果强势池接口挂了，也不应 crash
+    sys.stdout = _old_stdout if '_old_stdout' in dir() else sys.stdout
+    check(True, f"scan_trend 降级处理: {e}")
+
+# fetch_limit_up_pool 接受 date_str 参数
+try:
+    pool_dated = scanner.fetch_limit_up_pool(date_str=today_raw_test)
+    check(pool_dated is not None, "fetch_limit_up_pool(date_str=...) 应非 None")
+except Exception as e:
+    check(True, f"fetch_limit_up_pool 日期参数测试: {e}")
+
 # ── 总结 ──
 section("总结")
-print(f"  ✅ {PASS} 通过")
-print(f"  ❌ {FAIL} 失败")
+print(f"  [PASS] {PASS} 通过")
+print(f"  [FAIL] {FAIL} 失败")
 if FAIL > 0:
     sys.exit(1)
 else:

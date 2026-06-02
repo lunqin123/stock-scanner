@@ -16,8 +16,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from cache import get as cache_get, put as cache_put, daily_get, daily_set
-
+from cache import daily_get, daily_set
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
 _CST = timezone(timedelta(hours=8))
@@ -96,6 +95,7 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
+_RAW_CACHE_VERSION = 2  # 缓存格式版本：每次改评分/缓存结构 +1，旧版自动失效
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
@@ -107,6 +107,7 @@ def _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level, sentime
         import pickle as _pk
         os.makedirs(os.path.dirname(_RAW_CACHE_PATH), exist_ok=True)
         data = {
+            'version': _RAW_CACHE_VERSION,
             'filtered': filtered,
             'fund_df': fund_df,
             'sentiment_score': sentiment_score,
@@ -142,6 +143,12 @@ def _load_raw_cache():
             return None
         with open(_RAW_CACHE_PATH, 'rb') as f:
             data = _pk.load(f)
+        # 版本校验：格式不匹配的旧缓存自动失效
+        cache_ver = data.get('version', 0)
+        if cache_ver < _RAW_CACHE_VERSION:
+            print(f"  [缓存] 格式版本不匹配 (缓存v{cache_ver} < 当前v{_RAW_CACHE_VERSION})，自动拉取新数据", file=sys.stderr)
+            os.remove(_RAW_CACHE_PATH)
+            return None
         print("  [缓存] 原始数据加载成功", file=sys.stderr)
         return data
     except Exception as e:
@@ -395,7 +402,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     today = _today_trading()
     key = f"sector_cards_{today}"
     if not refresh:
-        cached = cache_get(key)
+        cached = daily_get(key)
         if cached:
             print("  [板块卡片] 命中缓存", file=sys.stderr)
             return cached
@@ -446,7 +453,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
             'stocks': stock_list, 'sector_code': '',
         })
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
-    cache_put(key, result)
+    daily_set(key, result, force=refresh)
     return result
 
 
@@ -460,7 +467,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     today = _today_trading()
     key = f"trend_cards_{today}"
     if not refresh:
-        cached = cache_get(key)
+        cached = daily_get(key)
         if cached:
             print("  [趋势卡片] 命中缓存", file=sys.stderr)
             return cached
@@ -506,7 +513,9 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
         with ThreadPoolExecutor(max_workers=2) as ex:
             futs = {ex.submit(_zb): 'zb', ex.submit(_lt): 'lt'}
             for f in as_completed(futs):
-                try: pools[futs[f]] = f.result() or pd.DataFrame()
+                try:
+                    r = f.result()
+                    pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
                 except: pools[futs[f]] = pd.DataFrame()
         zb_df = pools.get('zb', pd.DataFrame())
         lt_df = pools.get('lt', pd.DataFrame())
@@ -615,7 +624,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
     items = items[:10]
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
-    cache_put(key, result)
+    daily_set(key, result, force=refresh)
     return result
 
 
@@ -631,7 +640,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     today = _today_trading()
     key = f"zhaban_cards_{today}"
     if not refresh:
-        cached = cache_get(key)
+        cached = daily_get(key)
         if cached:
             print("  [炸板卡片] 命中缓存", file=sys.stderr)
             return cached
@@ -709,7 +718,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
 
     items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
-    cache_put(key, result)
+    daily_set(key, result, force=refresh)
     return result
 
 
@@ -723,7 +732,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
     today = _today_trading()
     key = f"dtqiaoban_cards_{today}"
     if not refresh:
-        cached = cache_get(key)
+        cached = daily_get(key)
         if cached:
             print("  [翘板卡片] 命中缓存", file=sys.stderr)
             return cached
@@ -793,7 +802,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
 
     items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
-    cache_put(key, result)
+    daily_set(key, result, force=refresh)
     return result
 
 
@@ -1155,7 +1164,9 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
                 with ThreadPoolExecutor(max_workers=3) as ex:
                     futs = {ex.submit(f): k for f, k in [(_get_limit, 'limit'), (_get_zhaban, 'zhaban'), (_get_dieting, 'dieting')]}
                     for f in as_completed(futs):
-                        try: pools[futs[f]] = f.result() or pd.DataFrame()
+                        try:
+                            r = f.result()
+                            pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
                         except: pools[futs[f]] = pd.DataFrame()
                 limit_df = pools.get('limit', pd.DataFrame())
                 zhaban_df = pools.get('zhaban', pd.DataFrame())
@@ -1569,13 +1580,42 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
         from scanner import score_zhaban_data
         scored = score_zhaban_data(df, today)
         items = []
+        st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
+        sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
+        zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
+        to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
+        ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
             name = str(row.iloc[2])
-            seal_time = str(row.get('首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11], ''))[:4]
+            seal_time = str(row.get(st_col, ''))[:4]
             total = float(row.get('总分', 0))
-            items.append({'code': code, 'name': name, 'score': int(total),
-                          'seal_time': seal_time, 'turnover': round(float(row.get('换手率', scored.columns[9] if len(scored.columns)>9 else 0) or 0),1),
+            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
+            turnover = round(float(row.get(to_col, 0) or 0), 1)
+            zb_times = int(float(row.get(zb_col, 0))) if pd.notna(row.get(zb_col, None)) else 0
+            seal_fund = float(row.get(sf_col, 0) or 0)
+            net = float(row.get('净流入', 0))
+            industry = str(row.get(ind_col, ''))
+            # 信号标签
+            sigs = []
+            if seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 10: sigs.append('早盘封板')
+            elif seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 11: sigs.append('上午封板')
+            else: sigs.append('午后封板')
+            if zb_times > 0: sigs.append(f'炸板{zb_times}次')
+            if net > 1e8: sigs.append('资金承接强')
+            elif net > 0: sigs.append('有资金承接')
+            else: sigs.append('资金流出')
+            if 8 <= turnover <= 20: sigs.append('换手适中')
+            elif turnover > 20: sigs.append('高换手')
+            # 建议
+            if total >= 70: advice = '反包潜力高，竞价高开放量可参与'
+            elif total >= 50: advice = '竞价观察，高开放量可博弈反包'
+            elif total >= 35: advice = '仅观望，需竞价放量确认'
+            else: advice = '不参与'
+            items.append({'code': code, 'name': name, 'score': int(total), 'price': price,
+                          'seal_time': seal_time, 'turnover': turnover, 'seal_fund': seal_fund,
+                          'zhaban_times': zb_times, 'industry': industry, 'net_money': round(net, 0),
+                          'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream', refresh)
@@ -1608,9 +1648,22 @@ async def api_trend_stream(refresh: bool = Query(False)):
         items = []
         for _, row in trend.iterrows():
             code = str(row[code_col]).strip().zfill(6)
-            items.append({'code': code, 'name': str(row[name_col]), 'change_pct': round(float(row['涨幅']),1),
-                          'url': f"https://m.10jqka.com.cn/stock/{code}/",
-                          'turnover': round(float(row.iloc[9]) if pd.notna(row.iloc[9]) else 0, 1)})
+            chg = round(float(row['涨幅']), 1)
+            turnover = round(float(row.iloc[9]) if pd.notna(row.iloc[9]) else 0, 1)
+            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
+            vol = float(row.iloc[6]) if pd.notna(row.iloc[6]) else 0
+            industry = str(row.iloc[15]) if len(row) > 15 else ''
+            # signals
+            sigs = []
+            if chg >= 7: sigs.append('强势续涨')
+            elif chg >= 5: sigs.append('量价齐升')
+            else: sigs.append('温和上涨')
+            if turnover > 15: sigs.append('高换手')
+            elif turnover > 8: sigs.append('放量健康')
+            items.append({'code': code, 'name': str(row[name_col]), 'change_pct': chg,
+                          'price': price, 'turnover': turnover, 'volume': vol, 'industry': industry,
+                          'signals': sigs, 'advice': '沿5日线持有，破5日线止盈',
+                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items, {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
 
@@ -1635,9 +1688,25 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
+            total = int(row.get('翘板评分', 0))
+            turn_val = float(row.iloc[9]) if len(row) > 9 and pd.notna(row.iloc[9]) else 0
+            seal_val = float(row.iloc[10]) if len(row) > 10 and pd.notna(row.iloc[10]) else 0
+            cont_val = int(float(row.iloc[13])) if len(row) > 13 and pd.notna(row.iloc[13]) else 0
+            st = str(row.iloc[11]) if len(row) > 11 and pd.notna(row.iloc[11]) else ''
+            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
+            sigs = []
+            if total >= 60: sigs.append('高信号')
+            elif total >= 35: sigs.append('中等信号')
+            else: sigs.append('弱信号')
+            if turn_val > 10: sigs.append('高换手承接')
+            if cont_val >= 3: sigs.append(f'N{cont_val}板超跌')
+            advice = '竞价观察，放量高开可博弈反抽' if total >= 60 else ('仅观望' if total >= 35 else '不参与')
             items.append({'code': code, 'name': str(row.iloc[2]),
-                          'score': int(row.get('翘板评分', 0)),
+                          'score': total, 'price': price,
                           'change': float(row.iloc[3]) if pd.notna(row.iloc[3]) else -10,
+                          'seal_time': st[:4] if len(st) >= 4 else st,
+                          'turnover': turn_val, 'seal_fund': seal_val, 'consecutive': cont_val,
+                          'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream', refresh)
@@ -1657,7 +1726,9 @@ async def api_sector_stream(refresh: bool = Query(False)):
                     ex.submit(ak.stock_zt_pool_zbgc_em, date=today): 'zhaban',
                     ex.submit(ak.stock_zt_pool_dtgc_em, date=today): 'dieting'}
             for f in as_completed(futs):
-                try: pools[futs[f]] = f.result() or pd.DataFrame()
+                try:
+                    r = f.result()
+                    pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
                 except: pools[futs[f]] = pd.DataFrame()
         print(f"  [板块] 涨停{len(pools.get('limit',pd.DataFrame()))} 炸板{len(pools.get('zhaban',pd.DataFrame()))} 跌停{len(pools.get('dieting',pd.DataFrame()))}, 计算中...", file=sys.stderr)
         stats = score_sector_data(pools.get('limit',pd.DataFrame()), pools.get('zhaban',pd.DataFrame()), pools.get('dieting',pd.DataFrame()), top_n=15)
@@ -1698,7 +1769,7 @@ def get_market_status():
     return "closed"
 
 
-_CLOSE_CACHE_KEY = "limit_up_cards_20000"
+_CLOSE_CACHE_KEY = "limit_up_cards_20000_default"
 
 def _schedule_close_scan():
     """盘后 15:05 自动触发一次全量扫描，写入冻结缓存（默认本金 2 万）"""
@@ -1888,9 +1959,22 @@ def index():
     with open(os.path.join(_BASE_DIR, "templates/index.html"), "r", encoding="utf-8") as f:
         html = f.read()
     # 注入缓存的排行榜数据（QQ 浏览器等无法依赖 localStorage）
-    cached = daily_get("limit_up_cards_20000")
+    # 自动找最新缓存（不硬编码本金），避免与"运行"按钮的排行榜不一致
+    import json as _json, glob as _glob
+    cached = None
+    pattern = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+                           "claude_stock_cache", "daily_*_limit_up_cards_*_v*.json")
+    candidates = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    for path in candidates:
+        try:
+            with open(path, 'r', encoding='utf-8') as _f:
+                data = _json.loads(_f.read())
+            if data.get('stocks'):
+                cached = data
+                break
+        except Exception:
+            continue
     if cached and cached.get('stocks'):
-        import json as _json
         inject = '<script>window._CACHED_RANKING = ' + _json.dumps(cached, ensure_ascii=False) + ';</script>'
         html = html.replace('</head>', inject + '</head>')
     return HTMLResponse(content=html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})

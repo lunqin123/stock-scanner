@@ -383,12 +383,9 @@ async function loadCardView(output, pageKey, apiUrl) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     const url = apiUrl || info.api;
 
-    if (pageKey === 'scan-limit') {
-        await loadCardViewStream(output, pageKey, apiUrl);
-        return;
-    }
-
     // 非涨停扫描也显示加载状态
+    // 注: scan-limit 的流式路径在 callApi 中通过 isStream 判断走 loadCardViewStream
+    //     这里的 loadCardView 处理 JSON 卡片端点（如 /cards），不要重定向到流解析器
     showProgress('正在拉取数据...', 30);
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 

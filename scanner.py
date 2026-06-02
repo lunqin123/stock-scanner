@@ -126,12 +126,61 @@ def filter_non_main_board(df: pd.DataFrame,
 def get_today_str() -> str:
     return date.today().strftime("%Y-%m-%d")
 
+
+def get_market_status(now=None):
+    """
+    检测当前市场状态。
+    返回: 'trading' (盘中 9:30-15:00), 'lunch' (午休 11:30-13:00),
+          'closed' (盘后), 'weekend' (周末), 'holiday' (节假日)
+    """
+    from cache import _is_trading_day
+    if now is None:
+        now = datetime.now(_CST)
+    today_str = now.strftime("%Y%m%d")
+
+    # 周末
+    if now.weekday() >= 5:
+        return 'weekend'
+
+    # 非交易日
+    if not _is_trading_day(today_str):
+        return 'holiday'
+
+    minute = now.hour * 60 + now.minute
+
+    # 午休
+    if MORNING_CLOSE_MINUTES <= minute < AFTERNOON_OPEN_MINUTES:
+        return 'lunch'
+
+    # 盘中
+    if MARKET_OPEN_MINUTES <= minute < MORNING_CLOSE_MINUTES:
+        return 'trading'
+    if AFTERNOON_OPEN_MINUTES <= minute < AFTERNOON_CLOSE_MINUTES:
+        return 'trading'
+
+    # 盘前 / 盘后
+    return 'closed'
+
+
+def get_default_mode():
+    """
+    自动检测默认扫描模式:
+    - 盘中 → 'trend' (趋势动量股，能买进)
+    - 盘后/非交易日 → 'after_hours' (涨停多因子，次日预测)
+    """
+    status = get_market_status()
+    if status == 'trading':
+        return 'trend'
+    return 'after_hours'
+
 # ─── 第一步: 获取涨停池（含非交易日检测） ───
 
-def fetch_limit_up_pool() -> pd.DataFrame:
-    """获取当日涨停股池。非交易日或 API 故障返回空 DataFrame。"""
+def fetch_limit_up_pool(date_str: str = None) -> pd.DataFrame:
+    """获取指定日期涨停股池。非交易日或 API 故障返回空 DataFrame。"""
     print("[1/5] 获取涨停股池...", file=sys.stderr)
-    today_str = date.today().strftime("%Y%m%d")
+    if date_str is None:
+        date_str = date.today().strftime("%Y%m%d")
+    today_str = date_str
     try:
         df = ak.stock_zt_pool_em(date=today_str)
     except Exception:
@@ -1455,158 +1504,255 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
     适用于"不涨停不停涨"的趋势交易模式。
     """
     n = top_n if top_n is not None else TOP_N
-    print("[趋势扫描] 获取全市场数据...", file=sys.stderr)
+    print("[趋势扫描] 获取强势股池...", file=sys.stderr)
 
-    # 尝试获取全市场实时行情
-    spot_df = None
+    # ── 主方案：akshare 强势池（盘中实时数据，已验证可用）──
+    strong_df = None
     try:
-        spot_df = ak.stock_zh_a_spot_em()
-        if spot_df is not None and not spot_df.empty:
-            print(f"  → 全市场 {len(spot_df)} 只股票", file=sys.stderr)
-    except Exception:
-        pass
+        strong_df = ak.stock_zt_pool_strong_em(date=today_str)
+        if strong_df is not None and not strong_df.empty:
+            print(f"  -> 强势池 {len(strong_df)} 只（实时数据）", file=sys.stderr)
+    except Exception as e:
+        print(f"  ! 强势池获取失败: {e}", file=sys.stderr)
 
-    if spot_df is None or spot_df.empty:
-        # 降级/主方案：昨日涨停 → 今日续强（未涨停但仍收红）
-        # 这是经典的趋势动量策略：强者恒强
-        print("  akshare全市场接口暂不可用，使用「昨日涨停今日续强」策略", file=sys.stderr)
-        print("  该策略寻找昨日涨停后今日继续走强(涨幅3-9%)的标的", file=sys.stderr)
-        from datetime import datetime, timedelta
-        today_dt = datetime.strptime(today_str, '%Y%m%d') if len(today_str) == 8 else datetime.today()
-        wd = today_dt.weekday()
-        days_back = 3 if wd == 0 else (2 if wd == 6 else 1)
-        yesterday = (today_dt - timedelta(days=days_back)).strftime('%Y%m%d')
-        try:
-            prev = ak.stock_zt_pool_previous_em(date=yesterday)
-        except Exception:
-            prev = pd.DataFrame()
-        if prev.empty:
-            print("no_data")
-            return
-        # 今日未涨停(涨幅<9%)但仍收红(涨幅>0)的昨日涨停股
-        change_col = prev.columns[3]
-        name_col_p = prev.columns[2]
-        df = prev.copy()
-        df = filter_non_main_board(df)
-        # 涨幅3-9%之间 → 强势但未涨停
+    if strong_df is not None and not strong_df.empty:
+        # ── 强势池数据清洗与筛选 ──
+        df = strong_df.copy()
+        before = len(df)
+
+        # 列名标准化（强势池列名已经规范，但做防御处理）
+        code_col = '代码' if '代码' in df.columns else df.columns[1]
+        name_col = '名称' if '名称' in df.columns else df.columns[2]
+        change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
+        turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
+        vol_ratio_col = '量比' if '量比' in df.columns else None   # 强势池特有
+        volume_col = '成交额' if '成交额' in df.columns else df.columns[6]
+        cap_col = '流通市值' if '流通市值' in df.columns else None
+        industry_col = '所属行业' if '所属行业' in df.columns else None
+
+        # 板块过滤
+        df = filter_non_main_board(df, code_col=code_col)
+
+        # 市值过滤
+        if cap_col and cap_col in df.columns:
+            df = df[df[cap_col].astype(float) <= MAX_MARKET_CAP * 1e8]
+
+        # 价格过滤
+        price_col = '最新价' if '最新价' in df.columns else df.columns[4]
+        df = df[df[price_col].astype(float) <= MAX_PRICE]
+
+        # ── 核心筛选：涨幅2.5-8.5%（没涨停的强势股，能买进！）──
         changes = df[change_col].astype(float)
-        df = df[(changes >= 3) & (changes < 9)]
-        if df.empty:
-            print("no_data")
-            return
-        df['趋势评分'] = changes * 10  # 趋势动量直接基于涨幅
-        df = df.sort_values('趋势评分', ascending=False).head(n)
+        df = df[(changes >= 2.5) & (changes < 8.5)]
 
-        lines = [f"趋势动量股 TOP{n} | 昨日涨停今日续强", "=" * 70]
-        for rank, (_, row) in enumerate(df.iterrows(), 1):
-            code = str(row.iloc[1]).strip().zfill(6)
-            name = row.iloc[2]
-            chg = float(row[change_col])
-            lines.append(f"{rank}. {code} {name} | 今日涨幅 {chg:+.1f}%")
-            lines.append(f"   昨日涨停后今日继续走强，趋势延续中")
-            lines.append(f"   策略: 沿5日线持有，破5日线止盈")
+        after = len(df)
+        print(f"  -> 过滤后 {after}/{before} 只（涨幅2.5-8.5% + 非ST/科创/北交 + 市值<{MAX_MARKET_CAP}亿）", file=sys.stderr)
 
-        # ── 构建返回数据（供全维度综合榜单使用） ──
-        trend_results = []
-        for _, row in df.iterrows():
-            code = str(row.iloc[1]).strip().zfill(6)
-            name = row.iloc[2]
-            chg = float(row[change_col])
-            trend_results.append({'code': code, 'name': name, 'score': min(chg * 10, 100), 'dimension': '趋势动量'})
-        lines.append(f"\n{'=' * 70}")
-        print("\n".join(lines))
-        return trend_results
+        if not df.empty:
+            # ── 动量评分（100分制）──
+            scores = pd.Series(0.0, index=df.index)
 
-    # ── 主方案：全市场扫描 ──
-    df = spot_df.copy()
-    before = len(df)
+            # 1. 涨幅分 (0-40): 3-8%甜蜜区
+            for idx in df.index:
+                chg = float(changes[idx])
+                if 6 <= chg <= 8:
+                    scores[idx] += 40  # 强势但未涨停，最佳追涨区
+                elif 5 <= chg < 6:
+                    scores[idx] += 35
+                elif 4 <= chg < 5:
+                    scores[idx] += 30
+                elif 3 <= chg < 4:
+                    scores[idx] += 25
+                elif 8 <= chg < 9.5:
+                    scores[idx] += 20  # 接近涨停，风险偏高
+                else:
+                    scores[idx] += 15
 
-    # 列索引识别
-    code_col = df.columns[1] if '代码' not in df.columns else '代码'
-    name_col = df.columns[2] if '名称' not in df.columns else '名称'
-    price_col = df.columns[3] if '最新价' not in df.columns else '最新价'
-    change_col = df.columns[4] if '涨跌幅' not in df.columns else '涨跌幅'
-    turnover_col = df.columns[5] if '换手率' not in df.columns else '换手率'
-    volume_col = df.columns[6] if '成交额' not in df.columns else '成交额'
+            # 2. 换手活跃分 (0-30)
+            turnovers = df[turnover_col].astype(float)
+            for idx in df.index:
+                t = turnovers[idx]
+                if 8 <= t <= 15:
+                    scores[idx] += 30  # 换手甜蜜区
+                elif 5 <= t < 8:
+                    scores[idx] += 25
+                elif 15 < t <= 20:
+                    scores[idx] += 20
+                elif 3 <= t < 5:
+                    scores[idx] += 15
+                elif 20 < t <= 25:
+                    scores[idx] += 10
+                else:
+                    scores[idx] += 5
 
-    df = filter_non_main_board(df, code_col=code_col)
+            # 3. 成交额分 (0-30): 越大关注度越高
+            volumes = df[volume_col].astype(float)
+            max_v = volumes.max()
+            if max_v > 0:
+                scores += (volumes / max_v) * 30
+            else:
+                scores += 15
 
-    # 过滤股价和市值
-    if '流通市值' in df.columns:
-        df = df[df['流通市值'].astype(float) <= MAX_MARKET_CAP * 1e8]
-    elif df.columns[7] is not None:
-        try:
-            df = df[df.iloc[:, 7].astype(float) <= MAX_MARKET_CAP * 1e8]
-        except:
-            pass
-    df = df[df[price_col].astype(float) <= MAX_PRICE]
+            # 4. 量比加分（强势池特有指标, 0-10额外分）
+            if vol_ratio_col and vol_ratio_col in df.columns:
+                vol_ratios = df[vol_ratio_col].astype(float)
+                for idx in df.index:
+                    vr = vol_ratios[idx]
+                    if vr > 3:
+                        scores[idx] += 5   # 巨量异动
+                    elif vr > 2:
+                        scores[idx] += 3
+                    elif vr > 1.2:
+                        scores[idx] += 1
 
-    # 核心筛选：涨幅3-8%(未涨停)，成交活跃
+            # 5. 新高加分
+            new_high_col = '是否新高' if '是否新高' in df.columns else None
+            if new_high_col is None and len(df.columns) > 11:
+                new_high_col = df.columns[11]
+            if new_high_col and new_high_col in df.columns:
+                for idx in df.index:
+                    if str(df.loc[idx, new_high_col]) == '是':
+                        scores[idx] += 3
+
+            df['动量评分'] = scores.round(1)
+            df = df.sort_values('动量评分', ascending=False).head(n)
+
+            # ── 输出 ──
+            market_status = get_market_status()
+            time_tag = "盘中实时" if market_status == 'trading' else "盘后强势池"
+            today_display = date.today().strftime('%Y-%m-%d')
+            lines = [f"趋势动量股 TOP{n} ({today_display} {time_tag})", "=" * 80]
+
+            trend_results = []
+            for _, row in df.iterrows():
+                code = str(row[code_col]).strip().zfill(6)
+                name = row[name_col]
+                score = float(row['动量评分'])
+                trend_results.append({'code': code, 'name': name, 'score': min(score, 100), 'dimension': '趋势动量'})
+
+            for rank, (_, row) in enumerate(df.iterrows(), 1):
+                code = str(row[code_col]).strip().zfill(6)
+                name = row[name_col]
+                score = float(row['动量评分'])
+                chg = float(row[change_col])
+                t = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+                v = float(row[volume_col]) if pd.notna(row[volume_col]) else 0
+                vol_str = f"{v/1e8:.2f}亿" if v >= 1e8 else f"{v/1e4:.0f}万"
+                # 量比显示
+                vr_display = ""
+                if vol_ratio_col and vol_ratio_col in df.columns:
+                    vr_val = float(row[vol_ratio_col]) if pd.notna(row.get(vol_ratio_col, None)) else 0
+                    if vr_val > 0:
+                        vr_display = f" 量比{vr_val:.1f}"
+                # 新高显示
+                nh_display = ""
+                if new_high_col and new_high_col in df.columns:
+                    if str(row.get(new_high_col, '')) == '是':
+                        nh_display = " [新高!]"
+                # 行业
+                industry = ""
+                if industry_col and industry_col in df.columns:
+                    industry = str(row.get(industry_col, ''))
+
+                # 评级
+                if score >= 75:
+                    grade = "AAA"
+                    grade_desc = "强势突破"
+                elif score >= 60:
+                    grade = "AA"
+                    grade_desc = "趋势优良"
+                elif score >= 45:
+                    grade = "A"
+                    grade_desc = "值得关注"
+                else:
+                    grade = "B"
+                    grade_desc = "一般"
+
+                lines.append(f"\n{rank}. {code} {name} | {grade}级 {score:.1f}分{nh_display}")
+                lines.append(f"   涨幅 {chg:+.1f}% | 换手 {t:.1f}% | 成交 {vol_str}{vr_display}")
+                signal = "量价齐升" if t > 5 and chg > 4 else "温和放量" if t > 2 else "缩量上涨"
+                lines.append(f"   信号: {signal}({grade_desc}) | 行业: {industry}")
+                lines.append(f"   策略: 沿5/10日线低吸，放量滞涨止盈，不追高")
+
+            lines.append(f"\n{'=' * 80}")
+            lines.append("盘中趋势策略: 从未涨停的强势股中寻找动量标的，买在启动前")
+            lines.append("筛选条件: 涨幅2.5-8.5% + 换手5-15% + 量比>1.0（盘中实时）")
+            lines.append("止损: 跌破10日线或单日跌超-5%出局")
+            print("\n".join(lines))
+            return trend_results
+
+        # ── 强势池有数据但筛选后为空 ──
+        print("  -> 强势池中无符合条件标的（涨幅2.5-8.5% + 非ST/科创/北交）", file=sys.stderr)
+        # 放宽条件重试
+        df_loose = strong_df.copy()
+        df_loose = filter_non_main_board(df_loose)
+        changes_loose = df_loose['涨跌幅' if '涨跌幅' in df_loose.columns else df_loose.columns[3]].astype(float)
+        df_loose = df_loose[(changes_loose >= 1.5) & (changes_loose < 9.5)]
+        if not df_loose.empty:
+            print(f"  -> 放宽条件后 {len(df_loose)} 只（涨幅1.5-9.5%）", file=sys.stderr)
+            # 简单排序输出
+            df_loose['动量评分'] = changes_loose[df_loose.index] * 8
+            df_loose = df_loose.sort_values('动量评分', ascending=False).head(n)
+            today_display = date.today().strftime('%Y-%m-%d')
+            lines = [f"趋势动量股 TOP{n} ({today_display} 放宽条件)", "=" * 60]
+            trend_results = []
+            for _, row in df_loose.iterrows():
+                c = str(row.get('代码', row.iloc[1])).strip().zfill(6)
+                nm = row.get('名称', row.iloc[2])
+                chg = float(row.get('涨跌幅', row.iloc[3]))
+                trend_results.append({'code': c, 'name': nm, 'score': min(chg * 10, 100), 'dimension': '趋势动量'})
+                lines.append(f"{len(trend_results)}. {c} {nm} | 涨幅 {chg:+.1f}%")
+            lines.append(f"\n{'=' * 60}")
+            lines.append("放宽条件扫描，标的仅供参考")
+            print("\n".join(lines))
+            return trend_results
+
+    # ── 降级方案：昨日涨停今日续强（盘后可用）──
+    print("  强势池不可用，使用「昨日涨停今日续强」策略", file=sys.stderr)
+    print("  该策略寻找昨日涨停后今日继续走强(涨幅3-9%)的标的", file=sys.stderr)
+    from datetime import datetime as dt_mod, timedelta
+    today_dt = dt_mod.strptime(today_str, '%Y%m%d') if len(today_str) == 8 else dt_mod.today()
+    wd = today_dt.weekday()
+    days_back = 3 if wd == 0 else (2 if wd == 6 else 1)
+    yesterday = (today_dt - timedelta(days=days_back)).strftime('%Y%m%d')
+    try:
+        prev = ak.stock_zt_pool_previous_em(date=yesterday)
+    except Exception:
+        prev = pd.DataFrame()
+
+    if prev.empty:
+        print("no_data")
+        return
+
+    change_col = prev.columns[3]
+    df = prev.copy()
+    df = filter_non_main_board(df)
     changes = df[change_col].astype(float)
-    df = df[(changes >= 2.5) & (changes < 8.5)]
-
-    after = len(df)
-    print(f"  → 过滤后 {after}/{before} 只", file=sys.stderr)
+    df = df[(changes >= 3) & (changes < 9)]
     if df.empty:
         print("no_data")
         return
 
-    # ── 评分 ──
-    # 动量得分：涨幅 + 换手率 + 成交额放大
-    scores = pd.Series(0.0, index=df.index)
+    df['趋势评分'] = changes * 10
+    df = df.sort_values('趋势评分', ascending=False).head(n)
 
-    # 涨幅分 (0-40)
-    scores += changes * 4
-
-    # 换手活跃分 (0-30)
-    turnovers = df[turnover_col].astype(float)
-    for idx in df.index:
-        t = turnovers[idx]
-        if 5 <= t <= 15:
-            scores[idx] += 25
-        elif 2 <= t <= 20:
-            scores[idx] += 18
-        elif t > 20:
-            scores[idx] += 8
-        elif t > 0:
-            scores[idx] += 5
-
-    # 成交额分 (0-30)
-    volumes = df[volume_col].astype(float)
-    max_v = volumes.max()
-    if max_v > 0:
-        scores += (volumes / max_v) * 30
-
-    df['动量评分'] = scores.round(1)
-    df = df.sort_values('动量评分', ascending=False).head(n)
-
-    today_display = date.today().strftime('%Y-%m-%d')
-    lines = [f"趋势动量股 TOP{n} ({today_display})", "=" * 80]
+    lines = [f"趋势动量股 TOP{n} | 昨日涨停今日续强", "=" * 70]
+    for rank, (_, row) in enumerate(df.iterrows(), 1):
+        code = str(row.iloc[1]).strip().zfill(6)
+        name = row.iloc[2]
+        chg = float(row[change_col])
+        lines.append(f"{rank}. {code} {name} | 今日涨幅 {chg:+.1f}%")
+        lines.append(f"   昨日涨停后今日继续走强，趋势延续中")
+        lines.append(f"   策略: 沿5日线持有，破5日线止盈")
 
     trend_results = []
     for _, row in df.iterrows():
-        code = str(row[code_col]).strip().zfill(6)
-        name = row[name_col]
-        score = float(row['动量评分'])
-        trend_results.append({'code': code, 'name': name, 'score': min(score, 100), 'dimension': '趋势动量'})
-
-    for rank, (_, row) in enumerate(df.iterrows(), 1):
-        code = str(row[code_col]).strip().zfill(6)
-        name = row[name_col]
-        score = float(row['动量评分'])
+        code = str(row.iloc[1]).strip().zfill(6)
+        name = row.iloc[2]
         chg = float(row[change_col])
-        t = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
-        v = float(row[volume_col]) if pd.notna(row[volume_col]) else 0
-        vol_str = f"{v/1e8:.2f}亿" if v >= 1e8 else f"{v/1e4:.0f}万"
+        trend_results.append({'code': code, 'name': name, 'score': min(chg * 10, 100), 'dimension': '趋势动量'})
 
-        lines.append(f"\n{rank}. {code} {name} | 动量 {score:.1f}")
-        lines.append(f"   涨幅 {chg:+.1f}% | 换手 {t:.1f}% | 成交 {vol_str}")
-        signal = "量价齐升" if t > 5 and chg > 4 else "温和放量" if t > 2 else "缩量上涨"
-        lines.append(f"   信号: {signal} | 策略: 沿5/10日线低吸，不追高")
-
-    lines.append(f"\n{'=' * 80}")
-    lines.append("趋势策略: 不涨停不停涨，沿均线低吸为主，放量滞涨止盈")
-    lines.append("止损: 跌破10日线或单日跌超-5%出局")
+    lines.append(f"\n{'=' * 70}")
     print("\n".join(lines))
     return trend_results
 
@@ -1971,13 +2117,15 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     else:
         history_s = pd.Series(2.5, index=df.index)
 
-    # 资金流和情绪历史不可用，用中性默认值
+    # 资金流、情绪、buyability 历史不可用，用中性默认值
     money_s = pd.Series(10.0, index=df.index)
     sent_s = pd.Series(5.0, index=df.index)
+    buyability_backtest = pd.Series(6.0, index=df.index)
 
     scores = weight_manager.apply_weights(
         seal_s, money_s, sector_res, sector_mom,
-        tech_s, history_s, sent_s, weights=w)
+        buyability_backtest, tech_s, history_s, sent_s,
+        weights=w)
 
     df['回测评分'] = scores.round(1)
     df['seal_factor'] = seal_s.round(1)
@@ -2292,6 +2440,7 @@ def run_backtest():
 # ─── 主流程 ───
 
 def main():
+    global TOP_N
     parser = argparse.ArgumentParser(description='超短线选股扫描器')
     parser.add_argument('--table', action='store_true', help='以表格格式输出（默认详细文本）')
     parser.add_argument('--backtest', action='store_true', help='运行回测系统（验证评分有效性）')
@@ -2299,34 +2448,58 @@ def main():
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
     parser.add_argument('--dtqiaoban', action='store_true', help='跌停翘板信号扫描')
+    parser.add_argument('--date', type=str, default='', help='指定日期 YYYYMMDD（默认: 今天）')
+    parser.add_argument('--top', type=int, default=0, help=f'输出数量（默认: {TOP_N}）')
     args = parser.parse_args()
+
+    # 日期处理
+    today_raw = args.date if args.date else date.today().strftime("%Y%m%d")
+    if args.top > 0:
+        TOP_N = args.top
+
     if args.backtest:
         run_backtest()
         return
     table_mode = args.table
 
-    today_raw = date.today().strftime("%Y%m%d")
+    # ── 模式分发 + 盘中/盘后自动检测 ──
 
-    # 新扫描模式分发
     if args.zhaban:
-        scan_zhaban(today_raw, table_mode)
+        scan_zhaban(today_raw, table_mode, top_n=TOP_N)
         return
     if args.trend:
-        scan_trend(today_raw, table_mode)
+        scan_trend(today_raw, table_mode, top_n=TOP_N)
         return
     if args.sector:
-        scan_sector(today_raw, table_mode)
+        scan_sector(today_raw, table_mode, top_n=TOP_N)
         return
     if args.dtqiaoban:
-        scan_dtqiaoban(today_raw, table_mode)
+        scan_dtqiaoban(today_raw, table_mode, top_n=TOP_N)
         return
 
+    # 无显式模式 → 自动检测盘中/盘后
+    default_mode = get_default_mode()
+    market_status = get_market_status()
+
+    if default_mode == 'trend':
+        # 盘中自动 → 趋势动量扫描（能买进）
+        now = datetime.now(_CST)
+        print(f"[自动检测] 当前盘中 ({now.strftime('%H:%M')}) → 默认趋势动量扫描", file=sys.stderr)
+        scan_trend(today_raw, table_mode, top_n=TOP_N)
+        return
+
+    # 盘后 → 涨停多因子评分（次日预测）
+    status_labels = {'closed': '盘后', 'lunch': '午休', 'weekend': '周末', 'holiday': '节假日', 'trading': '盘中'}
+    status_cn = status_labels.get(market_status, market_status)
+    print(f"[自动检测] 当前{status_cn} → 默认涨停多因子评分", file=sys.stderr)
+
     print("=" * 45, file=sys.stderr)
-    print(f"  超短线选股扫描器 | {get_today_str()}", file=sys.stderr)
+    today_display = today_raw[:4] + '-' + today_raw[4:6] + '-' + today_raw[6:8] if len(today_raw) == 8 else today_raw
+    print(f"  超短线选股扫描器 | {today_display}", file=sys.stderr)
     print("=" * 45, file=sys.stderr)
 
     # 1. 获取涨停池（含非交易日检测）
-    pool = fetch_limit_up_pool()
+    pool = fetch_limit_up_pool(date_str=today_raw)
     if pool.empty:
         print("not_trading_day")
         return
@@ -2434,7 +2607,9 @@ def main():
 
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), weights=weights)
+    s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
+    s_principal = score_by_principal(filtered, 20000)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]

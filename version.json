@@ -1,8 +1,16 @@
 {
-  "version": "1.15.1",
-  "date": "2026-06-01",
+  "version": "1.16.0",
+  "date": "2026-06-02",
   "changes": [
-    "BUG修复：loadCardViewStream丢弃所有query参数(本金+plan从未生效) + scoring_base归一化基准偏移"
+    "全面BUG审计修复8项：收盘缓存key不匹配、loadCardView SSE误路由、流端点缺字段、CLI评分缺因子、sector_score缺失、DataFrame or崩溃、原始缓存无版本号、卡片缓存2h→全天",
+    "新增盘中/盘后自动检测：无参执行根据市场状态自动切换趋势/涨停模式",
+    "新增 --date YYYYMMDD --top N CLI参数",
+    "scan_trend()数据源替换：stock_zh_a_spot_em→stock_zt_pool_strong_em(实时可用)",
+    "卡片端点缓存统一为 daily_get/daily_set (全天有效，原2h TTL)",
+    "原始缓存加_VERSION=2版本校验，旧缓存自动失效",
+    "index()改用glob扫描最新缓存，不再硬编码本金",
+    "test_invariants.py新增市场状态/趋势扫描/日期参数测试，修复principal_score预存错误",
+    "64项不变性测试全部通过"
   ],
   "history": [
     {
