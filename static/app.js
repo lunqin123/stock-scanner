@@ -42,6 +42,7 @@ let _outputCache = new Proxy({}, {
     }
 });
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
+let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台
 
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
@@ -76,6 +77,7 @@ function switchPage(page) {
         }
 
         currentPage = page;
+        _pageToken++;  // 旧请求的异步回调检测到 token 不匹配会丢弃结果
         _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === page));
 
         const info = PAGES[page];
@@ -294,6 +296,7 @@ async function callApi(apiUrl, pageKey) {
 }
 
 async function loadTextView(output, pageKey, apiUrl) {
+    const token = _pageToken;
     const info = PAGES[pageKey];
     const url = apiUrl || info.api;
     // 显示进度条动画（非流式页面用估算进度）
@@ -311,19 +314,20 @@ async function loadTextView(output, pageKey, apiUrl) {
         clearInterval(estInterval);
         showProgress('加载完成', 100);
         if (data.ok === false) {
-            output.innerHTML = `<span class="error-text">❌ 错误：</span>\n${escapeHtml(data.error || '未知错误')}\n\n${escapeHtml(data.output || '')}`;
+            if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 错误：</span>\n${escapeHtml(data.error || '未知错误')}\n\n${escapeHtml(data.output || '')}`;
         } else {
-            output.innerHTML = renderStyledText(data.output);
+            if (_pageToken === token) output.innerHTML = renderStyledText(data.output);
         }
     } catch (err) {
         clearInterval(estInterval);
-        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+        if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
     hideProgress();
 }
 
 // ─── 文本流式加载（龙虎榜/舆情，SSE 实时进度） ───
 async function loadTextViewStream(output, pageKey, apiUrl) {
+    const token = _pageToken;
     const info = PAGES[pageKey];
     const url = apiUrl || info.streamApi;
     const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
@@ -364,6 +368,7 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                             if (fill) fill.style.width = newW + '%';
                         } else if (msg.type === 'complete') {
                             if (bar) bar.style.display = 'none';
+                            if (_pageToken !== token) return;
                             output.innerHTML = msg.output
                                 ? renderStyledText(msg.output)
                                 : '<span class="loading">暂无数据</span>';
@@ -371,6 +376,7 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                             return;
                         } else if (msg.type === 'error') {
                             if (bar) bar.style.display = 'none';
+                            if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
                             _outputCache[pageKey] = output.innerHTML;
                             return;
@@ -380,15 +386,16 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
             }
         }
         if (bar) bar.style.display = 'none';
-        output.innerHTML = '<span class="loading">连接中断</span>';
+        if (_pageToken === token) output.innerHTML = '<span class="loading">连接中断</span>';
 
     } catch (err) {
         if (bar) bar.style.display = 'none';
-        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+        if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
 }
 
 async function loadCardView(output, pageKey, apiUrl) {
+    const token = _pageToken;
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     const url = apiUrl || info.api;
 
@@ -443,16 +450,16 @@ async function loadCardView(output, pageKey, apiUrl) {
             html += `<div class="error-text">❌ 渲染错误: ${renderErr.message}</div>`;
             console.error('[Render Error]', pageKey, renderErr);
         }
-        output.innerHTML = html;
+        if (_pageToken === token) { output.innerHTML = html; _outputCache[pageKey] = output.innerHTML; }
     } catch (err) {
-        output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
+        if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
-    _outputCache[pageKey] = output.innerHTML;
     hideProgress();
 }
 
 // ─── SSE 流式加载（防抖 + RAF 优化） ───
 async function loadCardViewStream(output, pageKey, apiUrl) {
+    const token = _pageToken;
     const bar = _dom.progress();
     const fill = _dom.fill();
     const txt = _dom.txt();
@@ -567,6 +574,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
                             // 用 requestAnimationFrame + 微任务分离 DOM 操作和渲染
                             requestAnimationFrame(() => {
+                                if (_pageToken !== token) return;
                                 output.innerHTML = html;
                                 _lastUrl[pageKey] = apiUrl || '';
                                 _outputCache[pageKey] = output.innerHTML;
@@ -575,6 +583,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
                         } else if (msg.type === 'error') {
                             bar.style.display = 'none';
+                            if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
                             _outputCache[pageKey] = output.innerHTML;
                             return;
