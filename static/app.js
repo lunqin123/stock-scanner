@@ -394,8 +394,9 @@ async function loadCardView(output, pageKey, apiUrl) {
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
-        // 市场情绪数据结构特殊（无 items，有 score/level）
-        if (pageKey === 'sentiment' && data.score !== undefined) {
+        // 特殊页面：情绪(score/level)、回测(weights/corr_history) — 无 items 字段
+        if ((pageKey === 'sentiment' && data.score !== undefined) ||
+            (pageKey === 'backtest' && data.weights !== undefined)) {
             // handled below
         } else if (!data.ok || !items.length) {
             output.innerHTML = '<span class="loading">暂无数据</span>';
