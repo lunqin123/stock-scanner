@@ -2378,7 +2378,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     # 权重变化
     if adjusted_weights:
         changes = []
-        for k in BACKTEST_FACTORS:
+        for k in weight_manager.BACKTEST_FACTORS:
             if k in current_weights and k in adjusted_weights:
                 delta = adjusted_weights[k] - current_weights[k]
                 if abs(delta) > 0.01:
