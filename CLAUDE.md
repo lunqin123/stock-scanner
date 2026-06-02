@@ -69,3 +69,22 @@ test_invariants.py  64项不变性测试
 - 前端 SSE 流: `loadCardViewStream` 处理 `msg.items`，`loadTextViewStream` 处理 `msg.output`
 - 编码: Windows GBK 终端避免 emoji，用纯中文
 - 无参运行自动检测市场状态 (`get_default_mode()`)
+
+## 服务器部署
+
+生产环境: `134.175.231.8` (Ubuntu, nginx 代理 → FastAPI:8080)
+
+```bash
+# SSH 连接
+ssh -i qqChatBot.pem ubuntu@134.175.231.8
+
+# 项目路径: /home/ubuntu/stock-scanner
+# 服务管理: sudo systemctl restart stock-scanner
+# Webhook 自动部署: POST /webhook (GitHub push 触发)
+
+# 查看日志
+sudo journalctl -u stock-scanner -f
+```
+
+> **重要**: 改完前端 JS/CSS 推送后，服务器重启 + 浏览器必须 Ctrl+Shift+R 强制刷新。StaticFiles 已配置 `Cache-Control: no-cache`，但首次加载后浏览器可能仍缓存。
+> 服务器密码保护: nginx 层 token 认证，联系管理员获取。
