@@ -1,12 +1,15 @@
 {
-  "version": "1.17.0",
-  "date": "2026-06-02",
+  "version": "1.17.4",
+  "date": "2026-06-03",
   "changes": [
-    "回测系统重构：可调权因子3→5(seal/sector_mom/tech/sector_res/history)，周五调权→每日滚动调权(lr=0.02)，seal回测代理修复(换手率映射)",
-    "新增回测追踪面板：/api/backtest/dashboard + 前端权重对比/相关性历史/系统状态卡片",
-    "舆情分数接入评分：community_score→stock_sentiment因子(30%权重)，非阻塞",
-    "次日竞价验证：模拟交易排除一字板/缩量涨停(换手<1%+涨>9.5%)，显示排除数量",
-    "清理残留：删除7个旧pkl缓存文件"
+    "趋势流端点风控对齐：卡片用风控排序，流用纯涨幅→统一为风控加权排序，修复排行榜不一致",
+    "缓存版本统一管理：_CACHE_VER 2→3自动全局失效，替代手动_v3后缀",
+    "回测面板修复：loadCardView加backtest例外(无items字段)，renderBacktestDashboard卡片渲染",
+    "静态资源版本号 1.15.0→1.17.3，强制浏览器下载新JS(解决缓存导致新功能不生效)",
+    "CLAUDE.md：项目架构+评分体系+缓存规则+服务器部署完整说明",
+    "gitignore：server-guide.md/qqChatBot.pem敏感文件",
+    "趋势流字段补全：risk_score/consecutive/signals/advice/volume_unit",
+    "回测面板端点/api/backtest/dashboard：权重对比+相关性历史+系统状态"
   ],
   "history": [
     {
