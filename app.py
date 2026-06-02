@@ -1618,7 +1618,7 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
                           'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream_v3', refresh)
 
 
 @app.get("/api/scan/trend/stream")
@@ -1640,19 +1640,47 @@ async def api_trend_stream(refresh: bool = Query(False)):
             except: continue
         if prev.empty: return [], {}
         print(f"  [趋势] 共 {len(prev)} 只, 过滤评分中...", file=sys.stderr)
-        from scanner import filter_non_main_board, money_str
+        from scanner import filter_non_main_board
         df = filter_non_main_board(prev)
         chg_col = prev.columns[3]; name_col = prev.columns[2]; code_col = prev.columns[1]
+        price_col = prev.columns[4]; turnover_col = prev.columns[9]
+        vol_col = prev.columns[6]; seal_stat_col = prev.columns[14] if len(prev.columns) > 14 else None
+        industry_col = prev.columns[15] if len(prev.columns) > 15 else None
         df['涨幅'] = df[chg_col].astype(float)
-        trend = df[(df['涨幅'] >= 3) & (df['涨幅'] < 9)].sort_values('涨幅', ascending=False).head(10)
+
+        # 风控：拉取炸板池（与卡片端点一致）
+        zhaban_codes = set()
+        try:
+            zb_df = ak.stock_zt_pool_zbgc_em(date=today)
+            if not zb_df.empty:
+                zb_code_col = zb_df.columns[1]
+                zhaban_codes = set(zb_df[zb_code_col].astype(str).str.zfill(6))
+        except Exception: pass
+
+        trend = df[(df['涨幅'] >= 2) & (df['涨幅'] < 9)].copy()
+        if trend.empty: return [], {}
+        trend = trend.sort_values('涨幅', ascending=False).head(15)
+
         items = []
         for _, row in trend.iterrows():
             code = str(row[code_col]).strip().zfill(6)
             chg = round(float(row['涨幅']), 1)
-            turnover = round(float(row.iloc[9]) if pd.notna(row.iloc[9]) else 0, 1)
-            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
-            vol = float(row.iloc[6]) if pd.notna(row.iloc[6]) else 0
-            industry = str(row.iloc[15]) if len(row) > 15 else ''
+            price = float(row[price_col])
+            turnover = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+            vol = float(row[vol_col]) if pd.notna(row[vol_col]) else 0
+            industry = str(row[industry_col]) if industry_col and pd.notna(row[industry_col]) else ''
+            seal_stat = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
+            consecutive = 0
+            if '/' in seal_stat:
+                try: consecutive = int(seal_stat.split('/')[1])
+                except: pass
+            # 风控评分
+            risk_score = 20
+            risk_tags = []
+            if code in zhaban_codes: risk_score -= 8; risk_tags.append('昨日炸板')
+            if consecutive >= 3 and chg < 5: risk_score -= 6; risk_tags.append('高位缩量')
+            if turnover > 15 and chg < 3: risk_score -= 6; risk_tags.append('放量滞涨')
+            if turnover > 25: risk_score -= 4; risk_tags.append('换手过高')
             # signals
             sigs = []
             if chg >= 7: sigs.append('强势续涨')
@@ -1660,12 +1688,19 @@ async def api_trend_stream(refresh: bool = Query(False)):
             else: sigs.append('温和上涨')
             if turnover > 15: sigs.append('高换手')
             elif turnover > 8: sigs.append('放量健康')
+            if consecutive >= 2: sigs.append(f'{consecutive}连板')
+            sigs.extend(risk_tags)
+            advice = '沿5日线持有，破5日线止盈' if risk_score >= 12 else '关注风控信号，轻仓参与' if risk_score >= 8 else '风控信号多，谨慎参与'
             items.append({'code': code, 'name': str(row[name_col]), 'change_pct': chg,
                           'price': price, 'turnover': turnover, 'volume': vol, 'industry': industry,
-                          'signals': sigs, 'advice': '沿5日线持有，破5日线止盈',
+                          'consecutive': consecutive, 'signals': sigs, 'advice': advice,
+                          'risk_score': risk_score,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+        # 与卡片端点一致的风控排序
+        items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
+        items = items[:10]
         return items, {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream_v3', refresh)
 
 
 @app.get("/api/scan/dtqiaoban/stream")
@@ -1709,7 +1744,7 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
                           'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream_v3', refresh)
 
 
 @app.get("/api/scan/sector/stream")
@@ -1739,7 +1774,7 @@ async def api_sector_stream(refresh: bool = Query(False)):
                           'score': min(12, 4 + s['limit_cnt'] * 2), 'efficiency': s['seal_rate'],
                           'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}"})
         return items, {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream_v3', refresh)
 
 
 def _comment_score_note(score):
