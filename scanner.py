@@ -2286,9 +2286,8 @@ def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001
 
 def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weights: dict = None):
     """
-    自动回测验证：在扫描流程末尾自动运行。
-    周一至周四：保存当日因子相关性到滚动缓存，不调权。
-    周五：累积本周相关性均值，统一调整权重。
+    自动回测验证：盘后自动运行。保存当日因子相关性到滚动缓存，每日调权。
+    盘中跳过（数据不完整），周末/节假日跳过。
     返回: (输出文本, adjusted_weights) 或 None
     """
     import weight_manager
@@ -2296,6 +2295,11 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     wd = date.today().weekday()
     if wd >= 5:
         return None  # 周末跳过
+
+    # 只在盘后运行：盘中数据不完整，相关性无意义
+    market_status = get_market_status()
+    if market_status == 'trading':
+        return None
 
     try:
         prev_df = ak.stock_zt_pool_previous_em(date=today_str)
