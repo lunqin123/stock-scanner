@@ -124,6 +124,15 @@ def compute_factors(filtered, fund_df, principal):
     tech = score_tech_form(filtered)
     buyability = score_buyability(filtered)
     stock_sent = score_stock_sentiment(filtered, money, buyability)
+    # 舆情分数并入个股情绪 (30%权重，非阻塞)
+    try:
+        import stock_community
+        comm_scores = stock_community.score_community(filtered)
+        if comm_scores is not None and not comm_scores.empty:
+            comm_aligned = comm_scores.reindex(stock_sent.index).fillna(stock_sent)
+            stock_sent = (stock_sent * 0.7 + comm_aligned / 7.0 * 10.0 * 0.3).clip(0, 10)
+    except Exception:
+        pass  # 舆情不可用时不改变 stock_sent
     pr = score_by_principal(filtered, principal)
 
     return {

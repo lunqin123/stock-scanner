@@ -1892,6 +1892,44 @@ def api_market_status():
     return {"ok": True, "status": status}
 
 
+@app.get("/api/backtest/dashboard")
+def api_backtest_dashboard():
+    """回测效果追踪面板 — 返回权重历史、因子相关性、模拟收益"""
+    import weight_manager as wm
+    rolling = wm._load_rolling_data()
+    current_w = wm.load_weights()
+    default_w = wm.DEFAULT_WEIGHTS
+
+    # 当前 vs 默认权重对比
+    weight_comparison = []
+    for k in wm.BACKTEST_FACTORS:
+        weight_comparison.append({
+            'factor': k, 'current': round(current_w.get(k, default_w[k]), 1),
+            'default': default_w[k],
+            'delta': round(current_w.get(k, default_w[k]) - default_w[k], 2)
+        })
+
+    # 相关性历史（近30天）
+    corr_history = []
+    for entry in rolling[-30:]:
+        day_corrs = entry.get('correlations', {})
+        day_corrs['date'] = entry['date']
+        corr_history.append(day_corrs)
+
+    # 调权历史（从 weights.json 的备份中恢复，简化为展示当前状态）
+    days_with_data = len(rolling)
+    ready = days_with_data >= 2
+
+    return {
+        'ok': True,
+        'weights': weight_comparison,
+        'corr_history': corr_history,
+        'days_with_data': days_with_data,
+        'ready': ready,
+        'backtest_factors': wm.BACKTEST_FACTORS,
+    }
+
+
 # ═══════════════════════════════════════════
 #  GitHub Webhook — 自动部署
 # ═══════════════════════════════════════════

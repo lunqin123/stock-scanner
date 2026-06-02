@@ -52,7 +52,7 @@ const PAGES = {
     'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators/cards', textApi: '/api/indicators', streamApi: '/api/indicators/stream' },
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
     'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
-    'backtest':     { title: '⏱️ 回测系统',   api: '/api/backtest' },
+    'backtest':     { title: '⏱️ 回测追踪',   api: '/api/backtest/dashboard' },
 };
 
 function showProgress(text, pct) {
@@ -424,6 +424,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderStockCards(items, data);
             } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
+            } else if (pageKey === 'backtest') { html += renderBacktestDashboard(data);
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items);
             } else {
                 html += renderSimpleCards(items, pageKey);
@@ -615,7 +616,7 @@ function exportOutput() {
     }
 }
 async function runAll() {
-    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment'];
+    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest'];
     for (const key of pages) {
         location.hash = key;
         await new Promise(r => setTimeout(r, 500));

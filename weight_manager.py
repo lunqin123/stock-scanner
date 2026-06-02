@@ -2,7 +2,7 @@
 """
 评分权重管理器
 每日根据回测结果自动调整评分权重，以 JSON 持久化到缓存目录。
-学习率低(0.05)，避免单日波动过大。
+学习率低(0.02)，基于近5日滚动相关性均值，避免单日波动过大。
 """
 import json
 import os
@@ -22,10 +22,13 @@ DEFAULT_WEIGHTS = {
     'money': 3.0,      # 资金驱动（继续降权：超短线中预测力有限）
     'buyability': 12.0,# 开盘可行性（次日买得到）
     'stock_sentiment': 9.0,   # 个股情绪（资金态度+确定性+板块领先度）
-    'principal_score': 6.0,   # 🆕 本金适配（价格可买性+流动性，小资金更敏感）
+    'principal_score': 6.0,   # 本金适配（价格可买性+流动性，小资金更敏感）
 }
 TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
-BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech']  # 回测中可调权的因子
+
+# 回测中可调权的因子（所有在 backtest_score_prev 中实际计算的因子）
+# money/buyability/stock_sentiment/principal 在回测中用常量 → 无法计算相关性
+BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech', 'sector_res', 'history']
 
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
@@ -168,7 +171,7 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
     return base_scores * mult
 
 
-# ─── 滚动周调权系统 ───
+# ─── 滚动每日调权系统 ───
 from datetime import date, timedelta
 
 _ROLLING_FILE = os.path.join(
@@ -176,9 +179,13 @@ _ROLLING_FILE = os.path.join(
     "claude_stock_cache", "rolling_correlations.json"
 )
 
+# 每日调权参数
+DAILY_LR = 0.02       # 每日学习率（低，避免单日波动）
+ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
+
 
 def save_daily_correlations(correlations: dict):
-    """保存当日因子相关性到滚动缓存。周一至周四存数据，周五调权。"""
+    """保存当日因子相关性到滚动缓存。每天调权时取最近N天均值。"""
     if not correlations:
         return
     today_str = date.today().isoformat()
@@ -186,7 +193,7 @@ def save_daily_correlations(correlations: dict):
         data = _load_rolling_data()
         data = [d for d in data if d['date'] != today_str]
         data.append({'date': today_str, 'correlations': dict(correlations)})
-        data = data[-30:]  # keep rolling window
+        data = data[-ROLLING_WINDOW * 6:]  # keep enough history
         os.makedirs(os.path.dirname(_ROLLING_FILE), exist_ok=True)
         with open(_ROLLING_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
@@ -204,36 +211,33 @@ def _load_rolling_data() -> list:
     return []
 
 
-def get_weekly_progress() -> str:
-    """返回本周已积累几天数据（用于展示）"""
-    today = date.today()
-    if today.weekday() >= 5:
-        return ""
-    monday = today - timedelta(days=today.weekday())
+def get_rolling_progress() -> str:
+    """返回滚动窗口数据积累情况"""
     all_data = _load_rolling_data()
-    week_days = [d for d in all_data if d['date'] >= monday.isoformat()]
-    return f"本周回测数据 {len(week_days)}/5 天"
+    today = date.today()
+    recent = [d for d in all_data if d['date'] >= (today - timedelta(days=7)).isoformat()]
+    return f"回测数据 {len(recent)}/{ROLLING_WINDOW} 天"
 
 
-def weekly_adjust_weights(current_weights: dict, lr: float = 0.05):
+def daily_adjust_weights(current_weights: dict, lr: float = None):
     """
-    周五统一调权：累积本周（周一至周五）的因子相关性均值。
+    每日调权：累积近 ROLLING_WINDOW 天的因子相关性均值。
+    数据不足时跳过（至少需要 2 天）。
     返回 (new_weights, summary_str) 或 (None, None)
     """
-    today = date.today()
-    if today.weekday() != 4:
-        return None, None
+    if lr is None:
+        lr = DAILY_LR
 
-    monday = today - timedelta(days=today.weekday())
     all_data = _load_rolling_data()
-    week_data = [d for d in all_data if d['date'] >= monday.isoformat()]
+    if len(all_data) < 2:
+        return None, f"  回测数据仅 {len(all_data)} 天，至少需要 2 天"
 
-    if len(week_data) < 3:
-        return None, f"  本周仅 {len(week_data)} 天数据，不足 3 天，跳过周调权"
+    # 取最近 ROLLING_WINDOW 天的数据
+    recent = all_data[-ROLLING_WINDOW:]
 
-    # 聚合本周各因子相关性均值
+    # 聚合各因子相关性均值
     factor_vals = {}
-    for entry in week_data:
+    for entry in recent:
         for k, v in entry.get('correlations', {}).items():
             factor_vals.setdefault(k, []).append(v)
 
@@ -242,19 +246,19 @@ def weekly_adjust_weights(current_weights: dict, lr: float = 0.05):
         mean_corrs[k] = round(float(np.mean(vals)), 4)
 
     valid_factors = [f for f in BACKTEST_FACTORS if f in mean_corrs]
-    if len(valid_factors) < 1:
-        return None, "  无有效因子数据"
+    if len(valid_factors) < 2:
+        return None, f"  有效因子仅 {len(valid_factors)} 个，至少需要 2 个"
 
     values = [mean_corrs[f] for f in valid_factors]
     mean_corr = float(np.mean(values))
 
-    # 计算 delta（同 adjust_weights 逻辑）
+    # 计算 delta：高相关的加权重，低相关的减权重
     deltas = {f: 0.0 for f in DEFAULT_WEIGHTS}
     for factor in valid_factors:
         delta = lr * (mean_corrs[factor] - mean_corr) * DEFAULT_WEIGHTS[factor]
         deltas[factor] = delta
 
-    # 应用 delta + 软钳制
+    # 应用 delta + 软钳制 [0.5×default, 1.5×default]
     new_weights = {}
     for k in DEFAULT_WEIGHTS:
         w = current_weights[k] + deltas[k]
@@ -262,15 +266,21 @@ def weekly_adjust_weights(current_weights: dict, lr: float = 0.05):
         hi = DEFAULT_WEIGHTS[k] * 1.5
         new_weights[k] = max(lo, min(hi, w))
 
-    # 重归一化（community 固定）
     save_weights(new_weights)
 
     # 摘要
-    corr_str = " | ".join(f"{k}: {mean_corrs[k]:+.3f}" for k in ['seal', 'sector_mom', 'tech'] if k in mean_corrs)
+    all_corr_strs = []
+    for k in sorted(mean_corrs.keys()):
+        all_corr_strs.append(f"{k}: {mean_corrs[k]:+.3f}")
+    corr_str = " | ".join(all_corr_strs)
     changes = []
-    for k in DEFAULT_WEIGHTS:
-        delta = new_weights[k] - current_weights[k]
-        changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
-    summary = f"  周调权 ({len(week_data)}天均值): {corr_str}\n  {' | '.join(changes)}"
+    for k in BACKTEST_FACTORS:
+        if k in new_weights:
+            delta = new_weights[k] - current_weights[k]
+            if abs(delta) > 0.01:
+                changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
+    if not changes:
+        return None, f"  权重无显著变化 ({len(recent)}天, 均值相关{mean_corr:+.3f})"
 
+    summary = f"  每日调权 ({len(recent)}天均值): {corr_str}\n  {' | '.join(changes)}"
     return new_weights, summary

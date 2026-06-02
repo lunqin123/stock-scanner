@@ -713,3 +713,74 @@ function fallbackCopy(txt) {
 
 // ─── 兼容 `escapeHtml` 别名 ───
 window.escapeHtml = esc;
+
+// ─── 回测追踪面板 ───
+function renderBacktestDashboard(data) {
+    if (!data || !data.ok) {
+        return '<div class="loading">暂无回测数据</div>';
+    }
+
+    var html = '<div class="dashboard-grid" style="display:flex;flex-wrap:wrap;gap:16px;padding:16px">';
+
+    // 1. 权重对比卡片
+    html += '<div class="card" style="flex:1;min-width:280px"><h3 style="margin:0 0 12px">权重对比 (当前 vs 默认)</h3>';
+    html += '<table style="width:100%;font-size:13px;border-collapse:collapse">';
+    html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px">因子</th><th>当前</th><th>默认</th><th>偏移</th></tr>';
+    var weights = data.weights || [];
+    for (var i = 0; i < weights.length; i++) {
+        var w = weights[i];
+        var deltaSign = w.delta > 0 ? '+' : '';
+        var deltaColor = w.delta > 0.05 ? '#22c55e' : w.delta < -0.05 ? '#ef4444' : 'var(--text-muted)';
+        html += '<tr style="border-bottom:1px solid var(--border)">';
+        html += '<td style="padding:4px;font-weight:600">' + esc(w.factor) + '</td>';
+        html += '<td style="text-align:center;padding:4px">' + w.current.toFixed(1) + '</td>';
+        html += '<td style="text-align:center;padding:4px;color:var(--text-muted)">' + w.default.toFixed(1) + '</td>';
+        html += '<td style="text-align:center;padding:4px;color:' + deltaColor + '">' + deltaSign + w.delta.toFixed(2) + '</td>';
+        html += '</tr>';
+    }
+    html += '</table></div>';
+
+    // 2. 相关性历史卡片
+    html += '<div class="card" style="flex:2;min-width:360px"><h3 style="margin:0 0 12px">因子相关性历史</h3>';
+    var corrHist = data.corr_history || [];
+    if (corrHist.length > 0) {
+        html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:3px">日期</th>';
+        var factors = data.backtest_factors || [];
+        for (var f = 0; f < factors.length; f++) {
+            html += '<th style="padding:3px">' + esc(factors[f]) + '</th>';
+        }
+        html += '</tr>';
+        for (var d = corrHist.length - 1; d >= 0; d--) {
+            var day = corrHist[d];
+            html += '<tr style="border-bottom:1px solid var(--border)">';
+            html += '<td style="padding:3px;font-size:11px">' + esc(day.date || '') + '</td>';
+            for (var f2 = 0; f2 < factors.length; f2++) {
+                var val = day[factors[f2]];
+                var vc = val > 0.1 ? '#22c55e' : val < -0.1 ? '#ef4444' : 'var(--text-muted)';
+                html += '<td style="text-align:center;padding:3px;color:' + vc + '">' + (val != null ? val.toFixed(3) : '-') + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</table>';
+    } else {
+        html += '<div class="loading">暂无相关性数据 — 需积累至少1天回测</div>';
+    }
+    html += '</div>';
+
+    // 3. 状态卡片
+    html += '<div class="card" style="flex:0 0 200px"><h3 style="margin:0 0 12px">系统状态</h3>';
+    html += '<div style="font-size:13px;line-height:2">';
+    html += '回测数据: <b>' + (data.days_with_data || 0) + '</b> 天<br>';
+    html += '调权就绪: <b style="color:' + (data.ready ? '#22c55e' : '#f59e0b') + '">' + (data.ready ? 'YES' : '需>=2天') + '</b><br>';
+    html += '可调权因子: <b>' + (data.backtest_factors || []).length + '</b> 个<br>';
+    html += '学习率: <b>0.02</b>/天<br>';
+    html += '钳制范围: <b>0.5x-1.5x</b> 默认权重<br>';
+    html += '</div></div>';
+
+    html += '</div>';
+    return html;
+}
+
+// 注册全局渲染函数
+window.renderBacktestDashboard = renderBacktestDashboard;

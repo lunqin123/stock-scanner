@@ -2104,6 +2104,22 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     import weight_manager
     w = weight_manager.load_weights()
     seal_s = score_seal_strength(df)
+    # 回测数据修复：stock_zt_pool_previous_em 没有封板资金列，用换手率做封板强度代理
+    if seal_s.max() < 0.01:
+        seal_s = pd.Series(0.0, index=df.index)
+        turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+        if turnover_col:
+            turnover = df[turnover_col].fillna(0).astype(float)
+            max_t = turnover.max() if turnover.max() > 0 else 1
+            # 低换手=强封板, 映射到0-25
+            for idx in df.index:
+                t = turnover[idx]
+                if t < 1: seal_s[idx] = 25
+                elif t < 3: seal_s[idx] = 20
+                elif t < 5: seal_s[idx] = 15
+                elif t < 8: seal_s[idx] = 10
+                elif t < 15: seal_s[idx] = 5
+                else: seal_s[idx] = 2
     tech_s = score_tech_form(df)
     sector_mom = get_sector_heat_scores(df)
     sector_res = get_sector_resonance(df)
@@ -2215,14 +2231,32 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
 def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001):
     """
     模拟交易：取评分最高的 N 只，次日开盘买入/收盘卖出。
-    返回: {total_return, win_rate, profit_loss_ratio, max_drawdown, trades}
+    过滤次日无法买入的标的（一字板/缩量秒板）。
+    返回: {total_return, win_rate, profit_loss_ratio, max_drawdown, trades, unbuyable_count}
     """
-    sorted_df = df.sort_values(score_col, ascending=False).head(top_n)
-    changes = sorted_df['今日涨幅'].values
+    sorted_df = df.sort_values(score_col, ascending=False)
+
+    # 次日竞价过滤：排除一字板或缩量涨停（换手<1% + 涨>9.5% = 买不到）
+    turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+    unbuyable = pd.Series(False, index=sorted_df.index)
+    if turnover_col and '今日涨幅' in sorted_df.columns:
+        changes_all = sorted_df['今日涨幅'].astype(float)
+        turnovers = sorted_df[turnover_col].astype(float)
+        unbuyable = (changes_all > 9.5) & (turnovers < 1.0)
+
+    # 取评分最高的 top_n 且可买入的
+    buyable = sorted_df[~unbuyable].head(top_n)
+    # 如果可买入的不够，放宽换手限制
+    if len(buyable) < 3:
+        unbuyable_loose = (sorted_df['今日涨幅'].astype(float) > 9.5) & (sorted_df[turnover_col].astype(float) < 0.3)
+        buyable = sorted_df[~unbuyable_loose].head(top_n)
+
+    unbuyable_count = int(unbuyable.sum()) if len(buyable) > 0 else 0
+    changes = buyable['今日涨幅'].astype(float).values
     n_trades = len(changes)
     if n_trades == 0:
         return {'total_return': 0, 'win_rate': 0, 'profit_loss_ratio': 0,
-                'max_drawdown': 0, 'trade_count': 0, 'best': 0, 'worst': 0}
+                'max_drawdown': 0, 'trade_count': 0, 'best': 0, 'worst': 0, 'unbuyable_count': 0}
 
     # 每笔：涨幅 - 佣金(万2.5双向) - 滑点(0.1%)
     returns = changes - commission * 2 * 100 - slippage * 100
@@ -2246,6 +2280,7 @@ def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001
         'trade_count': n_trades,
         'best': round(float(returns.max()), 2),
         'worst': round(float(returns.min()), 2),
+        'unbuyable_count': unbuyable_count,
     }
 
 
@@ -2286,24 +2321,21 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     if summary['count'] == 0:
         return None
 
-    # ── 滚动周调权 ──
+    # ── 每日滚动调权 ──
     fc = summary.get('factor_correlations', {})
     adjusted_weights = None
-    w_changes = {}
-    weekly_msg = None
+    daily_msg = None
 
-    if current_weights is not None and summary['count'] >= 15 and fc:
+    if current_weights is not None and summary['count'] >= 8 and fc:
         # 每日保存相关性
         weight_manager.save_daily_correlations(fc)
 
-        # 周五统一调权，周一至周四只存不调
-        if wd == 4:  # Friday
-            new_w, adj_msg = weight_manager.weekly_adjust_weights(current_weights, lr=0.05)
-            if new_w:
-                adjusted_weights = new_w
-                w_changes = {k: round(adjusted_weights[k] - current_weights[k], 1) for k in current_weights}
-            if adj_msg:
-                weekly_msg = adj_msg
+        # 每日调权（基于近N天滚动均值）
+        new_w, adj_msg = weight_manager.daily_adjust_weights(current_weights)
+        if new_w:
+            adjusted_weights = new_w
+        if adj_msg:
+            daily_msg = adj_msg
 
     sep = "─" * 50
     lines = []
@@ -2312,7 +2344,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
                  f"正收益 {summary['pos_rate']:.0f}% | 均价 {summary['avg_change']:+.1f}%")
     # 因子相关性（显示所有可用因子）
     if fc:
-        all_factors = ['seal', 'tech', 'sector_mom', 'sector_res', 'history']
+        all_factors = weight_manager.BACKTEST_FACTORS
         avail = [k for k in all_factors if k in fc and fc[k] != 0]
         if avail:
             corr_str = ' | '.join(f"{k}: {fc[k]:+.3f}" for k in avail)
@@ -2325,26 +2357,34 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
             lines.append(f"{g+'级':<6} {gd['count']:<6} {gd['avg_change']:>+6.1f}% {gd['promo_rate']:>3.0f}%   "
                          f"{gd['pos_rate']:>3.0f}%")
     diff = summary['top30_avg'] - summary['bot30_avg']
-    lines.append(f" 相关系数: {summary['correlation']} | "
+    lines.append(f" 相关系数: {summary['correlation']:.3f} | "
                  f"前30% {summary['top30_avg']:+.1f}% 后30% {summary['bot30_avg']:+.1f}% 差值 {diff:+.1f}%")
     # 模拟交易统计
     ts = summary.get('trade_stats', {})
     if ts and ts.get('trade_count', 0) > 0:
-        lines.append(f" 模拟TOP10: 均收益{ts['total_return']:+.1f}% | 胜率{ts['win_rate']:.0f}% | "
+        ub = ts.get('unbuyable_count', 0)
+        ub_str = f" 排除{ub}只一字板 |" if ub > 0 else ""
+        lines.append(f" 模拟TOP10: {ub_str}均收益{ts['total_return']:+.1f}% | 胜率{ts['win_rate']:.0f}% | "
                      f"盈亏比{ts['profit_loss_ratio']} | 最大回撤{ts['max_drawdown']}% | "
                      f"最佳{ts['best']:+.1f}% 最差{ts['worst']:+.1f}%")
-    # 周调权信息（周五显示调权结果，其他天显示积累进度）
-    if weekly_msg:
-        for line in weekly_msg.split('\n'):
+    # 每日调权信息
+    if daily_msg:
+        for line in daily_msg.split('\n'):
             lines.append(line)
-    elif wd < 4:
-        progress = weight_manager.get_weekly_progress()
+    else:
+        progress = weight_manager.get_rolling_progress()
         if progress:
-            lines.append(f" {progress}（周五统一调权）")
+            lines.append(f" {progress}（调权需>=2天）")
     # 权重变化
-    if adjusted_weights and w_changes:
-        w_str = ' | '.join(f"{k}: {current_weights[k]:.0f}→{adjusted_weights[k]:.0f} ({v:+.1f})" for k, v in w_changes.items())
-        lines.append(f" 权重调整: {w_str}")
+    if adjusted_weights:
+        changes = []
+        for k in BACKTEST_FACTORS:
+            if k in current_weights and k in adjusted_weights:
+                delta = adjusted_weights[k] - current_weights[k]
+                if abs(delta) > 0.01:
+                    changes.append(f"{k}: {current_weights[k]:.0f}→{adjusted_weights[k]:.0f} ({delta:+.1f})")
+        if changes:
+            lines.append(f" 权重调整: {' | '.join(changes)}")
     lines.append(sep)
     return "\n".join(lines), adjusted_weights
 
