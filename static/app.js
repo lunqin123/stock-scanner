@@ -147,6 +147,15 @@ function loadPlans() {
         })
         .catch(function() {});
 }
+// 回测面板分页按钮（事件委托）
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.corr-page-btn');
+    if (!btn) return;
+    var uid = btn.dataset.uid;
+    var delta = parseInt(btn.dataset.delta);
+    var total = parseInt(btn.dataset.total);
+    if (uid && window.corrPage) window.corrPage(uid, delta, total);
+});
 // 加载时恢复上次本金和方案
 document.addEventListener('DOMContentLoaded', function() {
     var el = document.getElementById('principal-input');

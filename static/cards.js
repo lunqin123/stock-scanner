@@ -790,9 +790,9 @@ function renderBacktestDashboard(data) {
         html += '</tbody></table>';
         if (totalPages > 1) {
             html += '<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0;font-size:12px">';
-            html += '<button onclick="corrPage(\\'' + uid + '\\',-1,' + totalPages + ')" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">&lt; 上一页</button>';
+            html += '<button data-uid="' + uid + '" data-delta="-1" data-total="' + totalPages + '" class="corr-page-btn" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">&lt; 上一页</button>';
             html += '<span id="' + uid + '-label" style="min-width:60px;text-align:center">1 / ' + totalPages + '</span>';
-            html += '<button onclick="corrPage(\\'' + uid + '\\',1,' + totalPages + ')" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">下一页 &gt;</button>';
+            html += '<button data-uid="' + uid + '" data-delta="1" data-total="' + totalPages + '" class="corr-page-btn" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">下一页 &gt;</button>';
             html += '</div>';
         }
     } else {
