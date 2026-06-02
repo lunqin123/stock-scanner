@@ -715,6 +715,18 @@ function fallbackCopy(txt) {
 window.escapeHtml = esc;
 
 // ─── 回测追踪面板 ───
+function corrPage(uid, delta, totalPages) {
+    var rows = document.querySelectorAll('.' + uid + '-row');
+    var label = document.getElementById(uid + '-label');
+    if (!rows.length || !label) return;
+    var cur = parseInt(label.textContent) || 1;
+    var next = Math.max(1, Math.min(totalPages, cur + delta));
+    if (next === cur) return;
+    rows.forEach(function(r) { r.style.display = r.dataset.page == next ? '' : 'none'; });
+    label.textContent = next + ' / ' + totalPages;
+}
+window.corrPage = corrPage;
+
 function renderBacktestDashboard(data) {
     if (!data || !data.ok) {
         return '<div class="loading">暂无回测数据</div>';
@@ -748,20 +760,25 @@ function renderBacktestDashboard(data) {
     }
     html += '</table></div>';
 
-    // 2. 相关性历史卡片
+    // 2. 相关性历史卡片（分页，每页5条）
     html += '<div class="card" style="flex:2;min-width:360px"><h3 style="margin:0 0 12px">因子相关性历史</h3>';
     var corrHist = data.corr_history || [];
     if (corrHist.length > 0) {
-        html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        var PAGE_SIZE = 5;
+        var totalPages = Math.ceil(corrHist.length / PAGE_SIZE);
+        var uid = 'corr_' + Date.now();
+        // 表头
+        html += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead>';
         html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:3px">日期</th>';
         var factors = data.backtest_factors || [];
         for (var f = 0; f < factors.length; f++) {
             html += '<th style="padding:3px">' + esc(factorName(factors[f])) + '</th>';
         }
-        html += '</tr>';
+        html += '</tr></thead><tbody id="' + uid + '">';
         for (var d = corrHist.length - 1; d >= 0; d--) {
             var day = corrHist[d];
-            html += '<tr style="border-bottom:1px solid var(--border)">';
+            var page = Math.floor((corrHist.length - 1 - d) / PAGE_SIZE) + 1;
+            html += '<tr class="' + uid + '-row" data-page="' + page + '" style="border-bottom:1px solid var(--border);' + (page > 1 ? 'display:none' : '') + '">';
             html += '<td style="padding:3px;font-size:11px">' + esc(day.date || '') + '</td>';
             for (var f2 = 0; f2 < factors.length; f2++) {
                 var val = day[factors[f2]];
@@ -770,7 +787,14 @@ function renderBacktestDashboard(data) {
             }
             html += '</tr>';
         }
-        html += '</table>';
+        html += '</tbody></table>';
+        if (totalPages > 1) {
+            html += '<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0;font-size:12px">';
+            html += '<button onclick="corrPage(\\'' + uid + '\\',-1,' + totalPages + ')" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">&lt; 上一页</button>';
+            html += '<span id="' + uid + '-label" style="min-width:60px;text-align:center">1 / ' + totalPages + '</span>';
+            html += '<button onclick="corrPage(\\'' + uid + '\\',1,' + totalPages + ')" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">下一页 &gt;</button>';
+            html += '</div>';
+        }
     } else {
         html += '<div class="loading">暂无相关性数据 — 需积累至少1天回测</div>';
     }
