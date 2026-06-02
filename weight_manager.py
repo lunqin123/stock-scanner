@@ -184,11 +184,11 @@ DAILY_LR = 0.02       # 每日学习率（低，避免单日波动）
 ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
 
 
-def save_daily_correlations(correlations: dict):
-    """保存当日因子相关性到滚动缓存。每天调权时取最近N天均值。"""
+def save_daily_correlations(correlations: dict, trading_date: str = None):
+    """保存因子相关性到滚动缓存。trading_date 用交易日而非日历日，避免凌晨重复。"""
     if not correlations:
         return
-    today_str = date.today().isoformat()
+    today_str = trading_date if trading_date else date.today().isoformat()
     try:
         data = _load_rolling_data()
         data = [d for d in data if d['date'] != today_str]

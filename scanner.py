@@ -2327,8 +2327,8 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     daily_msg = None
 
     if current_weights is not None and summary['count'] >= 8 and fc:
-        # 每日保存相关性
-        weight_manager.save_daily_correlations(fc)
+        # 每日保存相关性（用回测交易日期，非日历日期——避免凌晨重复）
+        weight_manager.save_daily_correlations(fc, trading_date=today_str)
 
         # 每日调权（基于近N天滚动均值）
         new_w, adj_msg = weight_manager.daily_adjust_weights(current_weights)
