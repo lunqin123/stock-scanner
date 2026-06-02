@@ -44,7 +44,18 @@ def _fetched_at() -> str:
 
 # ── 挂载静态文件 ──
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.mount("/static", StaticFiles(directory=os.path.join(_BASE_DIR, "static")), name="static")
+# 自定义 StaticFiles：强制 no-cache，避免浏览器缓存旧 JS/CSS
+class _NoCacheStaticFiles(StaticFiles):
+    async def __call__(self, scope, receive, send):
+        async def _send(msg):
+            if msg["type"] == "http.response.start":
+                headers = dict(msg.get("headers", []))
+                headers[b"cache-control"] = b"no-cache, no-store, must-revalidate"
+                msg["headers"] = list(headers.items())
+            await send(msg)
+        await super().__call__(scope, receive, _send)
+
+app.mount("/static", _NoCacheStaticFiles(directory=os.path.join(_BASE_DIR, "static")), name="static")
 
 
 # ═══════════════════════════════════════════
