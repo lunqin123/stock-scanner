@@ -1618,7 +1618,7 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
                           'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream_v3', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream', refresh)
 
 
 @app.get("/api/scan/trend/stream")
@@ -1700,7 +1700,7 @@ async def api_trend_stream(refresh: bool = Query(False)):
         items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
         items = items[:10]
         return items, {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream_v3', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
 
 
 @app.get("/api/scan/dtqiaoban/stream")
@@ -1744,7 +1744,7 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
                           'signals': sigs, 'advice': advice,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         return items[:10], {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream_v3', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream', refresh)
 
 
 @app.get("/api/scan/sector/stream")
@@ -1774,7 +1774,7 @@ async def api_sector_stream(refresh: bool = Query(False)):
                           'score': min(12, 4 + s['limit_cnt'] * 2), 'efficiency': s['seal_rate'],
                           'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}"})
         return items, {}
-    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream_v3', refresh)
+    return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream', refresh)
 
 
 def _comment_score_note(score):
