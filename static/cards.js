@@ -720,6 +720,14 @@ function renderBacktestDashboard(data) {
         return '<div class="loading">暂无回测数据</div>';
     }
 
+    // 因子中英文映射
+    var FACTOR_CN = {
+        'seal': '封板强度', 'tech': '量价结构', 'sector_mom': '板块热度',
+        'sector_res': '板块共振', 'history': '历史股性', 'money': '资金驱动',
+        'buyability': '开盘可行性', 'stock_sentiment': '个股情绪', 'principal_score': '本金适配'
+    };
+    function factorName(key) { return FACTOR_CN[key] || key; }
+
     var html = '<div class="dashboard-grid" style="display:flex;flex-wrap:wrap;gap:16px;padding:16px">';
 
     // 1. 权重对比卡片
@@ -732,7 +740,7 @@ function renderBacktestDashboard(data) {
         var deltaSign = w.delta > 0 ? '+' : '';
         var deltaColor = w.delta > 0.05 ? '#22c55e' : w.delta < -0.05 ? '#ef4444' : 'var(--text-muted)';
         html += '<tr style="border-bottom:1px solid var(--border)">';
-        html += '<td style="padding:4px;font-weight:600">' + esc(w.factor) + '</td>';
+        html += '<td style="padding:4px;font-weight:600">' + esc(factorName(w.factor)) + '</td>';
         html += '<td style="text-align:center;padding:4px">' + w.current.toFixed(1) + '</td>';
         html += '<td style="text-align:center;padding:4px;color:var(--text-muted)">' + w.default.toFixed(1) + '</td>';
         html += '<td style="text-align:center;padding:4px;color:' + deltaColor + '">' + deltaSign + w.delta.toFixed(2) + '</td>';
@@ -748,7 +756,7 @@ function renderBacktestDashboard(data) {
         html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:3px">日期</th>';
         var factors = data.backtest_factors || [];
         for (var f = 0; f < factors.length; f++) {
-            html += '<th style="padding:3px">' + esc(factors[f]) + '</th>';
+            html += '<th style="padding:3px">' + esc(factorName(factors[f])) + '</th>';
         }
         html += '</tr>';
         for (var d = corrHist.length - 1; d >= 0; d--) {
