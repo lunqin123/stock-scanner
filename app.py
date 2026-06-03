@@ -1732,7 +1732,10 @@ async def api_trend_stream(refresh: bool = Query(False)):
             else:
                 advice = '趋势良好，持有为主'
             items.append({'code': code, 'name': str(row[name_col]), 'change_pct': chg,
-                          'price': price, 'turnover': turnover, 'volume': vol, 'industry': industry,
+                          'price': price, 'turnover': turnover,
+                          'volume': round(vol / 1e8, 2) if vol > 1e8 else round(vol / 1e4, 0),
+                          'volume_unit': '亿' if vol > 1e8 else '万',
+                          'industry': industry,
                           'consecutive': consecutive, 'signals': sigs, 'advice': advice,
                           'risk_score': risk_score,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
