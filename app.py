@@ -631,7 +631,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
         items.append({
             'code': code,
             'name': str(row[name_col]),
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'change_pct': chg,
             'price': price,
             'turnover': round(turnover, 1),
@@ -735,7 +735,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         else: advice = "不建议参与，资金面偏弱"
 
         items.append({
-            'code': code, 'name': name, 'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'score': int(total_score), 'price': price, 'seal_time': seal_time,
             'seal_fund': seal_fund, 'zhaban_times': zb_times, 'turnover': round(turnover, 1),
             'industry': industry, 'net_money': round(net, 0), 'signals': signals, 'advice': advice,
@@ -818,7 +818,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         else: advice = "无量封死，不建议参与"
 
         items.append({
-            'code': code, 'name': name, 'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'score': int(total), 'price': float(row.iloc[price_col]),
             'change': float(row.iloc[change_col]), 'turnover': round(turn_val, 1),
             'seal_fund': seal_val, 'consecutive': cont_val, 'seal_time': st,
@@ -953,7 +953,7 @@ def api_indicators_cards(refresh: bool = Query(False, description="强制刷新"
         items.append({
             'code': code,
             'name': name,
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'seal_ratio': round(sr, 2) if sr is not None else None,
             'leadership': lead,
             'vol_ratio': vol,
@@ -1435,7 +1435,7 @@ def api_community_cards(refresh: bool = Query(False, description="强制刷新")
         items.append({
             'code': code,
             'name': info.get('name', ''),
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'comment_score': round(cs, 2),
             'guba_rank': info.get('guba_rank'),
             'institution': round(inst, 2) if inst else None,
@@ -1641,7 +1641,7 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
                           'seal_time': seal_time, 'turnover': turnover, 'seal_fund': seal_fund,
                           'zhaban_times': zb_times, 'industry': industry, 'net_money': round(net, 0),
                           'signals': sigs, 'advice': advice,
-                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+                          'url': f"https://stockpage.10jqka.com.cn/{code}/"})
         return items[:10], {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'zhaban_stream', refresh)
 
@@ -1740,7 +1740,7 @@ async def api_trend_stream(refresh: bool = Query(False)):
                           'industry': industry,
                           'consecutive': consecutive, 'signals': sigs, 'advice': advice,
                           'risk_score': risk_score,
-                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+                          'url': f"https://stockpage.10jqka.com.cn/{code}/"})
         # 过滤：移除不建议持有的极高风险标的
         items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
         # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
@@ -1789,7 +1789,7 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
                           'seal_time': st[:4] if len(st) >= 4 else st,
                           'turnover': turn_val, 'seal_fund': seal_val, 'consecutive': cont_val,
                           'signals': sigs, 'advice': advice,
-                          'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+                          'url': f"https://stockpage.10jqka.com.cn/{code}/"})
         return items[:10], {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'dtqiaoban_stream', refresh)
 
