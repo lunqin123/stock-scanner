@@ -643,6 +643,8 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             'advice': advice,
             'risk_score': risk_score,
         })
+    # 过滤：移除不建议持有的极高风险标的
+    items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
     # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
     items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
     items = items[:10]
@@ -1739,6 +1741,8 @@ async def api_trend_stream(refresh: bool = Query(False)):
                           'consecutive': consecutive, 'signals': sigs, 'advice': advice,
                           'risk_score': risk_score,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
+        # 过滤：移除不建议持有的极高风险标的
+        items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
         # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
         items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
         items = items[:10]
