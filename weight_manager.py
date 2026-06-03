@@ -124,9 +124,8 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
-            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0, 'buyability': 12.0,
+            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
             'stock_sentiment': 10.0, 'principal_score': 10.0}
-_RAW_TOTAL = sum(_RAW_MAX.values())  # 93
 
 
 def apply_weights(seal_scores, money_scores, sector_res, sector_mom,

@@ -1000,7 +1000,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         lines.append(f"   封板: {seal_time} | 封单 {fund_str} | 换手 {turnover}%")
         lines.append(f"   资金面: {money_score_val:.1f}/{w['money']:.0f} {money_detail_str} | 板块: {industry} ({row['板块热度']:.0f}/{w.get('sector_mom', 15):.0f})")
         ss_val = float(row.get('个股情绪', 5))
-        lines.append(f"   评分拆解: 封板{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 可买{float(row['开盘可行性']):.1f}/{w['buyability']:.0f} + 个情{ss_val:.1f}/{w.get('stock_sentiment', 10):.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f}")
+        lines.append(f"   评分拆解: 封板{seal_score_val:.1f}/{w['seal']:.0f} + 资金{money_score_val:.1f}/{w['money']:.0f} + 板块{float(row['板块热度']):.0f}/{w.get('sector_mom', 15):.0f} + 量价{tech_score_val:.1f}/{w['tech']:.0f} + 股性{history_val:.1f}/{w['history']:.0f} + 个情{ss_val:.1f}/{w.get('stock_sentiment', 10):.0f} + 共振{float(row['板块共振']):.0f}/{w['sector_res']:.0f} (可买={float(row.get('开盘可行性', 0)):.0f}, 仅参考)")
         lines.append(f"   {buy_logic}")
         lines.append(f"   {risk}")
 
@@ -2117,7 +2117,7 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     else:
         history_s = pd.Series(2.5, index=df.index)
 
-    # 资金流、情绪、buyability 历史不可用，用中性默认值
+    # 资金流、情绪历史不可用，用中性默认值
     money_s = pd.Series(10.0, index=df.index)
     sent_s = pd.Series(5.0, index=df.index)
 
