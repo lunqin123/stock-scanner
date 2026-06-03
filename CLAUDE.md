@@ -50,7 +50,7 @@ test_invariants.py  64项不变性测试
 - daily缓存: `daily_{date}_{key}_v{_CACHE_VER}.json` (全天有效，次日过期)
 - 原始缓存: `raw_scan_data.pkl` (含 version 字段，`_RAW_CACHE_VERSION=2`)
 - 流端点缓存: 统一走 `daily_get`/`daily_set`，缓存键不带后缀
-- 改格式时: `_CACHE_VER += 1` 自动全局失效 / `_RAW_CACHE_VERSION += 1` 原始缓存失效
+- **⚠️ 改评分逻辑时必须同时升 `_CACHE_VER` 和 `_RAW_CACHE_VERSION`**——缓存里存的是旧公式算好的分数，格式没变但数值变了，版本号不加1的话旧缓存永远不会失效
 
 ## 回测 + 调权
 

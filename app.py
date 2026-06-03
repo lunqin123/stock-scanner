@@ -106,7 +106,7 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 2  # 缓存格式版本：每次改评分/缓存结构 +1，旧版自动失效
+_RAW_CACHE_VERSION = 3  # v2→v3: 评分逻辑重构(封板/资金/buyability)
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
