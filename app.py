@@ -469,14 +469,15 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
 
 
 @app.get("/api/scan/trend/cards")
-def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
+def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
+                    principal: float = Query(20000, description="本金(元)")):
     """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
     import akshare as ak
     import pandas as pd
     from datetime import date, timedelta, datetime
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    key = f"trend_cards_{today}"
+    key = f"trend_cards_{today}_{int(principal)}"
     if not refresh:
         cached = daily_get(key)
         if cached:
@@ -511,6 +512,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
     # 过滤 ST/科创板/北交所/创业板
     from scanner import filter_non_main_board
     prev = filter_non_main_board(prev)
+    prev = _principal_filter(prev, principal)  # 本金过滤：买不起的排除
 
     # ── 风控数据：拉取炸板池 + 今日热门板块（并行） ──
     zhaban_codes = set()
@@ -1647,7 +1649,8 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
 
 
 @app.get("/api/scan/trend/stream")
-async def api_trend_stream(refresh: bool = Query(False)):
+async def api_trend_stream(refresh: bool = Query(False),
+                            principal: float = Query(20000, description="本金(元)")):
     today = _today_trading()
     def run():
         print("  [趋势] 拉取昨日涨停数据...", file=sys.stderr)
@@ -1667,6 +1670,7 @@ async def api_trend_stream(refresh: bool = Query(False)):
         print(f"  [趋势] 共 {len(prev)} 只, 过滤评分中...", file=sys.stderr)
         from scanner import filter_non_main_board
         df = filter_non_main_board(prev)
+        df = _principal_filter(df, principal)  # 本金过滤
         chg_col = prev.columns[3]; name_col = prev.columns[2]; code_col = prev.columns[1]
         price_col = prev.columns[4]; turnover_col = prev.columns[9]
         vol_col = prev.columns[6]; seal_stat_col = prev.columns[14] if len(prev.columns) > 14 else None
