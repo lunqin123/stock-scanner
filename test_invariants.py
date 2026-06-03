@@ -166,7 +166,7 @@ if data_3k is not None and data_50k is not None:
     check(len(s50k) > 0, "50k 本金应有结果")
     # 3k 本金筛掉更多高价股 → 候选池更小(不一定，取决于当天涨停股价格)
     check(True, f"3k={len(s3k)}只, 50k={len(s50k)}只 — 正常差异")
-    # 检验买不起0.5手的股票确实不在 3k 结果中
+    # 检验买不起2手的股票确实不在 3k 结果中
     if data_3k is not None:
         df = data_3k.get('df')
         import scanner as sc
@@ -175,9 +175,9 @@ if data_3k is not None and data_50k is not None:
         price_col = df.columns[4] if len(df.columns) > 4 else df.columns[3]
         bad = 0
         for idx in df.index:
-            if float(df.loc[idx, price_col]) * 100 * 0.5 > pos:
+            if float(df.loc[idx, price_col]) * 100 * 2 > pos:
                 bad += 1
-        check(bad == 0, f"3k 本金不应有买不起 0.5 手的股（发现 {bad} 只）")
+        check(bad == 0, f"3k 本金不应有买不起 2 手的股（发现 {bad} 只）")
 
 # ── 6. 交易日计算 ──
 section("6. 日期逻辑")

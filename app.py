@@ -178,11 +178,11 @@ def _principal_filter(df, principal):
     for idx in df.index:
         price = float(df.loc[idx, price_col])
         lots = position_size / (price * 100)
-        if lots < 0.5:
+        if lots < 2:  # 至少能买2手
             mask[idx] = False
     excluded = (~mask).sum()
     if excluded > 0:
-        print(f"  [扫描] 本金过滤排除 {excluded} 只 (本金{principal}买不了0.5手)", file=sys.stderr)
+        print(f"  [扫描] 本金过滤排除 {excluded} 只 (本金{principal}买不了2手)", file=sys.stderr)
     return df[mask]
 
 
