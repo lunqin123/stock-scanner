@@ -231,7 +231,7 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
             'net_money_str': money_str(net),
             'turnover': f"{float(row.get('换手率', 0)):.1f}",
             'seal_time': str(row.get('首次封板时间', ''))[:4],
-            'url': f"https://m.10jqka.com.cn/stock/{code}/",
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
     return stocks
 
