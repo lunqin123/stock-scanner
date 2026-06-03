@@ -617,10 +617,12 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             advice = "放量滞涨，警惕出货，缩量即走"
         elif risk_score <= 8:
             advice = "多风险信号，轻仓试探或回避"
+        elif industry and hot_industries and industry not in hot_industries and risk_score <= 14:
+            advice = "板块退潮，快进快出，破5日线止盈"
+        elif risk_score <= 8:
+            advice = "多风险信号，轻仓试探或回避"
         elif risk_score <= 14:
             advice = "趋势尚可，控制仓位持有"
-        if industry and hot_industries and industry not in hot_industries and risk_score <= 14:
-            advice = "板块退潮，快进快出，破5日线止盈"
         elif chg >= 7:
             advice = "沿5日线持有，破线止盈"
         else:
