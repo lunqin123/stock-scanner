@@ -1,15 +1,18 @@
 {
-  "version": "1.17.4",
+  "version": "1.18.1",
   "date": "2026-06-03",
   "changes": [
-    "趋势流端点风控对齐：卡片用风控排序，流用纯涨幅→统一为风控加权排序，修复排行榜不一致",
-    "缓存版本统一管理：_CACHE_VER 2→3自动全局失效，替代手动_v3后缀",
-    "回测面板修复：loadCardView加backtest例外(无items字段)，renderBacktestDashboard卡片渲染",
-    "静态资源版本号 1.15.0→1.17.3，强制浏览器下载新JS(解决缓存导致新功能不生效)",
-    "CLAUDE.md：项目架构+评分体系+缓存规则+服务器部署完整说明",
-    "gitignore：server-guide.md/qqChatBot.pem敏感文件",
-    "趋势流字段补全：risk_score/consecutive/signals/advice/volume_unit",
-    "回测面板端点/api/backtest/dashboard：权重对比+相关性历史+系统状态"
+    "评分体系重构v1: 封板时间从buyability移回seal(越早越高)，buyability退场为纯过滤器(权重12→0)",
+    "评分体系重构v2: 封板时间阶梯化(10:00前+12→14:00后0)，资金分级化(5000万+→20分)，money 3→12%",
+    "本金适配权重6→2%(全10分无区分度，几乎不影响排名)",
+    "缓存铁律: _CACHE_VER→4 + _RAW_CACHE_VERSION→3，改评分逻辑必须同步升版本号",
+    "回测只在盘后运行(盘中跳过，数据不完整)",
+    "correlation日期改用交易日避免凌晨重复",
+    "趋势流+炸板流+翘板流字段补全(risk_score/signals/advice等)",
+    "回测面板分页(每页5条)+因子中文名+_pageToken防串台",
+    "静态文件no-cache头+版本号管理，旧pkl缓存清理",
+    "CLAUDE.md完整项目文档+服务器部署指南+调试复盘",
+    "code cleanup: _RAW_MAX移除死buyability条目，format_output修复buyability/0显示"
   ],
   "history": [
     {
