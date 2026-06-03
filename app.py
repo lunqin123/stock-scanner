@@ -574,8 +574,8 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             risk_score -= 6
             risk_tags.append("⚠️ 连板高位缩量")
 
-        # 风险3: 放量滞涨 (换手>15%但涨幅<3%) (扣6)
-        if turnover > 15 and chg < 3:
+        # 风险3: 放量滞涨 (换手>14%但涨幅<6%) (扣6)
+        if turnover > 14 and chg < 6:
             risk_score -= 6
             risk_tags.append("⚠️ 放量滞涨")
 
@@ -613,12 +613,14 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             advice = "昨日炸板+高换手，警惕诱多，破昨日低点止损"
         elif code in zhaban_codes:
             advice = "昨日炸板今日续涨，观察开盘不追高"
-        elif turnover > 15 and chg < 5:
+        elif turnover > 14 and chg < 6:
             advice = "放量滞涨，警惕出货，缩量即走"
         elif risk_score <= 8:
             advice = "多风险信号，轻仓试探或回避"
         elif risk_score <= 14:
             advice = "趋势尚可，控制仓位持有"
+        if industry and hot_industries and industry not in hot_industries and risk_score <= 14:
+            advice = "板块退潮，快进快出，破5日线止盈"
         elif chg >= 7:
             advice = "沿5日线持有，破线止盈"
         else:
@@ -639,8 +641,8 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             'advice': advice,
             'risk_score': risk_score,
         })
-    # 按风控后排序：风险权重提升，涨幅不再完全主导
-    items.sort(key=lambda x: (x['risk_score'] * 1.2 + x['change_pct'] * 6), reverse=True)
+    # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
+    items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
     items = items[:10]
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     daily_set(key, result, force=refresh)
