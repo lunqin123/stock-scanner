@@ -635,7 +635,7 @@ function exportOutput() {
     }
 }
 async function runAll() {
-    const pages = ['scan-limit','scan-trend','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest'];
+    const pages = ['scan-trend','scan-limit','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest'];
     for (const key of pages) {
         location.hash = key;
         await new Promise(r => setTimeout(r, 500));
@@ -798,12 +798,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function onHash() {
-        const page = location.hash.slice(1) || 'scan-limit';
+        const page = location.hash.slice(1) || 'scan-trend';
         if (PAGES[page]) switchPage(page);
     }
     window.addEventListener('hashchange', onHash);
 
-    const initPage = location.hash.slice(1) || 'scan-limit';
+    const initPage = location.hash.slice(1) || 'scan-trend';
     if (PAGES[initPage]) {
         _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === initPage));
         switchPage(initPage);
