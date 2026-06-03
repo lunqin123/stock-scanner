@@ -12,18 +12,18 @@ import pandas as pd
 import numpy as np
 
 DEFAULT_WEIGHTS = {
-    'seal': 14.0,      # 封板强度（封板时间+封单+炸板，短线打板核心）
+    'seal': 16.0,      # 封板强度（封板时间阶梯+封单+炸板，早盘重奖尾盘零分）
     'tech': 10.0,      # 量价结构（换手率×连板数交叉矩阵）
     'sector_res': 8.0, # 板块共振（今日板块涨停集中度）
     'sentiment': 25.0, # 大盘情绪（系数调节，不参与加权和）
-    'sector_mom': 10.0,# 板块热度（板块持续性）
+    'sector_mom': 8.0, # 板块热度（微降让位给资金）
     'history': 6.0,    # 历史股性（涨停频率）
-    'money': 8.0,      # 资金驱动（3->8, 净流入是涨停质量核心指标）
+    'money': 12.0,     # 资金驱动（阶梯式分级，净流入是涨停质量核心指标）
     'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
     'stock_sentiment': 9.0,   # 个股情绪（资金态度+确定性+板块领先度）
-    'principal_score': 6.0,   # 本金适配（价格可买性+流动性）
+    'principal_score': 2.0,   # 本金适配（权重降至2%，几乎不影响排名）
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96 (buyability=0)
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96
 
 # 回测中可调权的因子
 BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech', 'sector_res', 'history']

@@ -60,7 +60,8 @@ import weight_manager as wm
 
 w = wm.DEFAULT_WEIGHTS  # 直读默认值，不受 weights.json 旧调权影响
 check(isinstance(w, dict), "DEFAULT_WEIGHTS 应返回 dict")
-check(w['seal'] == 14.0, f"seal 默认权重应为 14.0，实际 {w['seal']}")
+check(w['seal'] == 16.0, f"seal 默认权重应为 16.0，实际 {w['seal']}")
+check(w['money'] == 12.0, f"money 默认权重应为 12.0，实际 {w['money']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
 check('principal_score' in w, "DEFAULT_WEIGHTS 应含 principal_score")
 check(w.get('principal_score', 0) > 0, f"principal_score 权重应>0，实际 {w.get('principal_score', 0)}")

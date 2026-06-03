@@ -232,12 +232,25 @@ def pre_filter(df: pd.DataFrame) -> pd.DataFrame:
 # ─── 第三步: 涨停强度评分 (30%, 满分 30) ───
 
 def score_seal_strength(df: pd.DataFrame) -> pd.Series:
-    """封板质量评分 (0-25)：封板时间(越早越高) + 封单充沛度 + 炸板次数"""
+    """封板质量评分 (0-25)：封板时间(阶梯，越早越高) + 封单充沛度 + 炸板次数"""
     scores = pd.Series(0.0, index=df.index)
 
-    # 1. 封板时间 (0-10)：越早封板越强
+    # 1. 封板时间阶梯化 (0-12)：非连续，早盘重奖、尾盘重罚
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
-    scores += df[seal_time_col].astype(str).apply(seal_time_score)
+    for idx in df.index:
+        t = str(df.loc[idx, seal_time_col])
+        if len(t) >= 4:
+            h, m = int(t[:2]), int(t[2:4])
+            minutes = h * 60 + m
+            if minutes <= 600:     score = 12   # ≤10:00 早盘板，最高奖
+            elif minutes <= 630:   score = 9    # 10:00-10:30
+            elif minutes <= 690:   score = 6    # 10:30-11:30
+            elif minutes <= 780:   score = 4    # 11:30-13:00
+            elif minutes <= 840:   score = 2    # 13:00-14:00
+            else:                  score = 0    # >14:00 尾盘板，零分
+        else:
+            score = 6
+        scores[idx] += score
 
     # 2. 封单充沛度 (0-8)
     if '封板资金' in df.columns:
@@ -248,10 +261,10 @@ def score_seal_strength(df: pd.DataFrame) -> pd.Series:
         else:
             scores += pd.Series(4.0, index=df.index)
 
-    # 3. 炸板次数惩罚 (0-7, 0次=7分, 5次+=0分)
+    # 3. 炸板次数惩罚 (0-5, 0次=5分, 5次+=0分)
     if '炸板次数' in df.columns:
         zban = df['炸板次数'].fillna(0).astype(float)
-        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 7
+        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 5
         scores += zban_scores
 
     return scores.clip(upper=25.0)
@@ -338,42 +351,26 @@ def get_money_flow_scores(df: pd.DataFrame, fund_df=None):
         net_val = code_to_net.get(code, 0)
         raw_values[idx] = net_val    # 入库仍为主力净流入
 
-        # ── 基础分 (0-12): 基于主力净流入绝对值 ──
-        if net_val > 5e8:
-            base = 12.0       # 5亿+ 顶级资金驱动
-        elif net_val > 2e8:
-            base = 11.0
-        elif net_val > 1e8:
-            base = 10.0
-        elif net_val > 5e7:
-            base = 8.0
-        elif net_val > 1e7:
-            base = 6.0
+        # ── 基础分 (0-20): 阶梯式，拉开资金差距 ──
+        if net_val > 5000e4:
+            base = 20.0       # 5000万+ 顶级资金驱动
+        elif net_val > 2000e4:
+            base = 16.0       # 2000-5000万
+        elif net_val > 1000e4:
+            base = 13.0       # 1000-2000万
+        elif net_val > 500e4:
+            base = 10.0       # 500-1000万
         elif net_val > 0:
-            base = 4.0
-        elif net_val > -1e7:
-            base = 1.0
-        elif net_val > -5e7:
-            base = 0.5
+            base = 7.0        # 0-500万 微量流入
+        elif net_val > -1000e4:
+            base = 4.0        # -1000-0万 微量流出
+        elif net_val > -3000e4:
+            base = 2.0        # -1000~-3000万 明显流出
         else:
-            base = 0.0
+            base = 0.0        # -3000万以下 大幅流出
 
-        # ── 结构分 (0-5): 基于净流入质量 ──
-        structure = 0.0
-        if net_val > 0:
-            # 无超大单/大单细分（akshare 接口变更后），
-            # 用净流入大小估算资金质量
-            if net_val > 5e8:
-                structure = 5.0
-            elif net_val > 2e8:
-                structure = 4.0
-            elif net_val > 1e8:
-                structure = 3.0
-            elif net_val > 5e7:
-                structure = 2.0
-            else:
-                structure = 1.0
-
+        # ── 结构分 (0-3): 资金质量微调 ──
+        structure = 1.0 if net_val > 0 else 0.0
         scores[idx] = max(0, min(20, base + structure))
     return scores, raw_values
 
