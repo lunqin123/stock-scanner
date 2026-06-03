@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone, timedelta
 _CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
 
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
-_CACHE_VER = 4  # v3→v4: 评分逻辑重构(封板时间阶梯化/资金分级化/buyability退场)
+_CACHE_VER = 5  # v4→v5: 趋势扫描全量重构(排序/策略/阈值/volume_unit)
 _CACHE_TTL = 7200
 
 # ─── 2小时短期缓存（避免重复拉取慢 API） ───
