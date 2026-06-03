@@ -172,7 +172,7 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     weights = weight_manager.load_weights()
     base = weight_manager.apply_weights(
         factors['seal'], money, factors['sector_res'], factors['sector_mom'],
-        factors['buyability'], factors['tech'], h_scores,
+        factors['tech'], h_scores,
         sentiment_series,
         stock_sentiment_scores=factors['stock_sentiment'],
         principal_scores=factors['principal'],

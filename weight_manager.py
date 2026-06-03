@@ -11,23 +11,21 @@ import sys
 import pandas as pd
 import numpy as np
 
-# ─── 默认权重（与当前硬编码值一致） ───
 DEFAULT_WEIGHTS = {
-    'seal': 6.0,       # 封板强度（已降权：早盘板次日买不到）
-    'tech': 11.0,      # 量价结构（换手区间，有效次日预测因子）
+    'seal': 14.0,      # 封板强度（封板时间+封单+炸板，短线打板核心）
+    'tech': 10.0,      # 量价结构（换手率×连板数交叉矩阵）
     'sector_res': 8.0, # 板块共振（今日板块涨停集中度）
     'sentiment': 25.0, # 大盘情绪（系数调节，不参与加权和）
-    'sector_mom': 12.0,# 晋级预期（板块持续性）
-    'history': 8.0,    # 历史股性（涨停频率有回测证据）
-    'money': 3.0,      # 资金驱动（继续降权：超短线中预测力有限）
-    'buyability': 12.0,# 开盘可行性（次日买得到）
+    'sector_mom': 10.0,# 板块热度（板块持续性）
+    'history': 6.0,    # 历史股性（涨停频率）
+    'money': 8.0,      # 资金驱动（3->8, 净流入是涨停质量核心指标）
+    'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
     'stock_sentiment': 9.0,   # 个股情绪（资金态度+确定性+板块领先度）
-    'principal_score': 6.0,   # 本金适配（价格可买性+流动性，小资金更敏感）
+    'principal_score': 6.0,   # 本金适配（价格可买性+流动性）
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96 (buyability=0)
 
-# 回测中可调权的因子（所有在 backtest_score_prev 中实际计算的因子）
-# money/buyability/stock_sentiment/principal 在回测中用常量 → 无法计算相关性
+# 回测中可调权的因子
 BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech', 'sector_res', 'history']
 
 _WEIGHTS_FILE = os.path.join(
@@ -131,12 +129,13 @@ _RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
 _RAW_TOTAL = sum(_RAW_MAX.values())  # 93
 
 
-def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_scores,
+def apply_weights(seal_scores, money_scores, sector_res, sector_mom,
                   tech_scores, history_scores, sentiment_score,
-                  stock_sentiment_scores=None, principal_scores=None, weights=None):
+                  stock_sentiment_scores=None, principal_scores=None, buyability_scores=None, weights=None):
     """
-    9因子加权 + 大盘情绪温和系数。
-    本金适配(principal_score)参与加权(0-10分,权重6%, 小资金敏感)。
+    8因子加权 + 大盘情绪温和系数。
+    buyability_scores 仅向后兼容，权重为0不参与计算。
+    本金适配(principal_score)参与加权(0-10分,权重6%)。
     个股情绪(stock_sentiment)参与加权(0-10分,权重9%)。
     大盘情绪(sentiment)温和系数调节(×0.85~×1.15)。
     """
@@ -146,9 +145,9 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
         principal_scores = pd.Series(5.0, index=seal_scores.index)
     w = weights if weights else DEFAULT_WEIGHTS
 
-    # 9因子加权（含个股情绪+本金适配，不含大盘情绪）
+    # 8因子加权（buyability权重=0，已降为纯过滤器）
     non_sentiment = ['seal', 'money', 'sector_res', 'sector_mom', 'tech', 'history',
-                     'buyability', 'stock_sentiment', 'principal_score']
+                     'stock_sentiment', 'principal_score']
     actual_sum = sum(w[k] for k in non_sentiment)
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
@@ -156,7 +155,6 @@ def apply_weights(seal_scores, money_scores, sector_res, sector_mom, buyability_
                 sector_mom * (w['sector_mom'] / _RAW_MAX['sector_mom']) +
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
-                buyability_scores * (w['buyability'] / _RAW_MAX['buyability']) +
                 stock_sentiment_scores * (w['stock_sentiment'] / _RAW_MAX['stock_sentiment']) +
                 principal_scores * (w['principal_score'] / _RAW_MAX['principal_score']))
     base_scores = weighted / max(1, actual_sum) * 100

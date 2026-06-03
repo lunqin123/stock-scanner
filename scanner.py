@@ -232,21 +232,26 @@ def pre_filter(df: pd.DataFrame) -> pd.DataFrame:
 # ─── 第三步: 涨停强度评分 (30%, 满分 30) ───
 
 def score_seal_strength(df: pd.DataFrame) -> pd.Series:
-    """封板质量评分 (0-25)：封单充沛度 + 炸板次数（不含封板时间/换手率，已归 buyability）"""
+    """封板质量评分 (0-25)：封板时间(越早越高) + 封单充沛度 + 炸板次数"""
     scores = pd.Series(0.0, index=df.index)
 
+    # 1. 封板时间 (0-10)：越早封板越强
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
+    scores += df[seal_time_col].astype(str).apply(seal_time_score)
+
+    # 2. 封单充沛度 (0-8)
     if '封板资金' in df.columns:
-        # 封单得分 (0-15)：封板资金绝对值
         fund = df['封板资金'].fillna(0).astype(float)
         max_fund = fund.max()
         if max_fund > 0:
-            scores += (fund / max_fund) * 15
+            scores += (fund / max_fund) * 8
         else:
-            scores += pd.Series(7.5, index=df.index)
+            scores += pd.Series(4.0, index=df.index)
 
+    # 3. 炸板次数惩罚 (0-7, 0次=7分, 5次+=0分)
     if '炸板次数' in df.columns:
         zban = df['炸板次数'].fillna(0).astype(float)
-        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 10
+        zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 7
         scores += zban_scores
 
     return scores.clip(upper=25.0)
@@ -764,48 +769,30 @@ def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
 
 def score_buyability(df: pd.DataFrame) -> pd.Series:
     """
-    评分次日开盘是否买得到+盘中能否发力 (0-10→实际可到12, 归一化 _RAW_MAX=12)。
-    - 封板时间越晚越好（尾盘板次日不封死）
-    - 首板加分强化（首板次日比连板更可能买到，首板=5分，2板=2分）
-    - 换手率适中（有换手但不过度）
+    次日可买性评分 (0-12)。纯过滤器，不参与加权排名。
+    - 连板数越低越好买（首板最容易买到）
+    - 换手率适中最好
+    注意：封板时间已移回 seal 因子，buyability 不再含封板时间。
     """
     scores = pd.Series(5.0, index=df.index)
-    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
-    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
     turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
     lb_col = '连板数' if '连板数' in df.columns else df.columns[14]
 
     for idx in df.index:
-        # 封板时间 (0-4)：越晚越好
-        seal_t = str(df.loc[idx, seal_time_col])[:4]
-        if seal_t:
-            h = int(seal_t[:2])
-            if h >= 14: t_score = 4.0      # 尾盘→次日大概率可买
-            elif h >= 11: t_score = 3.0     # 午盘
-            elif h >= 10: t_score = 2.0     # 上午
-            else: t_score = 0.5              # 早盘→最可能被堵，降到0.5
-        else:
-            t_score = 2.5
-
-        # 连板数 (0-5)：首板优先大幅强化
+        # 连板数 (0-7)：首板=最容易买
         lb = float(df.loc[idx, lb_col]) if pd.notna(df.loc[idx, lb_col]) else 1
-        if lb == 1:
-            lb_score = 5.0    # 首板→大概率能买到
-        elif lb == 2:
-            lb_score = 2.0    # 二板→可能还有机会
-        else:
-            lb_score = 0.0    # 三板+→大概率被堵，不给分
+        if lb == 1:      lb_score = 7.0
+        elif lb == 2:    lb_score = 4.0
+        elif lb == 3:    lb_score = 2.0
+        else:            lb_score = 1.0
 
-        # 换手率 (0-3)：适中最好
+        # 换手率 (0-5)：适中最好
         turnover = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 10
-        if 5 <= turnover <= 15:
-            tn_score = 3.0
-        elif 3 <= turnover <= 25:
-            tn_score = 2.0
-        else:
-            tn_score = 1.0
+        if 5 <= turnover <= 15:     tn_score = 5.0
+        elif 3 <= turnover <= 25:   tn_score = 3.0
+        else:                       tn_score = 1.0
 
-        scores[idx] = t_score + lb_score + tn_score
+        scores[idx] = lb_score + tn_score
 
     return scores.clip(0, 12)
 
@@ -831,7 +818,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -908,7 +895,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, s_buyability, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -2136,11 +2123,10 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     # 资金流、情绪、buyability 历史不可用，用中性默认值
     money_s = pd.Series(10.0, index=df.index)
     sent_s = pd.Series(5.0, index=df.index)
-    buyability_backtest = pd.Series(6.0, index=df.index)
 
     scores = weight_manager.apply_weights(
         seal_s, money_s, sector_res, sector_mom,
-        buyability_backtest, tech_s, history_s, sent_s,
+        tech_s, history_s, sent_s,
         weights=w)
 
     df['回测评分'] = scores.round(1)
@@ -2653,7 +2639,7 @@ def main():
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
     s_principal = score_by_principal(filtered, 20000)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, buyability_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]

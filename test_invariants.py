@@ -58,16 +58,17 @@ check(retrieved.get("val") == 42 if retrieved else False, "缓存数据应一致
 section("2. weight_manager 模块")
 import weight_manager as wm
 
-w = wm.load_weights()
-check(isinstance(w, dict), "load_weights 应返回 dict")
-check(w['seal'] == 6.0, f"seal 默认权重应为 6.0，实际 {w['seal']}")
+w = wm.DEFAULT_WEIGHTS  # 直读默认值，不受 weights.json 旧调权影响
+check(isinstance(w, dict), "DEFAULT_WEIGHTS 应返回 dict")
+check(w['seal'] == 14.0, f"seal 默认权重应为 14.0，实际 {w['seal']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
 check('principal_score' in w, "DEFAULT_WEIGHTS 应含 principal_score")
 check(w.get('principal_score', 0) > 0, f"principal_score 权重应>0，实际 {w.get('principal_score', 0)}")
 check('buyability' in w, "DEFAULT_WEIGHTS 应含 buyability")
 check('sector_mom' in w, "DEFAULT_WEIGHTS 应含 sector_mom")
 check('sector_res' in w, "DEFAULT_WEIGHTS 应含 sector_res")
-check(abs(sum(w.values()) - 100) < 0.01, f"权重和应为 100，实际 {sum(w.values())}")
+check(abs(sum(w.values()) - 96) < 0.01, f"权重和应为 96 (buyability=0), 实际 {sum(w.values())}")
+check(w.get('buyability', -1) == 0.0, f"buyability应=0(已退场)，实际 {w.get('buyability', -1)}")
 
 # apply_weights 计算验证
 import pandas as pd, numpy as np
