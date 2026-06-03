@@ -380,10 +380,6 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
     plan_name = plan or None
     cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
-    if not refresh:
-        cached = daily_get(cache_key)
-        if cached:
-            return cached
 
     from datetime import date
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
@@ -412,11 +408,6 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"sector_cards_{today}"
-    if not refresh:
-        cached = daily_get(key)
-        if cached:
-            print("  [板块卡片] 命中缓存", file=sys.stderr)
-            return cached
     print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
     try:
         limit_df = ak.stock_zt_pool_em(date=today)
@@ -478,11 +469,6 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"trend_cards_{today}_{int(principal)}"
-    if not refresh:
-        cached = daily_get(key)
-        if cached:
-            print("  [趋势卡片] 命中缓存", file=sys.stderr)
-            return cached
     print("  [趋势卡片] 拉取昨日涨停数据...", file=sys.stderr)
     def _fetch(d):
         return ak.stock_zt_pool_previous_em(date=d)
@@ -666,11 +652,6 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"zhaban_cards_{today}"
-    if not refresh:
-        cached = daily_get(key)
-        if cached:
-            print("  [炸板卡片] 命中缓存", file=sys.stderr)
-            return cached
     print("  [炸板卡片] 拉取炸板数据...", file=sys.stderr)
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=today)
@@ -758,11 +739,6 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
     print("  [翘板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"dtqiaoban_cards_{today}"
-    if not refresh:
-        cached = daily_get(key)
-        if cached:
-            print("  [翘板卡片] 命中缓存", file=sys.stderr)
-            return cached
     print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=today)
