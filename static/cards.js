@@ -345,7 +345,8 @@ function renderDtqiaobanCards(items) {
         var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
         if (item.price) infoHtml += '💰 ' + item.price.toFixed(2) + '  ';
         if (item.consecutive >= 1) infoHtml += '📉 连跌' + item.consecutive + '板  ';
-        if (item.turnover) infoHtml += '🔄 换手' + item.turnover + '%  ';
+        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : item.turnover;
+        if (item.turnover) infoHtml += '🔄 换手' + to + '%  ';
         if (st) infoHtml += '⏰ ' + (parseInt(st.slice(0,2)) >= 14 ? '尾盘' : parseInt(st.slice(0,2)) >= 13 ? '午后' : parseInt(st.slice(0,2)) >= 10 ? '早盘' : '开盘') + st.slice(0,2) + ':' + st.slice(2);
         infoHtml += '</div>';
 
@@ -507,7 +508,8 @@ function renderTrendCards(items) {
         var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
         if (item.price) infoHtml += '💰 ' + item.price.toFixed(2) + '  ';
         if (item.industry) infoHtml += '📌 ' + esc(item.industry) + '  ';
-        if (item.turnover) infoHtml += '🔄 换手' + item.turnover + '%  ';
+        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : item.turnover;
+        if (item.turnover) infoHtml += '🔄 换手' + to + '%  ';
         infoHtml += '📊 ' + (item.volume || '') + item.volume_unit;
         infoHtml += '</div>';
 
@@ -526,7 +528,7 @@ function renderTrendCards(items) {
             '</div>',
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : 'low') + '" style="width:' + Math.min(100, chg * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">+' + chg + '%</span></div>',
-            '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (item.turnover || '-') + '%</span></div>',
+            '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-')) + '%</span></div>',
             '<div class="bar-row"><span class="bar-label">连板</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '板</span></div>',
             '</div></div>',
             infoHtml,
