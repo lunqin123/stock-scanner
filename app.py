@@ -605,16 +605,24 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
         signals.extend(risk_tags)
 
         # ── 策略建议 ──
-        if risk_score <= 5:
-            advice = "❌ 风险极高，不建议参与"
-        elif risk_score <= 12:
-            advice = "⚠️ 风控预警，轻仓试探"
+        if consecutive >= 5 and chg < 5:
+            advice = "高位缩量，随时止盈，不建议持有"
+        elif consecutive >= 4:
+            advice = "连板后期，设3%移动止盈，不追高"
+        elif code in zhaban_codes and turnover > 14:
+            advice = "昨日炸板+高换手，警惕诱多，破昨日低点止损"
+        elif code in zhaban_codes:
+            advice = "昨日炸板今日续涨，观察开盘不追高"
+        elif turnover > 15 and chg < 5:
+            advice = "放量滞涨，警惕出货，缩量即走"
+        elif risk_score <= 8:
+            advice = "多风险信号，轻仓试探或回避"
+        elif risk_score <= 14:
+            advice = "趋势尚可，控制仓位持有"
         elif chg >= 7:
-            advice = "沿5日线持有，破5日线止盈"
-        elif chg >= 5:
-            advice = "趋势良好，持有为主"
+            advice = "沿5日线持有，破线止盈"
         else:
-            advice = "观察持续性，放量可加仓"
+            advice = "趋势良好，持有为主"
 
         items.append({
             'code': code,
@@ -631,8 +639,8 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新")):
             'advice': advice,
             'risk_score': risk_score,
         })
-    # 按风控后排序：涨幅高+风控好优先
-    items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
+    # 按风控后排序：风险权重提升，涨幅不再完全主导
+    items.sort(key=lambda x: (x['risk_score'] * 1.2 + x['change_pct'] * 6), reverse=True)
     items = items[:10]
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     daily_set(key, result, force=refresh)
@@ -1701,14 +1709,14 @@ async def api_trend_stream(refresh: bool = Query(False)):
             elif turnover > 8: sigs.append('放量健康')
             if consecutive >= 2: sigs.append(f'{consecutive}连板')
             sigs.extend(risk_tags)
-            advice = '沿5日线持有，破5日线止盈' if risk_score >= 12 else '关注风控信号，轻仓参与' if risk_score >= 8 else '风控信号多，谨慎参与'
+            advice = '高位缩量，随时止盈' if consecutive >= 5 and chg < 5 else '连板后期，不追高' if consecutive >= 4 else '昨日炸板+高换手，警惕诱多' if code in zhaban_codes and turnover > 14 else '昨日炸板，观察不追高' if code in zhaban_codes else '放量滞涨，警惕出货' if turnover > 15 and chg < 5 else '多风险，轻仓或回避' if risk_score <= 8 else '趋势尚可，控仓持有' if risk_score <= 14 else '沿5日线持有，破线止盈'
             items.append({'code': code, 'name': str(row[name_col]), 'change_pct': chg,
                           'price': price, 'turnover': turnover, 'volume': vol, 'industry': industry,
                           'consecutive': consecutive, 'signals': sigs, 'advice': advice,
                           'risk_score': risk_score,
                           'url': f"https://m.10jqka.com.cn/stock/{code}/"})
         # 与卡片端点一致的风控排序
-        items.sort(key=lambda x: (x['risk_score'] * 0.3 + x['change_pct'] * 10), reverse=True)
+        items.sort(key=lambda x: (x['risk_score'] * 1.2 + x['change_pct'] * 6), reverse=True)
         items = items[:10]
         return items, {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
