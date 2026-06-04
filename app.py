@@ -557,10 +557,10 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
             risk_score -= 8
             risk_tags.append("⚠️ 昨日炸板")
 
-        # 风险2: 连板≥3但涨幅<5% → 出货嫌疑 (扣6)
+        # 风险2: 连涨≥3但涨幅<5% → 出货嫌疑 (扣6)
         if consecutive >= 3 and chg < 5:
             risk_score -= 6
-            risk_tags.append("⚠️ 连板高位缩量")
+            risk_tags.append("⚠️ 连涨高位缩量")
 
         # 风险3: 放量滞涨 (换手>14%但涨幅<6%) (扣6)
         if turnover > 14 and chg < 6:
@@ -587,7 +587,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
         if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("放量健康")
         else: signals.append("中性换手")
-        if consecutive >= 2: signals.append(f"{consecutive}连板")
+        if consecutive >= 2: signals.append(f"{consecutive}连涨")
 
         # 风控标签追加
         signals.extend(risk_tags)
@@ -596,7 +596,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
         if consecutive >= 5 and chg < 5:
             advice = "高位缩量，随时止盈，不建议持有"
         elif consecutive >= 4:
-            advice = "连板后期，设3%移动止盈，不追高"
+            advice = "连涨后期，设3%移动止盈，不追高"
         elif code in zhaban_codes and turnover > 14:
             advice = "昨日炸板+高换手，警惕诱多，破昨日低点止损"
         elif code in zhaban_codes:
@@ -1693,12 +1693,12 @@ async def api_trend_stream(refresh: bool = Query(False),
             else: sigs.append('温和上涨')
             if turnover > 15: sigs.append('高换手')
             elif turnover > 8: sigs.append('放量健康')
-            if consecutive >= 2: sigs.append(f'{consecutive}连板')
+            if consecutive >= 2: sigs.append(f'{consecutive}连涨')
             sigs.extend(risk_tags)
             if consecutive >= 5 and chg < 5:
                 advice = '高位缩量，随时止盈，不建议持有'
             elif consecutive >= 4:
-                advice = '连板后期，设3%移动止盈，不追高'
+                advice = '连涨后期，设3%移动止盈，不追高'
             elif code in zhaban_codes and turnover > 14:
                 advice = '昨日炸板+高换手，警惕诱多，破昨日低点止损'
             elif code in zhaban_codes:

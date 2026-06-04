@@ -529,7 +529,7 @@ function renderTrendCards(items) {
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : 'low') + '" style="width:' + Math.min(100, chg * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">+' + chg + '%</span></div>',
             '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-')) + '%</span></div>',
-            '<div class="bar-row"><span class="bar-label">连板</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '板</span></div>',
+            '<div class="bar-row"><span class="bar-label">连涨</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '天</span></div>',
             '</div></div>',
             infoHtml,
             adviceHtml,
