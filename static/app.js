@@ -606,14 +606,26 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
 function clearOutput() { const el = _dom.output(); el.innerHTML = '<span class="loading">输出结果</span>'; delete _outputCache[currentPage]; }
 function exportOutput() {
-    const txt = _dom.output().textContent;
+    // 从卡片中提取股票代码+名称
+    var cards = _dom.output().querySelectorAll('.stock-card');
+    var lines = [];
+    cards.forEach(function(card) {
+        var code = card.querySelector('.card-rank');
+        var name = card.querySelector('.card-name');
+        if (code && name) {
+            lines.push(code.textContent.trim() + ' ' + name.textContent.trim());
+        }
+    });
+    var txt = lines.join('\n') || _dom.output().textContent.trim();
     if (navigator.clipboard) {
         navigator.clipboard.writeText(txt).then(() => {
-            const btn = document.querySelector('.quick-actions .btn:nth-child(2)');
-            const orig = btn.textContent;
-            btn.textContent = '✅ 已复制';
-            setTimeout(() => btn.textContent = orig, 1500);
-        }).catch(() => alert('复制失败'));
+            var btn = document.querySelector('.quick-actions .btn:first-child');
+            if (btn) {
+                var orig = btn.textContent;
+                btn.textContent = '✅ 已复制';
+                setTimeout(function() { btn.textContent = orig; }, 1500);
+            }
+        }).catch(function() { alert('复制失败'); });
     } else {
         // HTTP 环境降级方案
         const ta = document.createElement('textarea');
