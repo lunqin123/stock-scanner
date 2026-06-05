@@ -305,7 +305,7 @@ function renderMiniStockCards(items, pageKey) {
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const chg = item.change_pct;
-        const cv = chg !== undefined ? (chg >= 5 ? RING_COLORS.high : chg >= 3 ? RING_COLORS.mid : RING_COLORS.poor) : '';
+        const cv = chg !== undefined ? (chg > 0 ? (chg >= 7 ? '#ef4444' : chg >= 3 ? '#f87171' : '#fca5a5') : chg < 0 ? (chg <= -5 ? '#16a34a' : '#22c55e') : '#94a3b8') : '';
         parts.push(
             `<a href="https://stockpage.10jqka.com.cn/${item.code}/" target="_blank" class="stock-card">`,
             '<div class="card-header">',
@@ -495,7 +495,9 @@ function renderTrendCards(items) {
     for (var i = 0; i < items.length; i++) {
         var item = items[i];
         var chg = item.change_pct || 0;
-        var col = chg >= 7 ? RING_COLORS.high : chg >= 5 ? RING_COLORS.mid : RING_COLORS.poor;
+        var col = chg > 0 ? (chg >= 7 ? '#ef4444' : chg >= 3 ? '#f87171' : '#fca5a5')
+                : chg < 0 ? (chg <= -5 ? '#16a34a' : chg <= -2 ? '#22c55e' : '#4ade80')
+                : '#94a3b8';
         var sig = item.signals || [];
 
         var tags = [];
