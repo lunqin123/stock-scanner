@@ -93,10 +93,9 @@ function switchPage(page) {
             });
         }
 
-        var cached = _getCachedPage(page);
-        if (cached) {
-            outputEl.innerHTML = cached;
-        } else if (info.api) {
+        // nav 切 tab 永远重拉（用户明确意图 = 期望最新数据）
+        // 缓存机制保留给"拉取/运行"按钮的瞬时回填，避免完全砍掉
+        if (info.api) {
         showProgress('正在加载...', 20);
         outputEl.innerHTML = '';
         setTimeout(() => runCurrent(), 80);
