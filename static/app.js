@@ -148,7 +148,7 @@ async function runCurrent() {
     if (!info) return;
     savePrincipal();
     var plan = getPlan();
-    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '');
+    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_r=' + Math.random().toString(36).slice(2);
     if (_lastUrl[currentPage] === url && _outputCache[currentPage]) {
         return;
     }
