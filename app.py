@@ -689,30 +689,31 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
         raw = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
         lb = int(raw.split('/')[1]) if '/' in raw else 0
 
-        # 评分
+        # 评分（数据驱动：高换手+多连板=反转主力）
         s = 0
-        if -2 <= chg <= 0.5: s += 30
-        elif -3 <= chg < -2: s += 24
-        elif -5 <= chg < -3: s += 18
-        elif 0.5 < chg <= 1: s += 15
+        if to > 25: s += 40
+        elif 15 <= to <= 25: s += 32
+        elif 8 <= to < 15: s += 20
+        elif 5 <= to < 8: s += 14
+        elif 3 <= to < 5: s += 8
+        elif 1 <= to < 3: s += 4
+        else: s += 0
+
+        if lb == 3: s += 35
+        elif lb == 2: s += 28
+        elif lb >= 4: s += 15
+        elif lb == 1: s += 10
         else: s += 8
 
-        if 5 <= to <= 15: s += 25
-        elif 3 <= to < 5: s += 18
-        elif 15 < to <= 25: s += 15
-        elif 1 <= to < 3: s += 10
-        else: s += 5
-
-        if lb == 1: s += 25
-        elif lb == 2: s += 18
-        elif lb == 3: s += 12
+        if -3 <= chg <= 0.5: s += 15
+        elif -5 <= chg < -3: s += 12
         else: s += 8
 
-        s += 20 if ind in hot_inds else 8
+        s += 10 if ind in hot_inds else 5
 
-        if s >= 80: adv = '⭐ 重点观察，竞价高开1%+可参与'
+        if s >= 85: adv = '⭐ 高换手+多连板，反包潜力大'
         elif s >= 65: adv = '加入自选，竞价确认方向'
-        elif s >= 50: adv = '观望，需板块配合'
+        elif s >= 45: adv = '观望，等放量信号'
         else: adv = '暂不参与'
 
         tags = []

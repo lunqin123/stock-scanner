@@ -1419,44 +1419,44 @@ def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
         return
     print(f"  → 昨涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
 
-    # ── 反转评分 (0-100) ──
+    # ── 反转评分 (0-100，基于14日回测数据驱动) ──
     scores = pd.Series(0.0, index=pullback.index)
 
-    # 1. 回调深度 (0-30): 浅回调(-2%~0%)最优，深回调(-5%~-7%)差
-    for idx in pullback.index:
-        chg = pullback.loc[idx, '今日涨幅']
-        if -2 <= chg <= 0.5:   s = 30    # 浅回调，洗盘嫌疑
-        elif -3 <= chg < -2:   s = 24    # 正常回调
-        elif -5 <= chg < -3:   s = 18    # 偏深
-        elif 0.5 < chg <= 1:   s = 15    # 微弱翻红，方向不明
-        else:                  s = 8     # 深跌>5%
-        scores[idx] = s
-
-    # 2. 换手健康度 (0-25): 有量的回调才有承接
+    # 1. 换手率 (0-40): 回测显示高换手=高反转率(>25%换手→12.9%反转)
     for idx in pullback.index:
         t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
-        if 5 <= t <= 15:       s = 25   # 活跃换手=有资金承接
-        elif 3 <= t < 5:       s = 18
-        elif 15 < t <= 25:     s = 15   # 换手偏高
-        elif 1 <= t < 3:       s = 10
-        else:                  s = 5    # 无量或巨量
-        scores[idx] += s
+        if t > 25:             s = 40   # 巨量换手=充分洗盘(反转率12.9%)
+        elif 15 <= t <= 25:    s = 32   # 高换手(反转率7.6%)
+        elif 8 <= t < 15:      s = 20   # 中换手(反转率4.3%)
+        elif 5 <= t < 8:       s = 14   # 温和换手(反转率5.7%)
+        elif 3 <= t < 5:       s = 8
+        elif 1 <= t < 3:       s = 4
+        else:                  s = 0    # <1%无量=不可能反转
+        scores[idx] = s
 
-    # 3. 昨日封板质量 (0-25): 从涨停统计推断
+    # 2. 连板位置 (0-35): 回测显示二板16%/三板21%反转率 >> 首板3.6%
     for idx in pullback.index:
         raw = str(pullback.loc[idx, seal_stat_col]) if seal_stat_col else ''
         consecutive = 0
         if '/' in raw:
             try: consecutive = int(raw.split('/')[1])
             except: pass
-        # 首板回调 > 连板回调（首板更可能是洗盘）
-        if consecutive == 1:   s = 25
-        elif consecutive == 2: s = 18
-        elif consecutive == 3: s = 12
-        else:                  s = 8    # 高位连板回调风险大
+        if consecutive == 3:       s = 35   # 三板回调反转率最高21%
+        elif consecutive == 2:     s = 28   # 二板回调反转率16%
+        elif consecutive >= 4:     s = 15   # 四板+回调反转率6%(连板太高反而弱)
+        elif consecutive == 1:     s = 10   # 首板回调反转率仅3.6%
+        else:                      s = 8
         scores[idx] += s
 
-    # 4. 板块支撑 (0-20): 同板块今日有涨停=板块还活着
+    # 3. 回调深度 (0-15): 各深度反转率差异不大(~5-7%), 浅跌略优
+    for idx in pullback.index:
+        chg = pullback.loc[idx, '今日涨幅']
+        if -3 <= chg <= 0.5:   s = 15    # 浅跌~平(反转率6.8%)
+        elif -5 <= chg < -3:   s = 12    # 中跌(反转率5.8%)
+        else:                  s = 8     # 深跌<-5%或微涨>0.5%
+        scores[idx] += s
+
+    # 4. 板块支撑 (0-10): 同板块今日有涨停=板块还活着
     try:
         lt_today = ak.stock_zt_pool_em(date=today_str)
         if lt_today is not None and not lt_today.empty and ind_col:
