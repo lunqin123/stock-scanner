@@ -212,47 +212,53 @@ async function runCurrent() {
     await callApi(url, currentPage);
 }
 
+var _busy = false;  // 防连点锁
+
 // 「拉取」—— 全局：一次性拉取所有板块原始数据并缓存
 async function fetchAllRawData() {
-    savePrincipal();
-    var plan = getPlan();
-    var t = Date.now();
-    var url = '/api/scan/fetch-all?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
-    // 清空所有缓存（用 Object.keys 而非 const 重赋值）
-    _lastUrl = {}; _outputCache = {};
-    // 拉取结果始终显示在涨停扫描页（直接切状态，不触发 hashchange 重复请求）
-    if (currentPage !== 'scan-limit') {
-        currentPage = 'scan-limit';
-        _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === 'scan-limit'));
-        _dom.pageTitle().textContent = PAGES['scan-limit'].title;
-        document.body.dataset.page = 'scan-limit';
-    }
-    await callApi(url, 'scan-limit');
-    updateCacheStatus();
+    if (_busy) { console.log('[拉取] 忙碌中，忽略连点'); return; }
+    _busy = true;
+    try {
+        savePrincipal();
+        var plan = getPlan();
+        var t = Date.now();
+        var url = '/api/scan/fetch-all?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
+        _lastUrl = {}; _outputCache = {};
+        if (currentPage !== 'scan-limit') {
+            currentPage = 'scan-limit';
+            _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === 'scan-limit'));
+            _dom.pageTitle().textContent = PAGES['scan-limit'].title;
+            document.body.dataset.page = 'scan-limit';
+        }
+        await callApi(url, 'scan-limit');
+        updateCacheStatus();
+    } finally { _busy = false; }
 }
 
 // 「运行」—— 所有板块统一走流式端点，非流式 tab 也强制刷新
 async function runCurrentFromCache() {
-    const info = PAGES[currentPage];
-    if (!info) { console.error('[运行] 无当前页', currentPage); return; }
-    savePrincipal();
-    var plan = getPlan();
-    // 强制显示进度条
-    showProgress('正在运行...', 5);
-    var t = Date.now();
-    // 流式端点（5个 scan 板块，有进度条）
-    var streamMap = {
-        'scan-limit':   '/api/scan/limit-up/run',
-        'scan-zhaban':  '/api/scan/zhaban/stream',
-        'scan-trend':   '/api/scan/trend/stream',
-        'scan-dtqiaoban':'/api/scan/dtqiaoban/stream',
-        'scan-sector':  '/api/scan/sector/stream',
-    };
-    var base = streamMap[currentPage] || info.api;
-    var params = '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t + '&refresh=1';
-    var url = base + params;
-    _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
-    await callApi(url, currentPage);
+    if (_busy) { console.log('[运行] 忙碌中，忽略连点'); return; }
+    _busy = true;
+    try {
+        const info = PAGES[currentPage];
+        if (!info) { console.error('[运行] 无当前页', currentPage); return; }
+        savePrincipal();
+        var plan = getPlan();
+        showProgress('正在运行...', 5);
+        var t = Date.now();
+        var streamMap = {
+            'scan-limit':   '/api/scan/limit-up/run',
+            'scan-zhaban':  '/api/scan/zhaban/stream',
+            'scan-trend':   '/api/scan/trend/stream',
+            'scan-dtqiaoban':'/api/scan/dtqiaoban/stream',
+            'scan-sector':  '/api/scan/sector/stream',
+        };
+        var base = streamMap[currentPage] || info.api;
+        var params = '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t + '&refresh=1';
+        var url = base + params;
+        _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
+        await callApi(url, currentPage);
+    } finally { _busy = false; }
 }
 
 async function refreshCurrent() {
