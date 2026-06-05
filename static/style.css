@@ -609,6 +609,7 @@ body {
 .bar-fill.low { background: linear-gradient(90deg, #f87171, #fb923c); }
 .bar-fill.mid { background: linear-gradient(90deg, #fbbf24, #34d399); }
 .bar-fill.high { background: linear-gradient(90deg, #34d399, var(--accent)); }
+.bar-fill.neg { background: linear-gradient(90deg, #4ade80, #16a34a); }
 
 /* ── 卡片右侧信息区 ── */
 .card-info {
