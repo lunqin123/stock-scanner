@@ -1410,7 +1410,8 @@ def api_indicators_stream(refresh: bool = Query(False, description="强制刷新
             async def _cached():
                 yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
                 yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
-            return StreamingResponse(_cached(), media_type="text/event-stream")
+            return StreamingResponse(_cached(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     from indicators import run_enhanced
     from scanner import fetch_limit_up_pool, pre_filter
     def run():
@@ -1431,7 +1432,7 @@ def api_community_stream(refresh: bool = Query(False, description="强制刷新"
             async def _cached():
                 yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
                 yield f"data: {json.dumps({'type':'complete', **cached})}\n\n"
-            return StreamingResponse(_cached(), media_type="text/event-stream")
+            return StreamingResponse(_cached(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     import community
     from scanner import fetch_limit_up_pool
     def run():
@@ -1561,7 +1562,7 @@ async def api_sentiment_stream(refresh: bool = Query(False, description="强制�
             async def _cached():
                 yield "data: " + json.dumps({"type":"progress","text":"use cache..."}) + chr(10) + chr(10)
                 yield "data: " + json.dumps({"type":"complete","ok": True, **cached}) + chr(10) + chr(10)
-            return StreamingResponse(_cached(), media_type="text/event-stream")
+            return StreamingResponse(_cached(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     from scanner import detect_market_sentiment
     def run():
         score, level, details = detect_market_sentiment(today)
@@ -1593,7 +1594,7 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                 yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存...'})}\n\n"
                 await asyncio.sleep(0.03)
                 yield f"data: {json.dumps({'type':'complete', 'items': cached.get('items',[]), 'fetched_at': cached.get('fetched_at','')})}\n\n"
-            return StreamingResponse(_cached(), media_type="text/event-stream")
+            return StreamingResponse(_cached(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     async def _gen():
         q = queue.Queue()
@@ -1647,7 +1648,8 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                 from cache import daily_set
                 daily_set(cache_key, complete, force=True)
             yield f"data: {json.dumps({'type':'complete', 'items': result.get('items',[]), 'fetched_at': fet})}\n\n"
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/api/scan/zhaban/stream")
