@@ -15,7 +15,7 @@ const _dom = {
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 // 版本化缓存：每次大版本更新 +1，旧缓存自动失效
-const _CACHE_VER = '4';
+const _CACHE_VER = '5';
 
 function _savePageCache(key, html, url) {
     try {
@@ -37,6 +37,9 @@ let _outputCache = new Proxy({}, {
         target[key] = value;
         if (typeof key === 'string' && value) {
             _savePageCache(key, value, _lastUrl[key]);
+        } else if (typeof key === 'string') {
+            // 清空时同步清除 localStorage，避免页面刷新后读到旧数据
+            try { localStorage.removeItem('_cache_' + key); } catch(e) {}
         }
         return true;
     }
@@ -245,9 +248,7 @@ async function runCurrentFromCache() {
         'scan-sector':  '/api/scan/sector/stream',
     };
     var base = streamMap[currentPage] || info.api;
-    var params = '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
-    // 非流式端点加 refresh=1 强制拉最新（舆情/龙虎榜/情绪等）
-    if (!streamMap[currentPage]) params += '&refresh=1';
+    var params = '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t + '&refresh=1';
     var url = base + params;
     _lastUrl[currentPage] = ''; _outputCache[currentPage] = '';
     await callApi(url, currentPage);

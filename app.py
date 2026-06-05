@@ -459,19 +459,23 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     return result
 
 
-@app.get("/api/scan/trend/cards")
-def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
-                    principal: float = Query(20000, description="本金(元)")):
-    """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
+
+def _fetch_trend_data(today, principal):
+    """趋势扫描 — 拉取数据 + 过滤，返回 (trend_df, cols_dict, zhaban_codes, hot_industries)
+    cards 和 stream 端点共享，保证数据源完全一致。"""
     import akshare as ak
     import pandas as pd
-    from datetime import date, timedelta, datetime
-    print("  [趋势卡片] 开始...", file=sys.stderr)
-    today = _today_trading()
-    key = f"trend_cards_{today}_{int(principal)}"
-    print("  [趋势卡片] 拉取昨日涨停数据...", file=sys.stderr)
-    def _fetch(d):
-        return ak.stock_zt_pool_previous_em(date=d)
+    from datetime import datetime, timedelta
+    from scanner import filter_non_main_board
+
+    # _mode_stream_endpoint 用 _Cap 替换 sys.stderr 来捕获进度，
+    # akshare 内部可能调用 stderr.fileno()/isatty() 等特殊方法，
+    # _Cap 虽然通过 __getattr__ 代理，但为安全起见直接恢复原始 stderr。
+    import sys as _sys
+    _saved = _sys.stderr
+    _sys.stderr = getattr(_sys, '__stderr__', _sys.stderr)
+
+    # 1. 拉取昨日涨停数据
     prev = pd.DataFrame()
     for attempt in [today, None]:
         try:
@@ -479,61 +483,59 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
                 wd = datetime.now().weekday()
                 db = 3 if wd == 0 else (2 if wd == 6 else 1)
                 attempt = (datetime.now() - timedelta(days=db)).strftime("%Y%m%d")
-            prev = _fetch(attempt)
+            prev = ak.stock_zt_pool_previous_em(date=attempt)
             if not prev.empty: break
         except: continue
+
     if prev.empty:
-        return {"ok": True, "items": []}
+        _sys.stderr = _saved; return None, None, set(), set()
 
-    chg_col = prev.columns[3]
-    name_col = prev.columns[2]
-    code_col = prev.columns[1]
-    price_col = prev.columns[4]
-    turnover_col = prev.columns[9]
-    vol_col = prev.columns[6]
-    seal_stat_col = prev.columns[14] if len(prev.columns) > 14 else None
-    industry_col = prev.columns[15] if len(prev.columns) > 15 else None
+    # 2. 列索引
+    cols = {
+        'code': prev.columns[1], 'name': prev.columns[2], 'chg': prev.columns[3],
+        'price': prev.columns[4], 'vol': prev.columns[6], 'turnover': prev.columns[9],
+        'seal_stat': prev.columns[14] if len(prev.columns) > 14 else None,
+        'industry': prev.columns[15] if len(prev.columns) > 15 else None,
+    }
+    prev['涨幅'] = prev[cols['chg']].astype(float)
 
-    prev['涨幅'] = prev[chg_col].astype(float)
-    # 过滤 ST/科创板/北交所/创业板
-    from scanner import filter_non_main_board
+    # 3. 过滤 ST/科创/北交/创业板 + 本金
     prev = filter_non_main_board(prev)
-    prev = _principal_filter(prev, principal)  # 本金过滤：买不起的排除
+    prev = _principal_filter(prev, principal)
 
-    # ── 风控数据：拉取炸板池 + 今日热门板块（并行） ──
+    # 4. 风控数据：炸板池 + 今日热门板块（分开 try 防互相影响）
     zhaban_codes = set()
     hot_industries = set()
     try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import numpy as np
-        def _zb(): return ak.stock_zt_pool_zbgc_em(date=today)
-        def _lt(): return ak.stock_zt_pool_em(date=today)
-        pools = {}
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            futs = {ex.submit(_zb): 'zb', ex.submit(_lt): 'lt'}
-            for f in as_completed(futs):
-                try:
-                    r = f.result()
-                    pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
-                except: pools[futs[f]] = pd.DataFrame()
-        zb_df = pools.get('zb', pd.DataFrame())
-        lt_df = pools.get('lt', pd.DataFrame())
+        zb_df = ak.stock_zt_pool_zbgc_em(date=today)
         if not zb_df.empty:
             zb_code_col = zb_df.columns[1] if len(zb_df.columns) > 1 else zb_df.columns[0]
             zhaban_codes = set(zb_df[zb_code_col].astype(str).str.zfill(6))
+    except Exception: pass
+    try:
+        lt_df = ak.stock_zt_pool_em(date=today)
         if not lt_df.empty:
             ind_col2 = '所属行业' if '所属行业' in lt_df.columns else (lt_df.columns[15] if len(lt_df.columns) > 15 else None)
             if ind_col2:
                 hot = lt_df[ind_col2].value_counts().head(5)
                 hot_industries = set(hot[hot >= 3].index)
-    except Exception:
-        pass
+    except Exception: pass
 
-    trend = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
-    if trend.empty:
-        return {"ok": True, "items": []}
-    trend = trend.sort_values('涨幅', ascending=False).head(15)
+    # 5. 趋势过滤
+    df = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
+    if df.empty:
+        _sys.stderr = _saved; return None, cols, zhaban_codes, hot_industries
+    df = df.sort_values('涨幅', ascending=False).head(15)
+    _sys.stderr = _saved; return df, cols, zhaban_codes, hot_industries
 
+
+def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
+    """趋势扫描股票评分 — 共享逻辑，cards 和 stream 端点统一调用"""
+    import pandas as pd
+    code_col, name_col = cols['code'], cols['name']
+    price_col, turnover_col = cols['price'], cols['turnover']
+    vol_col, seal_stat_col = cols['vol'], cols['seal_stat']
+    industry_col = cols['industry']
     items = []
     for _, row in trend.iterrows():
         code = str(row[code_col]).strip().zfill(6)
@@ -548,38 +550,31 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
             try: consecutive = int(seal_stat.split('/')[1])
             except: pass
 
-        # ── 风控评分 (0-20) ──
-        risk_score = 20  # 满分=无风险
+        risk_score = 20
         risk_tags = []
 
-        # 风险1: 昨日炸板过 (扣8)
         if code in zhaban_codes:
             risk_score -= 8
             risk_tags.append("⚠️ 昨日炸板")
 
-        # 风险2: 连涨≥3但涨幅<5% → 出货嫌疑 (扣6)
         if consecutive >= 3 and chg < 5:
             risk_score -= 6
             risk_tags.append("⚠️ 连涨高位缩量")
 
-        # 风险3: 放量滞涨 (换手>14%但涨幅<6%) (扣6)
         if turnover > 14 and chg < 6:
             risk_score -= 6
             risk_tags.append("⚠️ 放量滞涨")
 
-        # 风险4: 换手>30% → 过度博弈 (扣4)
         if turnover > 30:
             risk_score -= 4
             risk_tags.append("⚠️ 换手过高")
 
-        # 风险5: 板块不在今日热门TOP5 (扣3)
         if industry and hot_industries and industry not in hot_industries:
             risk_score -= 3
             risk_tags.append("⚠️ 板块退潮")
 
         risk_score = max(0, risk_score)
 
-        # ── 信号标签 ──
         signals = []
         if chg >= 7: signals.append("强势续涨")
         elif chg >= 5: signals.append("量价齐升")
@@ -588,11 +583,8 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
         elif turnover > 8: signals.append("放量健康")
         else: signals.append("中性换手")
         if consecutive >= 2: signals.append(f"{consecutive}连涨")
-
-        # 风控标签追加
         signals.extend(risk_tags)
 
-        # ── 策略建议 ──
         if consecutive >= 5 and chg < 5:
             advice = "高位缩量，随时止盈，不建议持有"
         elif consecutive >= 4:
@@ -607,8 +599,6 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
             advice = "多风险信号，轻仓试探或回避"
         elif industry and hot_industries and industry not in hot_industries and risk_score <= 14:
             advice = "板块退潮，快进快出，破5日线止盈"
-        elif risk_score <= 8:
-            advice = "多风险信号，轻仓试探或回避"
         elif risk_score <= 14:
             advice = "趋势尚可，控制仓位持有"
         elif chg >= 7:
@@ -617,25 +607,33 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
             advice = "趋势良好，持有为主"
 
         items.append({
-            'code': code,
-            'name': str(row[name_col]),
+            'code': code, 'name': str(row[name_col]),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
-            'change_pct': chg,
-            'price': price,
-            'turnover': round(turnover, 1),
+            'change_pct': chg, 'price': price, 'turnover': round(turnover, 1),
             'volume': round(volume / 1e8, 2) if volume > 1e8 else round(volume / 1e4, 0),
             'volume_unit': '亿' if volume > 1e8 else '万',
-            'industry': industry,
-            'consecutive': consecutive,
-            'signals': signals,
-            'advice': advice,
-            'risk_score': risk_score,
+            'industry': industry, 'consecutive': consecutive,
+            'signals': signals, 'advice': advice, 'risk_score': risk_score,
         })
-    # 过滤：移除不建议持有的极高风险标的
+
     items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
-    # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
     items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
-    items = items[:10]
+    return items[:10]
+
+
+@app.get("/api/scan/trend/cards")
+def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
+                    principal: float = Query(20000, description="本金(元)")):
+    """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
+    print("  [趋势卡片] 开始...", file=sys.stderr)
+    today = _today_trading()
+    key = f"trend_cards_{today}_{int(principal)}"
+
+    trend, cols, zhaban_codes, hot_industries = _fetch_trend_data(today, principal)
+    if trend is None or trend.empty:
+        return {"ok": True, "items": []}
+
+    items = _build_trend_items(trend, cols, zhaban_codes, hot_industries)
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     daily_set(key, result, force=refresh)
     return result
@@ -1519,7 +1517,9 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
         result = {}
         # 捕获 stderr 输出作为进度推送
         class _Cap:
-            def __init__(self): self._b = ""
+            def __init__(self, real_stderr):
+                self._b = ""
+                self._real = real_stderr
             def write(self, t):
                 self._b += t
                 while '\n' in self._b:
@@ -1528,7 +1528,10 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                     if line: q.put(("progress", line))
             def flush(self): pass
             def reconfigure(self, **kw): pass
-        cap = _Cap()
+            def __getattr__(self, name):
+                # 将不支持的属性代理到真正的 stderr，避免 akshare 等库调用 fileno/isatty 时报错
+                return getattr(self._real, name)
+        cap = _Cap(sys.stderr)
         def _run():
             import sys
             old = sys.stderr
@@ -1627,105 +1630,11 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
 @app.get("/api/scan/trend/stream")
 async def api_trend_stream(refresh: bool = Query(False),
                             principal: float = Query(20000, description="本金(元)")):
-    today = _today_trading()
     def run():
-        print("  [趋势] 拉取昨日涨停数据...", file=sys.stderr)
-        import akshare as ak; import pandas as pd
-        from datetime import datetime, timedelta
-        prev = pd.DataFrame()
-        for attempt in [today, None]:
-            try:
-                if attempt is None:
-                    wd = datetime.now().weekday()
-                    db = 3 if wd == 0 else (2 if wd == 6 else 1)
-                    attempt = (datetime.now() - timedelta(days=db)).strftime("%Y%m%d")
-                prev = ak.stock_zt_pool_previous_em(date=attempt)
-                if not prev.empty: break
-            except: continue
-        if prev.empty: return [], {}
-        print(f"  [趋势] 共 {len(prev)} 只, 过滤评分中...", file=sys.stderr)
-        from scanner import filter_non_main_board
-        df = filter_non_main_board(prev)
-        df = _principal_filter(df, principal)  # 本金过滤
-        chg_col = prev.columns[3]; name_col = prev.columns[2]; code_col = prev.columns[1]
-        price_col = prev.columns[4]; turnover_col = prev.columns[9]
-        vol_col = prev.columns[6]; seal_stat_col = prev.columns[14] if len(prev.columns) > 14 else None
-        industry_col = prev.columns[15] if len(prev.columns) > 15 else None
-        df['涨幅'] = df[chg_col].astype(float)
-
-        # 风控：拉取炸板池（与卡片端点一致）
-        zhaban_codes = set()
-        try:
-            zb_df = ak.stock_zt_pool_zbgc_em(date=today)
-            if not zb_df.empty:
-                zb_code_col = zb_df.columns[1]
-                zhaban_codes = set(zb_df[zb_code_col].astype(str).str.zfill(6))
-        except Exception: pass
-
-        trend = df[(df['涨幅'] >= 2) & (df['涨幅'] < 9)].copy()
-        if trend.empty: return [], {}
-        trend = trend.sort_values('涨幅', ascending=False).head(15)
-
-        items = []
-        for _, row in trend.iterrows():
-            code = str(row[code_col]).strip().zfill(6)
-            chg = round(float(row['涨幅']), 1)
-            price = float(row[price_col])
-            turnover = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
-            vol = float(row[vol_col]) if pd.notna(row[vol_col]) else 0
-            industry = str(row[industry_col]) if industry_col and pd.notna(row[industry_col]) else ''
-            seal_stat = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
-            consecutive = 0
-            if '/' in seal_stat:
-                try: consecutive = int(seal_stat.split('/')[1])
-                except: pass
-            # 风控评分
-            risk_score = 20
-            risk_tags = []
-            if code in zhaban_codes: risk_score -= 8; risk_tags.append('昨日炸板')
-            if consecutive >= 3 and chg < 5: risk_score -= 6; risk_tags.append('高位缩量')
-            if turnover > 14 and chg < 6: risk_score -= 6; risk_tags.append('放量滞涨')
-            if turnover > 25: risk_score -= 4; risk_tags.append('换手过高')
-            # signals
-            sigs = []
-            if chg >= 7: sigs.append('强势续涨')
-            elif chg >= 5: sigs.append('量价齐升')
-            else: sigs.append('温和上涨')
-            if turnover > 15: sigs.append('高换手')
-            elif turnover > 8: sigs.append('放量健康')
-            if consecutive >= 2: sigs.append(f'{consecutive}连涨')
-            sigs.extend(risk_tags)
-            if consecutive >= 5 and chg < 5:
-                advice = '高位缩量，随时止盈，不建议持有'
-            elif consecutive >= 4:
-                advice = '连涨后期，设3%移动止盈，不追高'
-            elif code in zhaban_codes and turnover > 14:
-                advice = '昨日炸板+高换手，警惕诱多，破昨日低点止损'
-            elif code in zhaban_codes:
-                advice = '昨日炸板今日续涨，观察开盘不追高'
-            elif turnover > 14 and chg < 6:
-                advice = '放量滞涨，警惕出货，缩量即走'
-            elif risk_score <= 8:
-                advice = '多风险信号，轻仓试探或回避'
-            elif risk_score <= 14:
-                advice = '趋势尚可，控制仓位持有'
-            elif chg >= 7:
-                advice = '沿5日线持有，破线止盈'
-            else:
-                advice = '趋势良好，持有为主'
-            items.append({'code': code, 'name': str(row[name_col]), 'change_pct': chg,
-                          'price': price, 'turnover': turnover,
-                          'volume': round(vol / 1e8, 2) if vol > 1e8 else round(vol / 1e4, 0),
-                          'volume_unit': '亿' if vol > 1e8 else '万',
-                          'industry': industry,
-                          'consecutive': consecutive, 'signals': sigs, 'advice': advice,
-                          'risk_score': risk_score,
-                          'url': f"https://stockpage.10jqka.com.cn/{code}/"})
-        # 过滤：移除不建议持有的极高风险标的
-        items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
-        # 两段排序：高风险(≤8)置顶警示，其余按风险+涨幅
-        items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
-        items = items[:10]
+        print("  [趋势] 拉取数据...", file=sys.stderr)
+        # 直接调 cards 端点保证数据源唯一，消除与刷新的差异
+        result = api_trend_cards(refresh=True, principal=principal)
+        items = result.get('items', []) if result else []
         return items, {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'trend_stream', refresh)
 
