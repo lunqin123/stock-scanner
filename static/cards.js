@@ -584,7 +584,7 @@ function renderReversalCards(items) {
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">回调</span><div class="bar-track"><div class="bar-fill neg" style="width:' + Math.min(100, Math.abs(chg) * 15) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
             '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill ' + (to > 20 ? 'high' : to > 10 ? 'mid' : 'low') + '" style="width:' + Math.min(100, to * 4) + '%"></div></div><span class="bar-val">' + to + '%</span></div>',
-            '<div class="bar-row"><span class="bar-label">昨连板</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '板</span></div>',
+            '<div class="bar-row"><span class="bar-label">涨停基因</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '板</span></div>',
             '</div></div>',
             '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">',
             (item.price ? '💰 ' + item.price.toFixed(2) + '  ' : ''),
