@@ -2057,6 +2057,10 @@ async def webhook(request: Request):
 def index():
     with open(os.path.join(_BASE_DIR, "templates/index.html"), "r", encoding="utf-8") as f:
         html = f.read()
+    # 用服务器启动时间戳替换版本号，彻底破浏览器缓存
+    import time as _time
+    _ts = str(int(_time.time()))
+    html = html.replace('?v=1.22.0', f'?v={_ts}')
     # 注入缓存的排行榜数据（QQ 浏览器等无法依赖 localStorage）
     # 自动找最新缓存（不硬编码本金），避免与"运行"按钮的排行榜不一致
     import json as _json, glob as _glob
