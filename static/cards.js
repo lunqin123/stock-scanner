@@ -534,7 +534,7 @@ function renderTrendCards(items) {
             '<div class="card-header">',
             '<span class="card-rank">' + item.code + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + '</span>',
+            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + ' | ' + (item.risk_score || 0) + '分</span>',
             '</div>',
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : chg <= 0 ? 'neg' : 'low') + '" style="width:' + Math.min(100, Math.abs(chg) * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
