@@ -1782,6 +1782,13 @@ def _run_close_scan(principal=20000):
             _cache_dashboard_snapshot(today, data['sentiment_score'], data['sentiment_level'],
                                       len(data['stocks']), data['df'])
             print(f"  [收盘扫描] ✅ 完成，{len(data['stocks'])} 只标的已缓存", file=sys.stderr)
+            # 触发每日数据归档（后台线程，不阻塞）
+            try:
+                import archiver
+                threading.Thread(target=lambda: archiver.archive_day_t(today), daemon=True).start()
+                print("  [归档] 已触发后台归档", file=sys.stderr)
+            except Exception:
+                pass
         else:
             print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
             threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
