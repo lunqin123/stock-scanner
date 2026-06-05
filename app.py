@@ -2049,6 +2049,15 @@ async def webhook(request: Request):
     return {"ok": True, "event": "push", "action": "deploying"}
 
 
+@app.get("/version.json")
+def api_version():
+    """版本信息（前端更新日志弹窗）"""
+    import json as _json
+    path = os.path.join(_BASE_DIR, "version.json")
+    with open(path, "r", encoding="utf-8") as f:
+        return _json.load(f)
+
+
 # ═══════════════════════════════════════════
 #  前端页面
 # ═══════════════════════════════════════════
@@ -2061,6 +2070,14 @@ def index():
     import time as _time
     _ts = str(int(_time.time()))
     html = html.replace('?v=1.22.0', f'?v={_ts}')
+    # 注入版本号到页面，方便确认是否最新
+    import json as _json
+    try:
+        with open(os.path.join(_BASE_DIR, "version.json"), "r", encoding="utf-8") as _vf:
+            _ver = _json.load(_vf)
+            _ver_str = f'v{_ver["version"]} ({_ver["date"]})'
+            html = html.replace('<span id="version-label">版本</span>', f'<span id="version-label">{_ver_str}</span>')
+    except: pass
     # 注入缓存的排行榜数据（QQ 浏览器等无法依赖 localStorage）
     # 自动找最新缓存（不硬编码本金），避免与"运行"按钮的排行榜不一致
     import json as _json, glob as _glob
