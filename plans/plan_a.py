@@ -131,8 +131,8 @@ def compute_factors(filtered, fund_df, principal):
         if comm_scores is not None and not comm_scores.empty:
             comm_aligned = comm_scores.reindex(stock_sent.index).fillna(stock_sent)
             stock_sent = (stock_sent * 0.7 + comm_aligned / 7.0 * 10.0 * 0.3).clip(0, 10)
-    except Exception:
-        pass  # 舆情不可用时不改变 stock_sent
+    except Exception as e:
+        print(f"  [舆情] 不可用: {e}", file=sys.stderr)  # 舆情不可用时不改变 stock_sent
     pr = score_by_principal(filtered, principal)
 
     return {
@@ -188,8 +188,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
         from scanner import auto_verify_backtest
         threading.Thread(target=lambda: auto_verify_backtest(today_str, current_weights=weights),
                         daemon=True).start()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [回测] 启动失败: {e}", file=sys.stderr)
 
     return total, base, danger_flags, weights
 
