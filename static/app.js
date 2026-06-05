@@ -14,36 +14,8 @@ const _dom = {
 };
 const _navItems = () => document.querySelectorAll('.nav-item');
 
-// 版本化缓存：每次大版本更新 +1，旧缓存自动失效
-const _CACHE_VER = '6';
-
-function _savePageCache(key, html, url) {
-    try {
-        localStorage.setItem('_cache_' + key, JSON.stringify({url: url || '', html: html, ver: _CACHE_VER}));
-    } catch(e) {}
-}
-function _loadPageCache(key) {
-    try {
-        var s = localStorage.getItem('_cache_' + key);
-        var d = s ? JSON.parse(s) : null;
-        if (d && d.ver !== _CACHE_VER) return null;  // 版本不匹配 → 废弃
-        return d;
-    } catch(e) { return null; }
-}
-
 let currentPage = '';
-let _outputCache = new Proxy({}, {
-    set: function(target, key, value) {
-        target[key] = value;
-        if (typeof key === 'string' && value) {
-            _savePageCache(key, value, _lastUrl[key]);
-        } else if (typeof key === 'string') {
-            // 清空时同步清除 localStorage，避免页面刷新后读到旧数据
-            try { localStorage.removeItem('_cache_' + key); } catch(e) {}
-        }
-        return true;
-    }
-});
+let _outputCache = {};
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台
 
@@ -198,14 +170,6 @@ async function runCurrent() {
                 hideProgress();
                 return;
             }
-        }
-        var cached = _loadPageCache(currentPage);
-        if (cached && cached.url === url) {
-            _outputCache[currentPage] = cached.html;
-            var el = _dom.output();
-            if (el) el.innerHTML = cached.html;
-            hideProgress();
-            return;
         }
     }
 
