@@ -2077,6 +2077,10 @@ def index():
             _ver = _json.load(_vf)
             _ver_str = f'v{_ver["version"]} ({_ver["date"]})'
             html = html.replace('<span id="version-label">版本</span>', f'<span id="version-label">{_ver_str}</span>')
+    # 请求级随机数，每次刷新页面都不一样，彻底破一切缓存
+    import random as _random
+    _nonce = str(_random.randint(100000, 999999))
+    html = html.replace('</head>', f'<meta name="x-nonce" content="{_nonce}"></head>')
     except: pass
     # 注入缓存的排行榜数据（QQ 浏览器等无法依赖 localStorage）
     # 自动找最新缓存（不硬编码本金），避免与"运行"按钮的排行榜不一致
