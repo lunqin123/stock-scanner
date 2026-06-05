@@ -188,7 +188,14 @@ async function fetchAllRawData() {
         var t = Date.now();
         var url = '/api/scan/fetch-all?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + t;
         _lastUrl = {}; _outputCache = {};
-        await callApi(url, currentPage || 'scan-limit');
+        // 拉取数据始终去涨停扫描页（fetch-all只拉涨停相关数据）
+        if (currentPage !== 'scan-limit') {
+            currentPage = 'scan-limit';
+            _navItems().forEach(el => el.classList.toggle('active', el.dataset.page === 'scan-limit'));
+            _dom.pageTitle().textContent = PAGES['scan-limit'].title;
+            document.body.dataset.page = 'scan-limit';
+        }
+        await callApi(url, 'scan-limit');
         updateCacheStatus();
     } finally { _busy = false; }
 }
