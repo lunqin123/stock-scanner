@@ -22,8 +22,8 @@ def get(name):
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
             with open(path, 'rb') as f:
                 return _pickle.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache get] 读取失败 ({name}): {e}", file=sys.stderr)
     return None
 
 def put(name, data):
@@ -31,8 +31,8 @@ def put(name, data):
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl"), 'wb') as f:
             _pickle.dump(data, f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache put] 写入失败 ({name}): {e}", file=sys.stderr)
 
 
 # ─── 每日缓存（日内持久化，避免重复扫描；按日期自动隔离） ───
@@ -76,8 +76,8 @@ def daily_get(key: str):
                     return None
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache daily_get] 读取失败 ({key}): {e}", file=sys.stderr)
     return None
 
 _CALENDAR_CACHE = None
@@ -106,8 +106,8 @@ def _load_trading_calendar():
                 with open(path, 'w') as f:
                     for d in sorted(dates):
                         f.write(d + '\n')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache calendar] 加载失败: {e}", file=sys.stderr)
     _CALENDAR_CACHE = dates
     _CALENDAR_MTIME = now
     return dates
@@ -139,8 +139,8 @@ def daily_set(key: str, data, force=False):
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(_daily_path(key), 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache daily_set] 写入失败 ({key}): {e}", file=sys.stderr)
 
 
 def clear_all():
@@ -159,5 +159,5 @@ def clear_all():
                 else:
                     kept += 1
         print(f"  [缓存清理] 删除 {removed} 个旧版本, 保留 {kept} 个当前版本", file=__import__('sys').stderr)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [cache clear_all] 清理失败: {e}", file=__import__('sys').stderr)
