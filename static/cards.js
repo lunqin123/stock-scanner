@@ -539,10 +539,59 @@ function renderTrendCards(items) {
             '<div class="card-body"><div class="card-bars">',
             '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : chg <= 0 ? 'neg' : 'low') + '" style="width:' + Math.min(100, Math.abs(chg) * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
             '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-')) + '%</span></div>',
-            '<div class="bar-row"><span class="bar-label">' + (chg < 0 ? '连板' : '连涨') + '</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '天</span></div>',
+            '<div class="bar-row"><span class="bar-label">连涨</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '天</span></div>',
             '</div></div>',
             infoHtml,
             adviceHtml,
+            '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
+            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
+            '</a>'
+        );
+    }
+    parts.push('</div>');
+    return parts.join('');
+}
+
+// ─── 反转扫描卡片（昨涨停今回调 → 明日反包潜力） ───
+function renderReversalCards(items) {
+    var parts = ['<div class="card-list">'];
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var chg = item.change_pct || 0;
+        var col = chg > 0 ? '#ef4444' : chg < 0 ? '#22c55e' : '#94a3b8';
+        var sig = item.signals || [];
+        var sc = item.risk_score || 0;
+
+        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || 0);
+
+        var tags = [];
+        for (var si = 0; si < sig.length && tags.length < 5; si++) {
+            var s = sig[si];
+            if (s.indexOf('回调') >= 0 || s.indexOf('洗盘') >= 0) tags.push([s, 'tag-yellow']);
+            else if (s.indexOf('放量') >= 0 || s.indexOf('承接') >= 0) tags.push([s, 'tag-blue']);
+            else if (s.indexOf('板块') >= 0) tags.push([s, 'tag-green']);
+            else tags.push([s, 'tag-gray']);
+        }
+        if (item.industry) tags.push([esc(item.industry), 'tag-blue']);
+
+        parts.push(
+            '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
+            '<div class="card-header">',
+            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-name">' + esc(item.name) + '</span>',
+            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + ' | ' + sc + '分</span>',
+            '</div>',
+            '<div class="card-body"><div class="card-bars">',
+            '<div class="bar-row"><span class="bar-label">回调</span><div class="bar-track"><div class="bar-fill neg" style="width:' + Math.min(100, Math.abs(chg) * 15) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
+            '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill ' + (to > 20 ? 'high' : to > 10 ? 'mid' : 'low') + '" style="width:' + Math.min(100, to * 4) + '%"></div></div><span class="bar-val">' + to + '%</span></div>',
+            '<div class="bar-row"><span class="bar-label">昨连板</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '板</span></div>',
+            '</div></div>',
+            '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">',
+            (item.price ? '💰 ' + item.price.toFixed(2) + '  ' : ''),
+            (item.industry ? '📌 ' + esc(item.industry) + '  ' : ''),
+            (item.turnover ? '🔄 换手' + to + '%  ' : ''),
+            '</div>',
+            (item.advice ? '<div style="font-size:12px;color:var(--yellow);padding:4px 0">' + esc(item.advice) + '</div>' : ''),
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
