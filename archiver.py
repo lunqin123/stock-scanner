@@ -88,6 +88,15 @@ def _init_tables(conn):
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
         CREATE INDEX IF NOT EXISTS idx_log_date ON archive_log(trade_date);
+
+        CREATE TABLE IF NOT EXISTS stock_daily (
+            code TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            chg_pct REAL,
+            PRIMARY KEY (code, trade_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sd_code ON stock_daily(code);
+        CREATE INDEX IF NOT EXISTS idx_sd_date ON stock_daily(trade_date);
     """)
     conn.commit()
 
@@ -526,6 +535,91 @@ def _should_skip() -> bool:
         return True
     return False
 
+
+# ═══════════════════════════════════════════
+#  快速批量历史数据（腾讯源+缓存，回测核心）
+# ═══════════════════════════════════════════
+
+def batch_fetch_history(codes, start_date, end_date, max_workers=8):
+    """
+    批量获取个股历史涨跌幅，缓存到 archive.db。
+    - 先查缓存，只拉取缺失的
+    - ThreadPoolExecutor 并行加速
+    - 返回 {code: {date_str: chg_pct}}
+    """
+    conn = get_db()
+
+    # 1. 查缓存
+    cached = {}
+    placeholders = ','.join('?' * len(codes))
+    rows = conn.execute(
+        f"SELECT code, trade_date, chg_pct FROM stock_daily WHERE code IN ({placeholders}) AND trade_date BETWEEN ? AND ?",
+        codes + [start_date, end_date]
+    ).fetchall()
+    for code, d, chg in rows:
+        cached.setdefault(code, {})[d] = chg
+
+    # 2. 找出缺失
+    missing = [c for c in codes if c not in cached or len(cached[c]) < 3]
+    if not missing:
+        conn.close()
+        return cached
+
+    # 3. 并行拉取腾讯源
+    print(f"  [批量拉取] {len(missing)} 只股票 ({len(codes)-len(missing)} 已缓存)...", file=sys.stderr)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import akshare as ak
+    import pandas as pd
+
+    start_fmt = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}'
+    end_fmt = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
+
+    def _fetch_one(code):
+        prefix = 'sh' if code.startswith('6') else 'sz'
+        try:
+            df = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}', start_date=start_fmt, end_date=end_fmt)
+            if df is None or df.empty: return code, {}
+            df['chg'] = df['close'].pct_change() * 100
+            df['d'] = pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
+            return code, dict(zip(df['d'], df['chg'].round(2)))
+        except:
+            return code, {}
+
+    fetched = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_fetch_one, c): c for c in missing}
+        for f in as_completed(futures):
+            code, data = f.result()
+            if data:
+                cached.setdefault(code, {}).update(data)
+                # 写入缓存
+                for d, chg in data.items():
+                    try:
+                        conn.execute("INSERT OR IGNORE INTO stock_daily (code, trade_date, chg_pct) VALUES (?,?,?)",
+                                     (code, d, chg))
+                    except: pass
+                conn.commit()
+            fetched += 1
+
+    conn.close()
+    print(f"  [批量拉取] 完成, 共 {len(cached)} 只有效数据", file=sys.stderr)
+    return cached
+
+
+def get_cached_history(code, start_date, end_date):
+    """从缓存读取单只股票历史涨跌幅 {date_str: chg_pct}"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT trade_date, chg_pct FROM stock_daily WHERE code=? AND trade_date BETWEEN ? AND ?",
+        (code, start_date, end_date)
+    ).fetchall()
+    conn.close()
+    return {d: chg for d, chg in rows}
+
+
+# ═══════════════════════════════════════════
+#  主入口
+# ═══════════════════════════════════════════
 
 if __name__ == "__main__":
     import argparse

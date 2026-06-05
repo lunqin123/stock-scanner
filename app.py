@@ -550,61 +550,47 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
             try: consecutive = int(seal_stat.split('/')[1])
             except: pass
 
-        risk_score = 20
+        # 数据驱动评分：回测显示低涨幅(2-4%)+中换手(5-15%)次日表现最好
+        score = 25  # 基础分
         risk_tags = []
 
+        # 涨幅评分(0-25): 低涨幅=更好延续性
+        if 2 <= chg <= 4:       score += 25; signals_prefix = "温和延续"
+        elif 4 < chg <= 6:      score += 15; signals_prefix = "量价齐升"
+        else:                   score += 5;  signals_prefix = "强势续涨"
+
+        # 换手评分(0-25): 5-15%最佳博弈区间
+        if 5 <= turnover <= 15:       score += 25
+        elif 3 <= turnover < 5:       score += 15
+        elif 15 < turnover <= 20:     score += 15
+        elif 1 <= turnover < 3:       score += 8
+        else:                         score += 5
+
+        # 板块支撑(0-10)
+        if industry and hot_industries and industry in hot_industries: score += 10
+
+        # 风险扣分
         if code in zhaban_codes:
-            risk_score -= 8
-            risk_tags.append("⚠️ 昨日炸板")
-
+            score -= 10; risk_tags.append("⚠️ 昨日炸板")
         if consecutive >= 3 and chg < 5:
-            risk_score -= 6
-            risk_tags.append("⚠️ 连涨高位缩量")
-
-        if turnover > 14 and chg < 6:
-            risk_score -= 6
-            risk_tags.append("⚠️ 放量滞涨")
-
-        if turnover > 30:
-            risk_score -= 4
-            risk_tags.append("⚠️ 换手过高")
-
+            score -= 8; risk_tags.append("⚠️ 高位缩量")
+        if turnover > 25:
+            score -= 6; risk_tags.append("⚠️ 换手过高")
         if industry and hot_industries and industry not in hot_industries:
-            risk_score -= 3
-            risk_tags.append("⚠️ 板块退潮")
+            score -= 3; risk_tags.append("板块退潮")
 
-        risk_score = max(0, risk_score)
+        risk_score = max(0, min(100, score))
 
-        signals = []
-        if chg >= 7: signals.append("强势续涨")
-        elif chg >= 5: signals.append("量价齐升")
-        else: signals.append("温和上涨")
+        signals = [signals_prefix]
         if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("放量健康")
-        else: signals.append("中性换手")
         if consecutive >= 2: signals.append(f"{consecutive}连涨")
         signals.extend(risk_tags)
 
-        if consecutive >= 5 and chg < 5:
-            advice = "高位缩量，随时止盈，不建议持有"
-        elif consecutive >= 4:
-            advice = "连涨后期，设3%移动止盈，不追高"
-        elif code in zhaban_codes and turnover > 14:
-            advice = "昨日炸板+高换手，警惕诱多，破昨日低点止损"
-        elif code in zhaban_codes:
-            advice = "昨日炸板今日续涨，观察开盘不追高"
-        elif turnover > 14 and chg < 6:
-            advice = "放量滞涨，警惕出货，缩量即走"
-        elif risk_score <= 8:
-            advice = "多风险信号，轻仓试探或回避"
-        elif industry and hot_industries and industry not in hot_industries and risk_score <= 14:
-            advice = "板块退潮，快进快出，破5日线止盈"
-        elif risk_score <= 14:
-            advice = "趋势尚可，控制仓位持有"
-        elif chg >= 7:
-            advice = "沿5日线持有，破线止盈"
-        else:
-            advice = "趋势良好，持有为主"
+        if risk_score >= 60: advice = "趋势健康，持有为主"
+        elif risk_score >= 50: advice = "趋势尚可，控制仓位"
+        elif risk_score >= 40: advice = "信号偏弱，轻仓或观望"
+        else: advice = "多风险信号，不建议持有"
 
         items.append({
             'code': code, 'name': str(row[name_col]),
@@ -616,8 +602,8 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
             'signals': signals, 'advice': advice, 'risk_score': risk_score,
         })
 
-    items = [x for x in items if '不建议持有' not in x['advice'] and x['risk_score'] > 3]
-    items.sort(key=lambda x: (0 if x['risk_score'] <= 8 else 1, -(x['risk_score'] * 1.2 + x['change_pct'] * 6)))
+    items = [x for x in items if x['risk_score'] >= 40]  # 过滤低分
+    items.sort(key=lambda x: -x['risk_score'])
     return items[:10]
 
 
