@@ -2,6 +2,14 @@
    选股扫描器 — 卡片渲染（性能优化版）
    ═══════════════════════════════════════ */
 
+// ─── 工具函数 ───
+// 格式化涨跌幅：正值拼+，负值自带-，防止 +-0.9% 这种错误
+function fmtPct(v, decimals) {
+    if (v == null || isNaN(v)) return '-';
+    var n = Number(v);
+    var s = n.toFixed(decimals != null ? decimals : 1);
+    return (n >= 0 ? '+' : '') + s + '%';
+}
 // ─── 转义（仅对用户数据） ───
 function esc(s) {
     if (!s) return '';
@@ -305,7 +313,7 @@ function renderMiniStockCards(items, pageKey) {
             `<span class="card-name">${esc(item.name)}</span>`,
             `<span class="card-code">${item.code}</span>`,
             `<span class="copy-btn" onclick="copyCode('${item.code}','${esc(item.name)}');event.stopPropagation();return false" title="复制代码">📋</span>`,
-            chg !== undefined ? `<span class="card-score" style="color:${cv}">+${chg}%</span>` : '',
+            chg !== undefined ? `<span class="card-score" style="color:${cv}">${fmtPct(chg)}</span>` : '',
             '</div>',
             item.seal_time ? `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">封板时间: ${item.seal_time.slice(0,2)}:${item.seal_time.slice(2)}</div>` : '',
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
@@ -524,10 +532,10 @@ function renderTrendCards(items) {
             '<div class="card-header">',
             '<span class="card-rank">' + item.code + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">+' + chg + '%</span>',
+            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + '</span>',
             '</div>',
             '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : 'low') + '" style="width:' + Math.min(100, chg * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">+' + chg + '%</span></div>',
+            '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : 'low') + '" style="width:' + Math.min(100, chg * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
             '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-')) + '%</span></div>',
             '<div class="bar-row"><span class="bar-label">连涨</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '天</span></div>',
             '</div></div>',
