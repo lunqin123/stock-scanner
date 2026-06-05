@@ -1199,6 +1199,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
+        print(f"  [SSE] 启动扫描线程 (limit-up-run, principal={principal})", file=sys.stderr)
 
         while True:
             try:
@@ -1280,6 +1281,7 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
         import threading
         t = threading.Thread(target=_run, daemon=True)
         t.start()
+        print(f"  [SSE] 启动扫描线程 (fetch-all, principal={principal})", file=sys.stderr)
 
         while True:
             try:
@@ -1379,6 +1381,7 @@ def _stream_scan_generic(run_fn, complete_fn, on_success=None):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+    print(f"  [SSE] 启动扫描线程 (stream-generic)", file=sys.stderr)
     while True:
         try:
             typ, val = q.get(timeout=0.2)
@@ -1631,6 +1634,7 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                 q.put(("done", None))
         import threading
         threading.Thread(target=_run, daemon=True).start()
+        print(f"  [SSE] 启动扫描线程 (mode-stream, cache_key={cache_key})", file=sys.stderr)
         while True:
             try: typ, val = q.get(timeout=0.2)
             except queue.Empty: continue
