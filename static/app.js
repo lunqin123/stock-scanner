@@ -15,9 +15,30 @@ const _dom = {
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 let currentPage = '';
-let _outputCache = {};
+let _outputCache = {};  // {html: string, ts: number}
+const _CACHE_TTL_MS = 5 * 60 * 1000;  // 5分钟过期
+const _CACHE_SCHEMA_VER = 2;  // 改评分逻辑时+1，自动清旧缓存
+
+function _getCachedPage(page) {
+    var c = _outputCache[page];
+    if (!c) return null;
+    if (Date.now() - c.ts > _CACHE_TTL_MS) { delete _outputCache[page]; return null; }
+    return c.html;
+}
+function _setCachedPage(page, html) {
+    _outputCache[page] = { html: html, ts: Date.now() };
+}
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台
+
+// 跨版本自动清缓存
+(function() {
+    var v = sessionStorage.getItem('_cacheSchemaVer') || '0';
+    if (v !== String(_CACHE_SCHEMA_VER)) {
+        _outputCache = {};
+        sessionStorage.setItem('_cacheSchemaVer', String(_CACHE_SCHEMA_VER));
+    }
+})();
 
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
@@ -49,7 +70,7 @@ function switchPage(page) {
     try {
         const outputEl = _dom.output();
         if (currentPage && outputEl) {
-            _outputCache[currentPage] = outputEl.innerHTML;
+            _setCachedPage(currentPage, outputEl.innerHTML);
         }
 
         currentPage = page;
@@ -72,8 +93,9 @@ function switchPage(page) {
             });
         }
 
-        if (_outputCache[page]) {
-            outputEl.innerHTML = _outputCache[page];
+        var cached = _getCachedPage(page);
+        if (cached) {
+            outputEl.innerHTML = cached;
         } else if (info.api) {
         showProgress('正在加载...', 20);
         outputEl.innerHTML = '';
@@ -149,13 +171,13 @@ async function runCurrent() {
     savePrincipal();
     var plan = getPlan();
     var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_r=' + Math.random().toString(36).slice(2);
-    if (_lastUrl[currentPage] === url && _outputCache[currentPage]) {
+    if (_lastUrl[currentPage] === url && _getCachedPage(currentPage)) {
         return;
     }
     _lastUrl[currentPage] = url;
 
     // 页面刷新后 localStorage 有缓存 → 瞬间展示，不重复请求
-    if (!_outputCache[currentPage]) {
+    if (!_getCachedPage(currentPage)) {
         // QQ 浏览器等无法依赖 localStorage → 用服务端注入的数据
         if (currentPage === 'scan-limit' && window._CACHED_RANKING) {
             var cr = window._CACHED_RANKING;
@@ -165,7 +187,7 @@ async function runCurrent() {
                 rankingHtml = (s.level ? '<div class="sentiment-banner">📊 市场情绪: <strong>' + esc(s.level) + '</strong></div>' : '') +
                     (cr.fetched_at ? '<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ' + esc(cr.fetched_at) + '</div>' : '') +
                     rankingHtml;
-                _outputCache[currentPage] = rankingHtml;
+                _setCachedPage(currentPage, rankingHtml);
                 _dom.output().innerHTML = rankingHtml;
                 hideProgress();
                 return;
@@ -265,7 +287,7 @@ async function callApi(apiUrl, pageKey) {
     } else {
         await loadTextView(output, pageKey, apiUrl);
     }
-    _outputCache[pageKey] = output.innerHTML;
+    _setCachedPage(pageKey, output.innerHTML);
 }
 
 async function loadTextView(output, pageKey, apiUrl) {
@@ -345,13 +367,13 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                             output.innerHTML = msg.output
                                 ? renderStyledText(msg.output)
                                 : '<span class="loading">暂无数据</span>';
-                            _outputCache[pageKey] = output.innerHTML;
+                            _setCachedPage(pageKey, output.innerHTML);
                             return;
                         } else if (msg.type === 'error') {
                             if (bar) bar.style.display = 'none';
                             if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
-                            _outputCache[pageKey] = output.innerHTML;
+                            _setCachedPage(pageKey, output.innerHTML);
                             return;
                         }
                     } catch (_) {}
@@ -423,7 +445,7 @@ async function loadCardView(output, pageKey, apiUrl) {
             html += `<div class="error-text">❌ 渲染错误: ${renderErr.message}</div>`;
             console.error('[Render Error]', pageKey, renderErr);
         }
-        if (_pageToken === token) { output.innerHTML = html; _outputCache[pageKey] = output.innerHTML; }
+        if (_pageToken === token) { output.innerHTML = html; _setCachedPage(pageKey, output.innerHTML); }
     } catch (err) {
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
@@ -550,7 +572,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                                 if (_pageToken !== token) return;
                                 output.innerHTML = html;
                                 _lastUrl[pageKey] = apiUrl || '';
-                                _outputCache[pageKey] = output.innerHTML;
+                                _setCachedPage(pageKey, output.innerHTML);
                             });
                             return;
 
@@ -558,7 +580,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             bar.style.display = 'none';
                             if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
-                            _outputCache[pageKey] = output.innerHTML;
+                            _setCachedPage(pageKey, output.innerHTML);
                             return;
                         }
                     } catch (_) {}
