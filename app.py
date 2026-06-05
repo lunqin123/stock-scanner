@@ -639,6 +639,102 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     return result
 
 
+@app.get("/api/scan/reversal/cards")
+def api_reversal_cards(refresh: bool = Query(False, description="强制刷新")):
+    """涨停回调反转扫描 — 昨涨停今回调→明日反包潜力"""
+    import akshare as ak; import pandas as pd
+    from scanner import filter_non_main_board
+
+    today = _today_trading()
+    print("  [反转扫描] 开始...", file=sys.stderr)
+    try:
+        prev = ak.stock_zt_pool_previous_em(date=today)
+        if prev is None or prev.empty:
+            return {"ok": True, "items": []}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    df = filter_non_main_board(prev)
+    if df.empty:
+        return {"ok": True, "items": []}
+
+    chg_col = df.columns[3]; code_col = df.columns[1]; name_col = df.columns[2]
+    price_col = df.columns[4]; turnover_col = df.columns[9]
+    ind_col = df.columns[15] if len(df.columns) > 15 else None
+    seal_stat_col = df.columns[14] if len(df.columns) > 14 else None
+
+    df['今日涨幅'] = df[chg_col].astype(float)
+    pullback = df[(df['今日涨幅'] >= -7) & (df['今日涨幅'] <= 1)].copy()
+    if pullback.empty:
+        return {"ok": True, "items": []}
+
+    # 今日涨停行业
+    hot_inds = set()
+    try:
+        lt = ak.stock_zt_pool_em(date=today)
+        if lt is not None and not lt.empty and ind_col:
+            lt_ic = '所属行业' if '所属行业' in lt.columns else (lt.columns[15] if len(lt.columns) > 15 else None)
+            if lt_ic:
+                hot_inds = set(lt[lt_ic].value_counts().head(10).index)
+    except: pass
+
+    items = []
+    for _, row in pullback.iterrows():
+        code = str(row[code_col]).strip().zfill(6)
+        name = str(row[name_col])
+        chg = round(float(row['今日涨幅']), 1)
+        price = float(row[price_col])
+        to = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+        ind = str(row[ind_col]) if ind_col and pd.notna(row[ind_col]) else ''
+        raw = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
+        lb = int(raw.split('/')[1]) if '/' in raw else 0
+
+        # 评分
+        s = 0
+        if -2 <= chg <= 0.5: s += 30
+        elif -3 <= chg < -2: s += 24
+        elif -5 <= chg < -3: s += 18
+        elif 0.5 < chg <= 1: s += 15
+        else: s += 8
+
+        if 5 <= to <= 15: s += 25
+        elif 3 <= to < 5: s += 18
+        elif 15 < to <= 25: s += 15
+        elif 1 <= to < 3: s += 10
+        else: s += 5
+
+        if lb == 1: s += 25
+        elif lb == 2: s += 18
+        elif lb == 3: s += 12
+        else: s += 8
+
+        s += 20 if ind in hot_inds else 8
+
+        if s >= 80: adv = '⭐ 重点观察，竞价高开1%+可参与'
+        elif s >= 65: adv = '加入自选，竞价确认方向'
+        elif s >= 50: adv = '观望，需板块配合'
+        else: adv = '暂不参与'
+
+        tags = []
+        if lb == 1: tags.append('首板回调')
+        elif lb == 2: tags.append('二板回调')
+        if -2 <= chg <= 0.5: tags.append('浅回调洗盘')
+        if ind in hot_inds: tags.append('板块在线')
+        if to >= 5: tags.append('放量承接')
+
+        items.append({
+            'code': code, 'name': name, 'url': f'https://stockpage.10jqka.com.cn/{code}/',
+            'change_pct': chg, 'price': price, 'turnover': round(to, 1),
+            'consecutive': lb, 'industry': ind,
+            'signals': tags, 'advice': adv,
+            'risk_score': s,
+        })
+
+    items.sort(key=lambda x: -x['risk_score'])
+    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
+    return result
+
+
 @app.get("/api/scan/zhaban/cards")
 def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     """炸板分析 — 结构化数据（含评分、分析、跳转）"""

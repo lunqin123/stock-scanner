@@ -1381,6 +1381,134 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
     return df.sort_values('总分', ascending=False).head(TOP_N)
 
 
+def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
+    """
+    涨停回调反转扫描：找"昨日涨停今日下跌"的股票，评估明日反包潜力。
+    逻辑：昨天强势封板→今天回调洗盘→明天最可能反转大涨。
+    达实智能这类"昨天跌今天涨停"的反转股，昨天大概率不在涨停池，
+    但前天涨停昨天回调的股票，今天就是反转候选。
+    """
+    import pandas as pd
+    n = top_n if top_n is not None else TOP_N
+    print("[反转扫描] 获取昨日涨停今日表现...", file=sys.stderr)
+    try:
+        prev = ak.stock_zt_pool_previous_em(date=today_str)
+    except Exception as e:
+        print(f"  数据获取失败: {e}", file=sys.stderr)
+        return
+    if prev.empty:
+        print("no_data")
+        return
+
+    df = filter_non_main_board(prev)
+    if df.empty:
+        print("no_data")
+        return
+
+    chg_col = df.columns[3]; code_col = df.columns[1]; name_col = df.columns[2]
+    price_col = df.columns[4]; turnover_col = df.columns[9]
+    ind_col = df.columns[15] if len(df.columns) > 15 else None
+    seal_stat_col = df.columns[14] if len(df.columns) > 14 else None
+
+    df['今日涨幅'] = df[chg_col].astype(float)
+
+    # 筛选：今日下跌或微涨<1%（回调中）
+    pullback = df[(df['今日涨幅'] >= -7) & (df['今日涨幅'] <= 1)].copy()
+    if pullback.empty:
+        print("no_data")
+        return
+    print(f"  → 昨涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
+
+    # ── 反转评分 (0-100) ──
+    scores = pd.Series(0.0, index=pullback.index)
+
+    # 1. 回调深度 (0-30): 浅回调(-2%~0%)最优，深回调(-5%~-7%)差
+    for idx in pullback.index:
+        chg = pullback.loc[idx, '今日涨幅']
+        if -2 <= chg <= 0.5:   s = 30    # 浅回调，洗盘嫌疑
+        elif -3 <= chg < -2:   s = 24    # 正常回调
+        elif -5 <= chg < -3:   s = 18    # 偏深
+        elif 0.5 < chg <= 1:   s = 15    # 微弱翻红，方向不明
+        else:                  s = 8     # 深跌>5%
+        scores[idx] = s
+
+    # 2. 换手健康度 (0-25): 有量的回调才有承接
+    for idx in pullback.index:
+        t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
+        if 5 <= t <= 15:       s = 25   # 活跃换手=有资金承接
+        elif 3 <= t < 5:       s = 18
+        elif 15 < t <= 25:     s = 15   # 换手偏高
+        elif 1 <= t < 3:       s = 10
+        else:                  s = 5    # 无量或巨量
+        scores[idx] += s
+
+    # 3. 昨日封板质量 (0-25): 从涨停统计推断
+    for idx in pullback.index:
+        raw = str(pullback.loc[idx, seal_stat_col]) if seal_stat_col else ''
+        consecutive = 0
+        if '/' in raw:
+            try: consecutive = int(raw.split('/')[1])
+            except: pass
+        # 首板回调 > 连板回调（首板更可能是洗盘）
+        if consecutive == 1:   s = 25
+        elif consecutive == 2: s = 18
+        elif consecutive == 3: s = 12
+        else:                  s = 8    # 高位连板回调风险大
+        scores[idx] += s
+
+    # 4. 板块支撑 (0-20): 同板块今日有涨停=板块还活着
+    try:
+        lt_today = ak.stock_zt_pool_em(date=today_str)
+        if lt_today is not None and not lt_today.empty and ind_col:
+            lt_ind_col = '所属行业' if '所属行业' in lt_today.columns else (lt_today.columns[15] if len(lt_today.columns) > 15 else None)
+            if lt_ind_col:
+                hot_inds = set(lt_today[lt_ind_col].value_counts().head(10).index)
+                for idx in pullback.index:
+                    ind = str(pullback.loc[idx, ind_col]) if pd.notna(pullback.loc[idx, ind_col]) else ''
+                    scores[idx] += 20 if ind in hot_inds else 8
+            else:
+                scores += pd.Series(12.0, index=pullback.index)
+        else:
+            scores += pd.Series(12.0, index=pullback.index)
+    except Exception:
+        scores += pd.Series(12.0, index=pullback.index)
+
+    pullback['反转评分'] = scores.round(0)
+    pullback = pullback.sort_values('反转评分', ascending=False).head(n)
+
+    # ── 输出 ──
+    if table_mode:
+        lines = []
+        lines.append(f"{'代码':<8s} {'名称':<8s} {'今涨幅':>7s} {'换手':>6s} {'连板':>4s} {'行业':<10s} {'反转分':>6s} {'建议':<14s}")
+        lines.append("-" * 72)
+        for _, row in pullback.iterrows():
+            code = str(row[code_col]).strip().zfill(6)
+            name = str(row[name_col])
+            chg = row['今日涨幅']
+            to = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+            raw = str(row[seal_stat_col]) if seal_stat_col else ''
+            lb = int(raw.split('/')[1]) if '/' in raw else 0
+            ind = str(row[ind_col]) if ind_col and pd.notna(row[ind_col]) else ''
+            score = int(row['反转评分'])
+            if score >= 80: adv = '⭐ 重点观察'
+            elif score >= 65: adv = '加入自选'
+            elif score >= 50: adv = '观望'
+            else: adv = '暂不参与'
+            lines.append(f"{code:<8s} {name:<8s} {chg:+6.1f}% {to:5.1f}% {lb:4d} {ind:<10s} {score:6d} {adv:<14s}")
+        print('\n'.join(lines))
+    else:
+        for _, row in pullback.iterrows():
+            code = str(row[code_col]).strip().zfill(6)
+            name = str(row[name_col])
+            score = int(row['反转评分'])
+            chg = row['今日涨幅']
+            to = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
+            ind = str(row[ind_col]) if ind_col and pd.notna(row[ind_col]) else ''
+            print(f"{code} {name}: 反转{score}分 | 今{chg:+.1f}% | 换手{to:.1f}% | {ind}")
+
+    return pullback[['反转评分']] if not pullback.empty else None
+
+
 def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
     n = top_n if top_n is not None else TOP_N
     print("[炸板扫描] 获取炸板股池...", file=sys.stderr)
@@ -2486,6 +2614,7 @@ def main():
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
     parser.add_argument('--dtqiaoban', action='store_true', help='跌停翘板信号扫描')
+    parser.add_argument('--reversal', action='store_true', help='涨停回调反转扫描(昨涨停今回调→明日反包)')
     parser.add_argument('--date', type=str, default='', help='指定日期 YYYYMMDD（默认: 今天）')
     parser.add_argument('--top', type=int, default=0, help=f'输出数量（默认: {TOP_N}）')
     args = parser.parse_args()
@@ -2511,6 +2640,10 @@ def main():
     if args.sector:
         scan_sector(today_raw, table_mode, top_n=TOP_N)
         return
+    if args.reversal:
+        scan_reversal(today_raw, table_mode, top_n=TOP_N)
+        return
+
     if args.dtqiaoban:
         scan_dtqiaoban(today_raw, table_mode, top_n=TOP_N)
         return
