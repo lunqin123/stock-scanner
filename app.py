@@ -2068,10 +2068,11 @@ def api_version():
 def index():
     with open(os.path.join(_BASE_DIR, "templates/index.html"), "r", encoding="utf-8") as f:
         html = f.read()
-    # 用服务器启动时间戳替换版本号，彻底破浏览器缓存
-    import time as _time
+    # 用服务器启动时间戳替换所有 ?v=x.y.z，彻底破浏览器缓存
+    # （之前字面量 '?v=1.22.0' 跟 HTML 实际版本号 '?v=1.22.1' / '?v=1.18.5' 不匹配，导致替换不生效，disk cache 一直命中）
+    import time as _time, re as _re
     _ts = str(int(_time.time()))
-    html = html.replace('?v=1.22.0', f'?v={_ts}')
+    html = _re.sub(r'\?v=\d+(?:\.\d+){0,3}', f'?v={_ts}', html)
     # 注入版本号到页面，方便确认是否最新
     import json as _json
     try:
