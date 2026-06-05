@@ -1315,9 +1315,9 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
     fund_vals = df[seal_fund_col].fillna(0).astype(float)
     max_fund = fund_vals.max()
     if max_fund > 0:
-        seal_scores += (fund_vals / max_fund) * 10
+        seal_scores += (fund_vals / max_fund) * 5  # 回测显示封板资金与次日负相关，降权
     else:
-        seal_scores += 5
+        seal_scores += 3
 
     zb_times = df[zhaban_count_col].fillna(0).astype(float)
     seal_scores += np.clip(1.0 - zb_times / 8.0, 0, 1) * 5
@@ -1369,7 +1369,7 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
 
     # ── 总分 + 列 ──
     raw_total = seal_scores + money_scores + zhaban_feature + turn_scores + sector_scores
-    max_raw = 25 + 20 + 15 + 10 + 12
+    max_raw = 20 + 20 + 15 + 10 + 12  # seal从25降到20(封板资金降权)
     df['总分'] = (raw_total / max_raw * 100).round(1)
     df['封板质量'] = seal_scores.round(1)
     df['资金承接'] = money_scores.round(1)

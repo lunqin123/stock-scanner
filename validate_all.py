@@ -118,7 +118,7 @@ c2 = rdf2['sc'].corr(rdf2['nxt']); a2 = rdf2[rdf2['g']=='A']['nxt'].mean(); e2 =
 print(f"  N={len(rdf2)} corr={c2:+.3f} A={a2:+.1f}% E={e2:+.1f}% spread={a2-e2:+.1f}%")
 results['反转扫描'] = (len(rdf2), c2, a2, e2, a2-e2)
 
-# ---- Trend Scan ----
+# ---- Trend Scan (NEW data-driven scoring) ----
 print("\n=== Trend Scan ===")
 tr = []
 for i in range(len(dates)-1):
@@ -137,17 +137,18 @@ for i in range(len(dates)-1):
             to = float(row[tc]) if pd.notna(row[tc]) else 0
             nxt = (hist.get(code) or {}).get(vd)
             if nxt is None or np.isnan(nxt): continue
-            s = chg * 2.5 + min(to, 25) * 0.4 + (5 if 5<=to<=15 else 2)
-            tr.append({'sc': s, 'nxt': nxt})
+            s = 25 + (25 if 2<=chg<=4 else 15 if 4<chg<=6 else 5) + \
+                (25 if 5<=to<=15 else 15 if 3<=to<5 or 15<to<=20 else 8 if 1<=to<3 else 5) + 10 - (6 if to>25 else 0)
+            tr.append({'sc': max(0,min(100,s)), 'nxt': nxt})
     except: continue
 
 rdf3 = pd.DataFrame(tr)
-rdf3['g'] = pd.qcut(rdf3['sc'], 5, labels=['E','D','C','B','A'], duplicates='drop')
-c3 = rdf3['sc'].corr(rdf3['nxt']); a3 = rdf3[rdf3['g']=='A']['nxt'].mean(); e3 = rdf3[rdf3['g']=='E']['nxt'].mean()
+rdf3['g'] = pd.cut(rdf3['sc'], bins=[0,50,55,60,65,100], labels=['E','D','C','B','A'])
+c3 = rdf3['sc'].corr(rdf3['nxt']); a3 = rdf3[rdf3['g']=='A']['nxt'].mean() if len(rdf3[rdf3['g']=='A'])>0 else 0; e3 = rdf3[rdf3['g']=='E']['nxt'].mean() if len(rdf3[rdf3['g']=='E'])>0 else 0
 print(f"  N={len(rdf3)} corr={c3:+.3f} A={a3:+.1f}% E={e3:+.1f}% spread={a3-e3:+.1f}%")
 results['趋势扫描'] = (len(rdf3), c3, a3, e3, a3-e3)
 
-# ---- Zhaban Scan ----
+# ---- Zhaban Scan (NEW data-driven scoring) ----
 print("\n=== Zhaban Scan ===")
 zb = []
 for i in range(len(dates)-1):
@@ -158,19 +159,31 @@ for i in range(len(dates)-1):
         df = filter_non_main_board(zbdf)
         if df.empty: continue
         cc = df.columns[1]; tc = df.columns[9] if len(df.columns)>9 else None
+        st_c = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns)>11 else None)
         for _, row in df.iterrows():
             code = str(row[cc]).strip().zfill(6)
             to = float(row[tc]) if tc and pd.notna(row[tc]) else 0
             nxt = (hist.get(code) or {}).get(vd)
             if nxt is None or np.isnan(nxt): continue
-            s = 15 if 5<=to<=15 else (10 if 3<=to<5 or 15<to<=20 else 5)
-            zb.append({'sc': s, 'nxt': nxt})
+            st_s = 0
+            st = str(row[st_c])[:4] if st_c and pd.notna(row[st_c]) else ''
+            if len(st) >= 4:
+                try:
+                    h, m = int(st[:2]), int(st[2:4]); minutes = h*60+m
+                    if minutes <= 600: st_s = 12
+                    elif minutes <= 630: st_s = 9
+                    elif minutes <= 690: st_s = 6
+                    elif minutes <= 780: st_s = 4
+                    elif minutes <= 840: st_s = 2
+                except: pass
+            s = st_s*3 + (30 if 8<=to<=15 else 20 if 5<=to<=20 else 10 if 3<=to<=25 else 5) + 20
+            zb.append({'sc': min(100, s), 'nxt': nxt})
     except: continue
 
 rdf4 = pd.DataFrame(zb)
 if len(rdf4) > 50:
-    rdf4['g'] = pd.qcut(rdf4['sc'], 5, labels=['E','D','C','B','A'], duplicates='drop')
-    c4 = rdf4['sc'].corr(rdf4['nxt']); a4 = rdf4[rdf4['g']=='A']['nxt'].mean(); e4 = rdf4[rdf4['g']=='E']['nxt'].mean()
+    rdf4['g'] = pd.cut(rdf4['sc'], bins=[0,45,55,65,80,100], labels=['E','D','C','B','A'])
+    c4 = rdf4['sc'].corr(rdf4['nxt']); a4 = rdf4[rdf4['g']=='A']['nxt'].mean() if len(rdf4[rdf4['g']=='A'])>0 else 0; e4 = rdf4[rdf4['g']=='E']['nxt'].mean() if len(rdf4[rdf4['g']=='E'])>0 else 0
     print(f"  N={len(rdf4)} corr={c4:+.3f} A={a4:+.1f}% E={e4:+.1f}% spread={a4-e4:+.1f}%")
     results['炸板分析'] = (len(rdf4), c4, a4, e4, a4-e4)
 else:
