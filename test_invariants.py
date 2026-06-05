@@ -60,24 +60,23 @@ import weight_manager as wm
 
 w = wm.DEFAULT_WEIGHTS  # 直读默认值，不受 weights.json 旧调权影响
 check(isinstance(w, dict), "DEFAULT_WEIGHTS 应返回 dict")
-check(w['seal'] == 16.0, f"seal 默认权重应为 16.0，实际 {w['seal']}")
+check(w['seal'] == 22.0, f"seal 默认权重应为 22.0(回测最强因子)，实际 {w['seal']}")
 check(w['money'] == 12.0, f"money 默认权重应为 12.0，实际 {w['money']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
 check('principal_score' in w, "DEFAULT_WEIGHTS 应含 principal_score")
-check(w.get('principal_score', 0) > 0, f"principal_score 权重应>0，实际 {w.get('principal_score', 0)}")
+check(w.get('principal_score', 0) >= 6.0, f"principal_score 权重应>=6(增强区分度)，实际 {w.get('principal_score', 0)}")
 check('buyability' in w, "DEFAULT_WEIGHTS 应含 buyability")
-check('sector_mom' in w, "DEFAULT_WEIGHTS 应含 sector_mom")
-check('sector_res' in w, "DEFAULT_WEIGHTS 应含 sector_res")
-check(abs(sum(w.values()) - 96) < 0.01, f"权重和应为 96 (buyability=0), 实际 {sum(w.values())}")
+check('sector' in w, "DEFAULT_WEIGHTS 应含 sector(合并后)")
+check(abs(sum(w.values()) - 96) < 0.01, f"权重和应为 96 (buyability=0, sector_res/mom=0), 实际 {sum(w.values())}")
 check(w.get('buyability', -1) == 0.0, f"buyability应=0(已退场)，实际 {w.get('buyability', -1)}")
 
-# apply_weights 计算验证
+# apply_weights 计算验证（新签名：sector_scores合并）
 import pandas as pd, numpy as np
 idx = pd.Index([0, 1])
 zeros = pd.Series(0.0, index=idx)
 ones = pd.Series(5.0, index=idx)
-maxes = pd.Series([25.0, 25.0], index=idx)
-result = wm.apply_weights(maxes, zeros, zeros, zeros, zeros, zeros, zeros, ones, weights=w)
+maxes_seal = pd.Series([28.0, 28.0], index=idx)  # new seal max
+result = wm.apply_weights(maxes_seal, zeros, ones, zeros, zeros, ones, stock_sentiment_scores=ones, principal_scores=ones, weights=w)
 check(result.max() <= 100, f"满分时应 ≤100，实际 {result.max():.1f}")
 check(result.min() >= 0, f"零分时应 ≥0，实际 {result.min():.1f}")
 check(len(result) == 2, f"应返回 2 只股票，实际 {len(result)}")
@@ -92,7 +91,7 @@ if pool is not None and not pool.empty:
     filtered = scanner.pre_filter(pool)
     if not filtered.empty:
         seal_s = scanner.score_seal_strength(filtered)
-        check(seal_s.max() <= 25, f"封板强度应 ≤25，实际 {seal_s.max():.1f}")
+        check(seal_s.max() <= 28, f"封板强度应 ≤28(含黄金奖励)，实际 {seal_s.max():.1f}")
         check(seal_s.min() >= 0, f"封板强度应 ≥0，实际 {seal_s.min():.1f}")
 
         tech_s = scanner.score_tech_form(filtered)
@@ -125,7 +124,7 @@ if data is not None:
     if stocks:
         s = stocks[0]
         check(0 <= s['total_score'] <= 100, f"总分应在 0-100，实际 {s['total_score']}")
-        check(0 <= s.get('seal_score', -1) <= 25, f"seal_score 应在 0-25")
+        check(0 <= s.get('seal_score', -1) <= 28, f"seal_score 应在 0-28")
         check(0 <= s.get('money_score', -1) <= 20, f"money_score 应在 0-20")
         check(0 <= s.get('tech_score', -1) <= 10, f"tech_score 应在 0-10")
         check(0 <= s.get('sector_mom', -1) <= 12, f"sector_mom 应在 0-12")

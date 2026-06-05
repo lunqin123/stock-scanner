@@ -170,8 +170,9 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
                else pd.Series(2.5, index=filtered.index)
 
     weights = weight_manager.load_weights()
+    sector_merged = (factors['sector_res'] + factors['sector_mom']) / 2.0
     base = weight_manager.apply_weights(
-        factors['seal'], money, factors['sector_res'], factors['sector_mom'],
+        factors['seal'], money, sector_merged,
         factors['tech'], h_scores,
         sentiment_series,
         stock_sentiment_scores=factors['stock_sentiment'],

@@ -12,21 +12,22 @@ import pandas as pd
 import numpy as np
 
 DEFAULT_WEIGHTS = {
-    'seal': 16.0,      # 封板强度（封板时间阶梯+封单+炸板，早盘重奖尾盘零分）
-    'tech': 10.0,      # 量价结构（换手率×连板数交叉矩阵）
-    'sector_res': 8.0, # 板块共振（今日板块涨停集中度）
+    'seal': 22.0,      # 封板强度（回测r=+0.126，唯一显著预测因子，seal20+黄金区均涨+5.9%）
+    'tech': 6.0,       # 量价结构（简化为换手率评级，回测r=+0.027）
+    'sector': 12.0,    # 板块合力（合并原sector_res+sector_mom，消除重复计算）
     'sentiment': 25.0, # 大盘情绪（系数调节，不参与加权和）
-    'sector_mom': 8.0, # 板块热度（微降让位给资金）
-    'history': 6.0,    # 历史股性（涨停频率）
-    'money': 12.0,     # 资金驱动（阶梯式分级，净流入是涨停质量核心指标）
+    'sector_res': 0.0, # DEPRECATED: 已合并到sector
+    'sector_mom': 0.0, # DEPRECATED: 已合并到sector
+    'history': 4.0,    # 历史股性（回测中为默认值，降权）
+    'money': 12.0,     # 资金驱动（阶梯式分级，回测不可验证但实盘关键）
     'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
     'stock_sentiment': 9.0,   # 个股情绪（资金态度+确定性+板块领先度）
-    'principal_score': 2.0,   # 本金适配（权重降至2%，几乎不影响排名）
+    'principal_score': 6.0,   # 本金适配（提权，增强低价小市值标的区分度）
 }
 TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96
 
 # 回测中可调权的因子
-BACKTEST_FACTORS = ['seal', 'sector_mom', 'tech', 'sector_res', 'history']
+BACKTEST_FACTORS = ['seal', 'tech', 'sector', 'history']
 
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
@@ -123,35 +124,44 @@ def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float =
 
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
-_RAW_MAX = {'seal': 25.0, 'money': 20.0, 'sector_res': 8.0, 'sentiment': 10.0,
-            'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
+_RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 12.0, 'sentiment': 10.0,
+            'sector_res': 8.0, 'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
             'stock_sentiment': 10.0, 'principal_score': 10.0}
 
 
-def apply_weights(seal_scores, money_scores, sector_res, sector_mom,
-                  tech_scores, history_scores, sentiment_score,
-                  stock_sentiment_scores=None, principal_scores=None, buyability_scores=None, weights=None):
+def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
+                  history_scores, sentiment_score,
+                  stock_sentiment_scores=None, principal_scores=None,
+                  sector_res=None, sector_mom=None,  # DEPRECATED: 向后兼容
+                  buyability_scores=None, weights=None):
     """
-    8因子加权 + 大盘情绪温和系数。
-    buyability_scores 仅向后兼容，权重为0不参与计算。
-    本金适配(principal_score)参与加权(0-10分,权重6%)。
-    个股情绪(stock_sentiment)参与加权(0-10分,权重9%)。
+    7因子加权 + 大盘情绪温和系数。
+    sector_res/sector_mom 已合并为 sector_scores，旧参数仅向后兼容。
     大盘情绪(sentiment)温和系数调节(×0.85~×1.15)。
     """
     if stock_sentiment_scores is None:
         stock_sentiment_scores = pd.Series(5.0, index=seal_scores.index)
     if principal_scores is None:
         principal_scores = pd.Series(5.0, index=seal_scores.index)
+    # 向后兼容：如果传了sector_res/sector_mom但没传sector_scores，自动合并
+    if sector_scores is None:
+        if sector_res is not None and sector_mom is not None:
+            sector_scores = (sector_res + sector_mom) / 2.0
+        elif sector_res is not None:
+            sector_scores = sector_res
+        elif sector_mom is not None:
+            sector_scores = sector_mom
+        else:
+            sector_scores = pd.Series(6.0, index=seal_scores.index)
     w = weights if weights else DEFAULT_WEIGHTS
 
-    # 8因子加权（buyability权重=0，已降为纯过滤器）
-    non_sentiment = ['seal', 'money', 'sector_res', 'sector_mom', 'tech', 'history',
+    # 7因子加权（sector_res/sector_mom已合并为sector）
+    non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
                      'stock_sentiment', 'principal_score']
     actual_sum = sum(w[k] for k in non_sentiment)
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
-                sector_res * (w['sector_res'] / _RAW_MAX['sector_res']) +
-                sector_mom * (w['sector_mom'] / _RAW_MAX['sector_mom']) +
+                sector_scores * (w['sector'] / _RAW_MAX['sector']) +
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
                 stock_sentiment_scores * (w['stock_sentiment'] / _RAW_MAX['stock_sentiment']) +

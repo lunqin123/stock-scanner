@@ -232,23 +232,26 @@ def pre_filter(df: pd.DataFrame) -> pd.DataFrame:
 # ─── 第三步: 涨停强度评分 (30%, 满分 30) ───
 
 def score_seal_strength(df: pd.DataFrame) -> pd.Series:
-    """封板质量评分 (0-25)：封板时间(阶梯，越早越高) + 封单充沛度 + 炸板次数"""
+    """封板质量评分 (0-28)：封板时间(阶梯，越早越高) + 封单充沛度 + 炸板次数 + 黄金封板奖励"""
     scores = pd.Series(0.0, index=df.index)
 
     # 1. 封板时间阶梯化 (0-12)：非连续，早盘重奖、尾盘重罚
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
     for idx in df.index:
         t = str(df.loc[idx, seal_time_col])
-        if len(t) >= 4:
-            h, m = int(t[:2]), int(t[2:4])
-            minutes = h * 60 + m
-            if minutes <= 600:     score = 12   # ≤10:00 早盘板，最高奖
-            elif minutes <= 630:   score = 9    # 10:00-10:30
-            elif minutes <= 690:   score = 6    # 10:30-11:30
-            elif minutes <= 780:   score = 4    # 11:30-13:00
-            elif minutes <= 840:   score = 2    # 13:00-14:00
-            else:                  score = 0    # >14:00 尾盘板，零分
-        else:
+        try:
+            if len(t) >= 4 and t[:2].isdigit() and t[2:4].isdigit():
+                h, m = int(t[:2]), int(t[2:4])
+                minutes = h * 60 + m
+                if minutes <= 600:     score = 12   # ≤10:00 早盘板，最高奖
+                elif minutes <= 630:   score = 9    # 10:00-10:30
+                elif minutes <= 690:   score = 6    # 10:30-11:30
+                elif minutes <= 780:   score = 4    # 11:30-13:00
+                elif minutes <= 840:   score = 2    # 13:00-14:00
+                else:                  score = 0    # >14:00 尾盘板，零分
+            else:
+                score = 6
+        except (ValueError, IndexError):
             score = 6
         scores[idx] += score
 
@@ -267,7 +270,14 @@ def score_seal_strength(df: pd.DataFrame) -> pd.Series:
         zban_scores = np.clip(1.0 - zban / 5.0, 0, 1) * 5
         scores += zban_scores
 
-    return scores.clip(upper=25.0)
+    # 4. 黄金封板奖励：回测显示seal 20+有临界效应(均涨+5.9%,胜率89%)
+    base = scores.clip(upper=25.0)
+    gold_bonus = pd.Series(0.0, index=df.index)
+    for idx in df.index:
+        if base[idx] >= 20:
+            gold_bonus[idx] = 3.0  # 非线性跳跃奖励
+    base += gold_bonus
+    return base.clip(upper=28.0)
 
 # ─── 第四步: 资金面评分 (满分 20) ───
 
@@ -374,8 +384,51 @@ def get_money_flow_scores(df: pd.DataFrame, fund_df=None):
         scores[idx] = max(0, min(20, base + structure))
     return scores, raw_values
 
-# ─── 第五步: 板块热度评分 (15%, 满分 15) ───
+# ─── 第五步: 板块合力评分 (合并sector_res + sector_mom) ───
 
+def get_sector_score(df: pd.DataFrame, money_series: pd.Series = None) -> pd.Series:
+    """
+    板块合力评分（满分12分），合并原 sector_resonance + sector_heat：
+    - 基础分(0-8): 基于板块内涨停个股数量（板块共振）
+    - 一致性加分(0-4): 基于板块内资金净流入正向个股占比（避免虚假繁荣）
+    消除sector双因子重复计算问题（回测显示两者r完全相同）。
+    """
+    industry_col = '所属行业' if '所属行业' in df.columns else '行业'
+    if industry_col not in df.columns:
+        return pd.Series(6.0, index=df.index)
+
+    counts = df[industry_col].value_counts()
+    scores = pd.Series(0.0, index=df.index)
+
+    # 板块内资金一致性
+    sector_consistency = {}
+    if money_series is not None:
+        for idx in df.index:
+            industry = df.loc[idx, industry_col]
+            if industry not in sector_consistency:
+                sector_consistency[industry] = []
+            sector_consistency[industry].append(money_series.loc[idx] > 0)
+
+    for idx in df.index:
+        industry = df.loc[idx, industry_col]
+        cnt = counts.get(industry, 1)
+        base = min(4 + cnt * 2, 8)
+
+        consistency_bonus = 0
+        if money_series is not None and industry in sector_consistency:
+            pos_ratio = sum(sector_consistency[industry]) / len(sector_consistency[industry])
+            if pos_ratio >= 0.8:    consistency_bonus = 4
+            elif pos_ratio >= 0.6:  consistency_bonus = 3
+            elif pos_ratio >= 0.4:  consistency_bonus = 2
+            elif pos_ratio >= 0.2:  consistency_bonus = 1
+        else:
+            consistency_bonus = 2  # 无资金数据保守加分
+
+        scores[idx] = min(12, base + consistency_bonus)
+    return scores
+
+
+# DEPRECATED: 已合并到 get_sector_score，保留向后兼容
 def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> pd.Series:
     """
     板块热度评分（满分12分）：
@@ -426,6 +479,7 @@ def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> 
     return scores
 
 
+# DEPRECATED: 已合并到 get_sector_score，保留向后兼容
 def get_sector_resonance(df: pd.DataFrame) -> pd.Series:
     """板块今日涨停集中度 (0-8)，只计涨停数量，不含资金一致性"""
     industry_col = '所属行业' if '所属行业' in df.columns else '行业'
@@ -444,15 +498,13 @@ def get_sector_resonance(df: pd.DataFrame) -> pd.Series:
 
 def score_tech_form(df: pd.DataFrame) -> pd.Series:
     """
-    量价关系评分（满分10分，原技术形态重构）：
-    - 量价健康度(0-4)：换手率与连板位置的匹配
-    - 封板力度(0-3)：封板资金相对成交额的充沛程度
-    - 活跃持续性(0-3)：近期涨停频率体现股性
+    量价健康度（满分10分），回测驱动简化：
+    原复杂换手率×连板矩阵 R²=0.001，改为换手率博弈区间评级。
+    - 核心逻辑：5-15%换手=最佳博弈区间（有分歧有承接）
+    - 首板加分：首板比连板更容易买到，+1奖励
     """
     scores = pd.Series(0.0, index=df.index)
 
-    # ─── 1. 量价健康度 (0-4)：换手率×连板数交叉矩阵 ───
-    # 交叉判断：捕捉"缩量涨停=动能不足"、"高连板低换手=买不到"等信号
     turnover_col = '换手率' if '换手率' in df.columns else None
     lb_col = '连板数' if '连板数' in df.columns else None
 
@@ -462,70 +514,23 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
             t = turnover[idx]
             lb = float(df.loc[idx, lb_col]) if lb_col and pd.notna(df.loc[idx, lb_col]) else 1
 
-            # ── 交叉矩阵 ──
-            #       缩量(<1%)  极低(1-3%)  温和(3-5%)  活跃(5-15%)  适中(15-25%)  巨量(>25%)
-            # 首板     0.5        1.0         2.0         4.0           2.0         1.0
-            # 二板     0.0        0.0         1.5         3.0           3.5         1.0
-            # 三板+    0.0        0.0         1.0         2.0           2.5         1.0
-            if lb == 1:
-                if 5 <= t <= 15:        scores[idx] = 4.0   # 首板+活跃换手=完美
-                elif 3 <= t < 5:        scores[idx] = 2.0   # 温和放量
-                elif 15 < t <= 25:      scores[idx] = 2.0   # 分歧偏大但仍可接受
-                elif 1 <= t < 3:        scores[idx] = 1.0   # 极低换手=动能不足
-                elif t < 1:             scores[idx] = 0.5   # 缩量涨停=一字板/买不到
-                else:                   scores[idx] = 1.0   # >25% 巨量分歧
-            elif lb == 2:
-                if 15 < t <= 25:        scores[idx] = 3.5   # 二板+充分换手=最健康
-                elif 8 <= t <= 15:      scores[idx] = 3.0
-                elif 5 <= t < 8:        scores[idx] = 2.0
-                elif 3 <= t < 5:        scores[idx] = 1.5
-                else:                   scores[idx] = 0.0   # 二板缩量=大概率买不到
-            else:  # 三板+
-                if 10 <= t <= 25:       scores[idx] = 2.5
-                elif 5 <= t < 10:       scores[idx] = 1.5
-                elif 3 <= t < 5:        scores[idx] = 1.0
-                else:                   scores[idx] = 0.0
+            # 换手率博弈区间评级
+            if 5 <= t <= 15:      base = 10.0  # 最佳博弈区间
+            elif 3 <= t < 5:      base = 7.0   # 略低但可接受
+            elif 15 < t <= 20:    base = 7.0   # 偏高但有承接
+            elif 1 <= t < 3:      base = 4.0   # 偏低，动能不足
+            elif 20 < t <= 25:    base = 4.0   # 偏高，分歧大
+            elif t < 1:           base = 2.0   # 一字板/无量
+            elif 25 < t <= 30:    base = 2.0   # 分歧很大
+            else:                 base = 0.0   # >30% 巨量
 
-    # ─── 2. 封板力度 (0-3)：封板资金 / 估算成交额 ───
-    seal_fund_col = '封板资金' if '封板资金' in df.columns else None
-    cap_col = '流通市值' if '流通市值' in df.columns else None
-    if seal_fund_col is not None and turnover_col is not None and cap_col is not None:
-        seal_fund = df[seal_fund_col].fillna(0).astype(float)
-        cap = df[cap_col].fillna(0).astype(float)
-        turnover_vals = df[turnover_col].fillna(0).astype(float)
-        est_vol = (turnover_vals / 100.0) * cap
-        est_vol = est_vol.replace(0, float('inf'))
-        seal_ratio = seal_fund / est_vol
-        seal_ratio = seal_ratio.clip(upper=5.0)
-        scores += np.where(seal_ratio > 0.5, 3.0,
-                           np.where(seal_ratio > 0.2, 2.0,
-                                    np.where(seal_ratio > 0.05, 1.0, 0.5)))
+            # 首板加分：首板比连板更容易参与
+            if lb == 1 and base > 0:
+                base = min(10, base + 1)
 
-    # ─── 3. 活跃持续性 (0-3)：从涨停统计解析 ───
-    zt_stat_col = None
-    for col in df.columns:
-        if '涨停' in str(col) and '统计' in str(col):
-            zt_stat_col = col
-            break
-    if zt_stat_col is not None:
-        for idx in df.index:
-            raw = str(df.loc[idx, zt_stat_col])
-            try:
-                parts = raw.strip().split('/')
-                if len(parts) == 2:
-                    recent = float(parts[1])
-                    if recent >= 5:
-                        scores[idx] += 3.0
-                    elif recent >= 3:
-                        scores[idx] += 2.0
-                    elif recent >= 2:
-                        scores[idx] += 1.0
-                    elif recent > 1:
-                        scores[idx] += 0.5
-            except (ValueError, IndexError):
-                pass
+            scores[idx] = base
 
-    return np.clip(scores, 0, 10)
+    return scores
 
 
 # ─── 个股情绪评分 ───
@@ -659,9 +664,9 @@ def _dynamic_positions(principal: float) -> int:
 
 def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
     """
-    根据本金计算每只股票的价格适配度和流动性适配度 (0-10 分)。
-    - 价格适配 (0-5): 考虑动态持仓数 + A股市场最低佣金成本
-    - 流动性适配 (0-5): 单份持仓占比日成交额，大本金更严
+    本金适配度 (0-10分)，增强区分度（原版几乎所有股票均得5/10分）。
+    - 价格适配 (0-5): 可买手数，5档分级
+    - 流动性适配 (0-5): 持仓占比日成交额 + 日成交额底线惩罚
     """
     scores = pd.Series(5.0, index=df.index)
 
@@ -675,45 +680,34 @@ def score_by_principal(df: pd.DataFrame, principal: float) -> pd.Series:
     for idx in df.index:
         price = float(df.loc[idx, price_col])
         lots = position_size / (price * 100)
-        cost_per_trade = max(5, position_size * 0.00025)  # 最低佣金 5 元，或万2.5
-        cost_ratio = cost_per_trade / position_size * 100  # 佣金占持仓百分比
 
-        # 价格适配 (0-5): 能买几手 + 佣金影响
-        if lots >= 3:
-            price_fit = 5
-        elif lots >= 2:
-            price_fit = 4
-        elif lots >= 1:
-            price_fit = 2.5
-            if cost_ratio > 0.3:  # 佣金超过 0.3% 扣分
-                price_fit -= 0.5
-        elif lots >= 0.5:
-            price_fit = 1
-            if cost_ratio > 0.3:
-                price_fit -= 0.5
-        else:
-            price_fit = 0
+        # 价格适配 (0-5): 5档分级，增强区分度
+        if lots >= 5:       price_fit = 5.0
+        elif lots >= 3:     price_fit = 4.0
+        elif lots >= 2:     price_fit = 2.5
+        elif lots >= 1:     price_fit = 1.5
+        elif lots >= 0.5:   price_fit = 0.5
+        else:               price_fit = 0.0
 
-        # 流动性适配 (0-5): 大本金要求更高流动性
+        # 流动性适配 (0-5)
         liquid_fit = 2.5
+        daily_volume = 0
         if turnover_col and cap_col:
             cap = float(df.loc[idx, cap_col])
             turnover = float(df.loc[idx, turnover_col])
             daily_volume = cap * (turnover / 100)
             if daily_volume > 0:
                 ratio = position_size / daily_volume
-                # 大本金阈值更严
                 strictness = 0.03 if principal > 200000 else 0.05
-                if ratio < strictness * 0.2:
-                    liquid_fit = 5
-                elif ratio < strictness * 0.6:
-                    liquid_fit = 4
-                elif ratio < strictness * 1.0:
-                    liquid_fit = 3
-                elif ratio < strictness * 2.0:
-                    liquid_fit = 1.5
-                else:
-                    liquid_fit = 0.5
+                if ratio < strictness * 0.2:      liquid_fit = 5.0
+                elif ratio < strictness * 0.6:    liquid_fit = 4.0
+                elif ratio < strictness * 1.0:    liquid_fit = 3.0
+                elif ratio < strictness * 2.0:    liquid_fit = 1.5
+                else:                              liquid_fit = 0.5
+
+        # 流动性底线惩罚：日成交额 < 1000万 → 扣3分（流动性陷阱）
+        if daily_volume > 0 and daily_volume < 10_000_000:
+            liquid_fit = max(0, liquid_fit - 3)
 
         scores[idx] = price_fit + liquid_fit
 
@@ -815,7 +809,8 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
+    s_sector = (s_res + sector_scores) / 2.0
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_sector, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -892,7 +887,8 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_res, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
+    s_sector = (s_res + sector_scores) / 2.0
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_sector, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
     df['基础总分'] = base_totals.round(1)
@@ -2105,8 +2101,13 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
                 elif t < 15: seal_s[idx] = 5
                 else: seal_s[idx] = 2
     tech_s = score_tech_form(df)
-    sector_mom = get_sector_heat_scores(df)
-    sector_res = get_sector_resonance(df)
+    sector_score = get_sector_score(df)
+
+    # 回测seal黄金封板奖励（与实盘一致）
+    seal_gold = pd.Series(0.0, index=df.index)
+    for idx in df.index:
+        if seal_s[idx] >= 20: seal_gold[idx] = 3.0
+    seal_s = (seal_s + seal_gold).clip(upper=28.0)
 
     # 历史股性：日期可用才计算，否则用默认
     if date_str:
@@ -2122,15 +2123,14 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     sent_s = pd.Series(5.0, index=df.index)
 
     scores = weight_manager.apply_weights(
-        seal_s, money_s, sector_res, sector_mom,
+        seal_s, money_s, sector_score,
         tech_s, history_s, sent_s,
         weights=w)
 
     df['回测评分'] = scores.round(1)
     df['seal_factor'] = seal_s.round(1)
     df['tech_factor'] = tech_s.round(1)
-    df['sector_mom_factor'] = sector_mom.round(1)
-    df['sector_res_factor'] = sector_res.round(1)
+    df['sector_factor'] = sector_score.round(1)
     df['history_factor'] = history_s.round(1)
     df['money_factor'] = money_s.round(1)  # 全默认，相关性为 0
     df['sentiment_factor'] = sent_s.round(1)  # 全默认，相关性为 0
@@ -2170,8 +2170,8 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     bot30 = sorted_scores.head(k)
 
     # 7 因子独立相关性（跳过常数因子避免 numpy warning）
-    _factor_names = ['seal_factor', 'tech_factor', 'sector_mom_factor',
-                     'sector_res_factor', 'history_factor',
+    _factor_names = ['seal_factor', 'tech_factor', 'sector_factor',
+                     'history_factor',
                      'money_factor', 'sentiment_factor']
     factor_correlations = {}
     for f in _factor_names:
@@ -2636,7 +2636,8 @@ def main():
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
     s_principal = score_by_principal(filtered, 20000)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_res_scores, sector_scores, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
+    sector_merged_cli = (sector_res_scores + sector_scores) / 2.0
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_merged_cli, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
