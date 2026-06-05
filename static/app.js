@@ -15,7 +15,7 @@ const _dom = {
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 // 版本化缓存：每次大版本更新 +1，旧缓存自动失效
-const _CACHE_VER = '5';
+const _CACHE_VER = '6';
 
 function _savePageCache(key, html, url) {
     try {
