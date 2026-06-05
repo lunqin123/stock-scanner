@@ -525,7 +525,7 @@ def _fetch_trend_data(today, principal):
     df = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
     if df.empty:
         _sys.stderr = _saved; return None, cols, zhaban_codes, hot_industries
-    df = df.sort_values('涨幅', ascending=False).head(15)
+    df = df.sort_values('涨幅', ascending=False).head(30)  # 扩大到30, 避免低涨幅高分股被挤出候选池
     _sys.stderr = _saved; return df, cols, zhaban_codes, hot_industries
 
 
