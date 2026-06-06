@@ -8,3 +8,15 @@ data/
 *.log
 server-guide.md
 qqChatBot.pem
+archive.db
+daily_data/
+scanner_factors.py
+verify_*.py
+do_commit*.py
+check_*.py
+inspect_*.py
+find_keys.py
+test_akshare_stable.py
+test_prev_stable.py
+test_score_stable.py
+test_score_direct.py
