@@ -231,8 +231,10 @@ function renderCommunityCards(items) {
 // ─── 板块卡片（增强版：含成分股列表 + 评分条 + 跳转链接） ───
 function renderSectorCards(items) {
     const parts = ['<div class="card-list">'];
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         const eff = item.efficiency || 0;
+        const sc = item.score || 0;
         const ec = eff >= 70 ? RING_COLORS.high : eff >= 50 ? RING_COLORS.mid : RING_COLORS.poor;
         const total = (item.limit_count||0) + (item.zhaban_count||0) + (item.dieting_count||0);
         const lc = item.limit_count || 0;
@@ -257,7 +259,6 @@ function renderSectorCards(items) {
             var sid = 'ss-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,5);
             stockListHtml = '<div class="sector-stock-wrap" style="padding:10px 0 4px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;line-height:1.8">';
             stockListHtml += '<span class="sector-stock-label">🧩 成分股</span>';
-            var storedPills = '';
             for (var si = 0; si < stocks.length; si++) {
                 var stk = stocks[si];
                 var cls = (si >= 3) ? ' sector-stock-pill-hide' : '';
@@ -272,23 +273,42 @@ function renderSectorCards(items) {
             stockListHtml += '</div>';
         }
 
+        // 左列 info
+        var infoHtml = '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">';
+        infoHtml += '<div class="info-row"><span class="label">联动分</span><span class="value" style="color:' + ec + '">' + sc + '</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">封板率</span><span class="value" style="color:' + ec + '">' + eff + '%</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">涨停数</span><span class="value" style="color:var(--green)">' + lc + '</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">炸板数</span><span class="value" style="color:var(--yellow)">' + zc + '</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">跌停数</span><span class="value" style="color:var(--red)">' + dc + '</span></div>';
+        if (total > 0) infoHtml += '<div class="info-row"><span class="label">赚钱效应</span><span class="value" style="color:' + (eff>=70?RING_COLORS.high:RING_COLORS.poor) + '">' + (eff>=80?'强':eff>=60?'中':'弱') + '</span></div>';
+        infoHtml += '</div>';
+
+        // 右列 bars
+        var bars = [
+            [lcPct, 'high', '涨停', lc + '', 'var(--green)'],
+            [zcPct, 'mid', '炸板', zc + '', 'var(--yellow)'],
+            [dcPct, 'low', '跌停', dc + '', 'var(--red)'],
+            [Math.min(100, eff), eff >= 70 ? 'high' : eff >= 50 ? 'mid' : 'low', '封板率', eff + '%', ec],
+        ];
+        var barsHtml = '<div class="card-bars" style="flex:1.5;min-width:150px">';
+        for (var bi = 0; bi < bars.length; bi++) {
+            var b = bars[bi];
+            barsHtml += '<div class="bar-row"><span class="bar-label">' + b[2] + '</span><div class="bar-track"><div class="bar-fill ' + b[1] + '" style="width:' + b[0] + '%"></div></div><span class="bar-val" style="color:' + b[4] + '">' + b[3] + '</span></div>';
+        }
+        barsHtml += '</div>';
+
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
-            '<span class="card-rank" style="font-size:13px;background:rgba(79,140,255,0.12);color:var(--accent)">' + lc + '只涨停</span>',
-            '<span class="card-name" style="font-size:16px">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="font-size:16px;font-weight:700;color:' + ec + '">' + item.score + '</span>',
+            '<span class="card-rank">#' + (i + 1) + '</span>',
+            '<span class="card-name">' + esc(item.name) + '</span>',
+            '<span class="card-code" style="font-size:12px;background:rgba(79,140,255,0.12);color:var(--accent);padding:2px 6px;border-radius:4px">' + lc + '只涨停</span>',
+            scoreRingHTML(sc),
             '</div>',
-            '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">涨停</span><div class="bar-track"><div class="bar-fill high" style="width:' + lcPct + '%"></div></div><span class="bar-val" style="color:var(--green)">' + lc + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">炸板</span><div class="bar-track"><div class="bar-fill mid" style="width:' + zcPct + '%"></div></div><span class="bar-val" style="color:var(--yellow)">' + zc + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">跌停</span><div class="bar-track"><div class="bar-fill low" style="width:' + dcPct + '%"></div></div><span class="bar-val" style="color:var(--red)">' + dc + '</span></div>',
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
+            infoHtml,
+            barsHtml,
             '</div>',
-            '<div class="card-info">',
-            '<div class="info-row"><span class="label">联动分</span><span class="value" style="color:' + ec + '">' + item.score + '</span></div>',
-            '<div class="info-row"><span class="label">封板率</span><span class="value" style="color:' + ec + '">' + eff + '%</span></div>',
-            total > 0 ? '<div class="info-row"><span class="label">赚钱效应</span><span class="value" style="color:' + (eff>=70?RING_COLORS.high:RING_COLORS.poor) + '">' + (eff>=80?'强':eff>=60?'中':'弱') + '</span></div>' : '',
-            '</div></div>',
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             stockListHtml,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
@@ -328,15 +348,15 @@ function renderMiniStockCards(items, pageKey) {
 // ─── 跌停翘板卡片（含评分 + 信号分析 + 策略） ───
 function renderDtqiaobanCards(items) {
     const parts = ['<div class="card-list">'];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        var sc = item.score || 0;
-        var col = sc >= 70 ? RING_COLORS.high : sc >= 50 ? RING_COLORS.mid : sc >= 35 ? RING_COLORS.low : RING_COLORS.poor;
-        var st = item.seal_time || '';
-        var sig = item.signals || [];
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const sc = item.score || 0;
+        const col = sc >= 70 ? RING_COLORS.high : sc >= 50 ? RING_COLORS.mid : sc >= 35 ? RING_COLORS.low : RING_COLORS.poor;
+        const st = item.seal_time || '';
+        const sig = item.signals || [];
+        const to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-');
 
-        // 信号标签
-        var tags = [];
+        const tags = [];
         if (sc >= 70) tags.push(['翘板概率高','tag-green']);
         else if (sc >= 50) tags.push(['有翘板可能','tag-blue']);
         else if (sc >= 35) tags.push(['翘板难度大','tag-yellow']);
@@ -349,35 +369,53 @@ function renderDtqiaobanCards(items) {
             else if (s.indexOf('超跌') >= 0) tags.push([s,'tag-yellow']);
         }
 
-        // 行情行
-        var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
-        if (item.price) infoHtml += '💰 ' + item.price.toFixed(2) + '  ';
-        if (item.consecutive >= 1) infoHtml += '📉 连跌' + item.consecutive + '板  ';
-        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : item.turnover;
-        if (item.turnover) infoHtml += '🔄 换手' + to + '%  ';
-        if (st) infoHtml += '⏰ ' + (parseInt(st.slice(0,2)) >= 14 ? '尾盘' : parseInt(st.slice(0,2)) >= 13 ? '午后' : parseInt(st.slice(0,2)) >= 10 ? '早盘' : '开盘') + st.slice(0,2) + ':' + st.slice(2);
+        // 左列 info
+        let infoHtml = '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">';
+        if (item.price) infoHtml += '<div class="info-row"><span class="label">价格</span><span class="value">' + item.price.toFixed(2) + '</span></div>';
+        if (item.consecutive >= 1) infoHtml += '<div class="info-row"><span class="label">连跌</span><span class="value">' + item.consecutive + '板</span></div>';
+        if (item.turnover != null) infoHtml += '<div class="info-row"><span class="label">换手</span><span class="value">' + to + '%</span></div>';
+        if (st) {
+            const hh = parseInt(st.slice(0,2));
+            const period = hh >= 14 ? '尾盘' : hh >= 13 ? '午后' : hh >= 10 ? '早盘' : '开盘';
+            infoHtml += '<div class="info-row"><span class="label">封板时间</span><span class="value">' + period + ' ' + st.slice(0,2) + ':' + st.slice(2) + '</span></div>';
+        }
+        if (item.seal_fund) infoHtml += '<div class="info-row"><span class="label">封单</span><span class="value">' + (item.seal_fund/1e4).toFixed(0) + '万</span></div>';
         infoHtml += '</div>';
 
-        // 策略
-        var adviceHtml = '';
+        // 右列 bars
+        const amountW = sig.indexOf('巨量翘板')>=0 ? 100 : sig.indexOf('放量翘板')>=0 ? 75 : sig.indexOf('微量翘板')>=0 ? 45 : 15;
+        const sealW = sig.indexOf('封单极小')>=0 ? 15 : sig.indexOf('封单偏小')>=0 ? 35 : sig.indexOf('封单适中')>=0 ? 55 : 90;
+        const bars = [
+            [Math.min(100, sc), sc >= 70 ? 'high' : sc >= 50 ? 'mid' : 'low', '翘板评分', sc + '', col],
+            [amountW, 'mid', '放量', (item.seal_fund ? (item.seal_fund/1e8).toFixed(2)+'亿' : '-'), null],
+            [sealW, 'low', '封单', (item.seal_fund ? (item.seal_fund/1e4).toFixed(0)+'万' : '-'), null],
+            [Math.min(100, to * 4), to > 15 ? 'high' : to > 5 ? 'mid' : 'low', '换手', to + '%', null],
+        ];
+        let barsHtml = '<div class="card-bars" style="flex:1.5;min-width:150px">';
+        for (const [pct, cls, lb, val, vc] of bars) {
+            barsHtml += '<div class="bar-row"><span class="bar-label">' + lb + '</span><div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div><span class="bar-val"' + (vc ? ' style="color:' + vc + '"' : '') + '>' + val + '</span></div>';
+        }
+        barsHtml += '</div>';
+
+        let adviceHtml = '';
         if (item.advice) {
-            var adviceColor = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div style="font-size:12px;color:' + adviceColor + ';padding:4px 0">策略: ' + esc(item.advice) + '</div>';
+            const adviceColor = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + adviceColor + '">📋 策略: ' + esc(item.advice) + '</div>';
         }
 
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
-            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-rank">#' + (i + 1) + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">' + sc + '</span>',
+            '<span class="card-code">' + esc(item.code) + '</span>',
+            '<span class="copy-btn" onclick="copyCode(\'' + esc(item.code) + '\',\'' + esc(item.name) + '\');event.stopPropagation();return false" title="复制代码">📋</span>',
+            scoreRingHTML(sc),
             '</div>',
-            '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">翘板评分</span><div class="bar-track"><div class="bar-fill ' + (sc >= 70 ? 'high' : sc >= 50 ? 'mid' : 'low') + '" style="width:' + Math.min(100, sc) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + sc + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">放量</span><div class="bar-track"><div class="bar-fill mid" style="width:' + (sig.indexOf('巨量翘板')>=0 ? 100 : sig.indexOf('放量翘板')>=0 ? 75 : sig.indexOf('微量翘板')>=0 ? 45 : 15) + '%"></div></div><span class="bar-val">' + (item.seal_fund ? (item.seal_fund/1e8).toFixed(2)+'亿' : '-') + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">封单</span><div class="bar-track"><div class="bar-fill low" style="width:' + (sig.indexOf('封单极小')>=0 ? 15 : sig.indexOf('封单偏小')>=0 ? 35 : sig.indexOf('封单适中')>=0 ? 55 : 90) + '%"></div></div><span class="bar-val">' + (item.seal_fund ? (item.seal_fund/1e4).toFixed(0)+'万' : '-') + '</span></div>',
-            '</div></div>',
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
             infoHtml,
+            barsHtml,
+            '</div>',
             adviceHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
@@ -492,22 +530,24 @@ function renderIndicatorsCards(items) {
 // ─── 趋势动量卡片（含趋势分析 + 量价 + 策略） ───
 function renderTrendCards(items) {
     const parts = ['<div class="card-list">'];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        var chg = item.change_pct || 0;
-        var col = chg > 0 ? (chg >= 7 ? '#ef4444' : chg >= 3 ? '#f87171' : '#fca5a5')
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const chg = item.change_pct || 0;
+        const col = chg > 0 ? (chg >= 7 ? '#ef4444' : chg >= 3 ? '#f87171' : '#fca5a5')
                 : chg < 0 ? (chg <= -5 ? '#16a34a' : chg <= -2 ? '#22c55e' : '#4ade80')
                 : '#94a3b8';
-        var sig = item.signals || [];
+        const sc = item.risk_score || 0;
+        const sig = item.signals || [];
+        const to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-');
 
-        var tags = [];
+        // 标签（保留趋势特有逻辑）
+        const tags = [];
         for (var si = 0; si < sig.length && tags.length < 5; si++) {
             var s = sig[si];
             if (s.indexOf('连板') >= 0) tags.push([s, 'tag-green']);
             else if (s.indexOf('活跃') >= 0 || s.indexOf('健康') >= 0) tags.push([s, 'tag-blue']);
             else tags.push([s, 'tag-gray']);
         }
-        // signals 为空时用 chg 做默认标签
         if (!tags.length) {
             if (chg >= 7) tags.push(['强势续涨','tag-green']);
             else if (chg >= 5) tags.push(['量价齐升','tag-blue']);
@@ -515,35 +555,53 @@ function renderTrendCards(items) {
         }
         if (item.industry) tags.push([esc(item.industry), 'tag-blue']);
 
-        var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
-        if (item.price) infoHtml += '💰 ' + item.price.toFixed(2) + '  ';
-        if (item.industry) infoHtml += '📌 ' + esc(item.industry) + '  ';
-        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : item.turnover;
-        if (item.turnover) infoHtml += '🔄 换手' + to + '%  ';
-        if (item.volume || item.volume_unit) infoHtml += '📊 ' + (item.volume || '') + (item.volume_unit || '');
+        // 左列 info：保留趋势特有信息
+        var infoHtml = '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">';
+        infoHtml += '<div class="info-row"><span class="label">涨幅</span><span class="value" style="color:' + col + '">' + fmtPct(chg) + '</span></div>';
+        if (item.price) infoHtml += '<div class="info-row"><span class="label">价格</span><span class="value">' + item.price.toFixed(2) + '</span></div>';
+        if (item.industry) infoHtml += '<div class="info-row"><span class="label">行业</span><span class="value">' + esc(item.industry) + '</span></div>';
+        if (item.turnover != null) infoHtml += '<div class="info-row"><span class="label">换手</span><span class="value">' + to + '%</span></div>';
+        if (item.volume || item.volume_unit) infoHtml += '<div class="info-row"><span class="label">成交</span><span class="value">' + (item.volume || '') + (item.volume_unit || '') + '</span></div>';
+        if (item.consecutive) infoHtml += '<div class="info-row"><span class="label">连涨</span><span class="value">' + item.consecutive + '天</span></div>';
         infoHtml += '</div>';
 
+        // 右列 bars：4 条
+        const bars = [
+            [Math.min(100, Math.abs(chg) * 10), chg >= 7 ? 'high' : chg >= 5 ? 'mid' : chg <= 0 ? 'neg' : 'low', '涨幅', fmtPct(chg), col],
+            [Math.min(100, (item.turnover || 0) * 4), (item.turnover || 0) > 15 ? 'high' : (item.turnover || 0) > 5 ? 'mid' : 'low', '换手', to + '%', null],
+            [Math.min(100, (item.consecutive || 0) * 30), 'high', '连涨', (item.consecutive || 0) + '天', null],
+            [sc, sc >= 80 ? 'high' : sc >= 60 ? 'mid' : 'low', '风险分', sc + '', null],
+        ];
+        var barsHtml = '<div class="card-bars" style="flex:1.5;min-width:150px">';
+        for (const [pct, cls, lb, val, vc] of bars) {
+            barsHtml += '<div class="bar-row"><span class="bar-label">' + lb + '</span><div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div><span class="bar-val"' + (vc ? ' style="color:' + vc + '"' : '') + '>' + val + '</span></div>';
+        }
+        barsHtml += '</div>';
+
+        // 策略提示
         var adviceHtml = '';
         if (item.advice) {
             var ac = chg >= 7 ? 'var(--green)' : chg >= 5 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div style="font-size:12px;color:' + ac + ';padding:4px 0">策略: ' + esc(item.advice) + '</div>';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 策略: ' + esc(item.advice) + '</div>';
         }
+
+        var tagsHtml = tags.length ? '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>' : '';
 
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
-            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-rank">#' + (i + 1) + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + ' | ' + (item.risk_score || 0) + '分</span>',
+            '<span class="card-code">' + esc(item.code) + '</span>',
+            '<span class="copy-btn" onclick="copyCode(\'' + esc(item.code) + '\',\'' + esc(item.name) + '\');event.stopPropagation();return false" title="复制代码">📋</span>',
+            scoreRingHTML(sc),
             '</div>',
-            '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">涨幅</span><div class="bar-track"><div class="bar-fill ' + (chg >= 7 ? 'high' : chg >= 5 ? 'mid' : chg <= 0 ? 'neg' : 'low') + '" style="width:' + Math.min(100, Math.abs(chg) * 10) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.turnover || 0) * 4) + '%"></div></div><span class="bar-val">' + (typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-')) + '%</span></div>',
-            '<div class="bar-row"><span class="bar-label">连涨</span><div class="bar-track"><div class="bar-fill high" style="width:' + Math.min(100, (item.consecutive || 0) * 30) + '%"></div></div><span class="bar-val">' + (item.consecutive || 0) + '天</span></div>',
-            '</div></div>',
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
             infoHtml,
+            barsHtml,
+            '</div>',
             adviceHtml,
-            '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
+            tagsHtml,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
@@ -554,17 +612,16 @@ function renderTrendCards(items) {
 
 // ─── 反转扫描卡片（昨涨停今回调 → 明日反包潜力） ───
 function renderReversalCards(items) {
-    var parts = ['<div class="card-list">'];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        var chg = item.change_pct || 0;
-        var col = chg > 0 ? '#ef4444' : chg < 0 ? '#22c55e' : '#94a3b8';
-        var sig = item.signals || [];
-        var sc = item.risk_score || 0;
+    const parts = ['<div class="card-list">'];
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const chg = item.change_pct || 0;
+        const col = chg > 0 ? '#ef4444' : chg < 0 ? '#22c55e' : '#94a3b8';
+        const sig = item.signals || [];
+        const sc = item.risk_score || 0;
+        const to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || 0);
 
-        var to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || 0);
-
-        var tags = [];
+        const tags = [];
         for (var si = 0; si < sig.length && tags.length < 5; si++) {
             var s = sig[si];
             if (s.indexOf('回调') >= 0 || s.indexOf('洗盘') >= 0) tags.push([s, 'tag-yellow']);
@@ -574,23 +631,46 @@ function renderReversalCards(items) {
         }
         if (item.industry) tags.push([esc(item.industry), 'tag-blue']);
 
+        // 左列 info
+        let infoHtml = '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">';
+        infoHtml += '<div class="info-row"><span class="label">今日涨幅</span><span class="value" style="color:' + col + '">' + fmtPct(chg) + '</span></div>';
+        if (item.price) infoHtml += '<div class="info-row"><span class="label">价格</span><span class="value">' + item.price.toFixed(2) + '</span></div>';
+        if (item.industry) infoHtml += '<div class="info-row"><span class="label">行业</span><span class="value">' + esc(item.industry) + '</span></div>';
+        if (item.turnover != null) infoHtml += '<div class="info-row"><span class="label">换手</span><span class="value">' + to + '%</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">反包潜力</span><span class="value" style="color:' + (sc >= 70 ? RING_COLORS.high : sc >= 50 ? RING_COLORS.mid : RING_COLORS.poor) + '">' + sc + '/100</span></div>';
+        infoHtml += '</div>';
+
+        // 右列 bars
+        const bars = [
+            [Math.min(100, Math.abs(chg) * 15), 'neg', '回调', fmtPct(chg), col],
+            [Math.min(100, to * 4), to > 20 ? 'high' : to > 10 ? 'mid' : 'low', '换手', to + '%', null],
+            [sc, sc >= 70 ? 'high' : sc >= 50 ? 'mid' : 'low', '反包分', sc + '', null],
+        ];
+        let barsHtml = '<div class="card-bars" style="flex:1.5;min-width:150px">';
+        for (const [pct, cls, lb, val, vc] of bars) {
+            barsHtml += '<div class="bar-row"><span class="bar-label">' + lb + '</span><div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div><span class="bar-val"' + (vc ? ' style="color:' + vc + '"' : '') + '>' + val + '</span></div>';
+        }
+        barsHtml += '</div>';
+
+        let adviceHtml = '';
+        if (item.advice) {
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 ' + esc(item.advice) + '</div>';
+        }
+
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
-            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-rank">#' + (i + 1) + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">' + fmtPct(chg) + ' | ' + sc + '分</span>',
+            '<span class="card-code">' + esc(item.code) + '</span>',
+            '<span class="copy-btn" onclick="copyCode(\'' + esc(item.code) + '\',\'' + esc(item.name) + '\');event.stopPropagation();return false" title="复制代码">📋</span>',
+            scoreRingHTML(sc),
             '</div>',
-            '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">回调</span><div class="bar-track"><div class="bar-fill neg" style="width:' + Math.min(100, Math.abs(chg) * 15) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + fmtPct(chg) + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">换手</span><div class="bar-track"><div class="bar-fill ' + (to > 20 ? 'high' : to > 10 ? 'mid' : 'low') + '" style="width:' + Math.min(100, to * 4) + '%"></div></div><span class="bar-val">' + to + '%</span></div>',
-            '</div></div>',
-            '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">',
-            (item.price ? '💰 ' + item.price.toFixed(2) + '  ' : ''),
-            (item.industry ? '📌 ' + esc(item.industry) + '  ' : ''),
-            (item.turnover ? '🔄 换手' + to + '%  ' : ''),
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
+            infoHtml,
+            barsHtml,
             '</div>',
-            (item.advice ? '<div style="font-size:12px;color:var(--yellow);padding:4px 0">' + esc(item.advice) + '</div>' : ''),
+            adviceHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
@@ -603,14 +683,15 @@ function renderReversalCards(items) {
 // ─── 炸板分析卡片（含评分 + 信号分析 + 策略） ───
 function renderZhabanCards(items) {
     const parts = ['<div class="card-list">'];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        var sc = item.score || 0;
-        var col = sc >= 70 ? RING_COLORS.high : sc >= 50 ? RING_COLORS.mid : sc >= 35 ? RING_COLORS.low : RING_COLORS.poor;
-        var sig = item.signals || [];
-        var st = item.seal_time || '';
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const sc = item.score || 0;
+        const col = sc >= 70 ? RING_COLORS.high : sc >= 50 ? RING_COLORS.mid : sc >= 35 ? RING_COLORS.low : RING_COLORS.poor;
+        const sig = item.signals || [];
+        const st = item.seal_time || '';
+        const to = typeof item.turnover === 'number' ? item.turnover.toFixed(1) : (item.turnover || '-');
 
-        var tags = [];
+        const tags = [];
         if (sc >= 70) tags.push(['反包潜力高','tag-green']);
         else if (sc >= 50) tags.push(['有反包可能','tag-blue']);
         else if (sc >= 35) tags.push(['反包难度大','tag-yellow']);
@@ -624,41 +705,57 @@ function renderZhabanCards(items) {
             else tags.push([s, 'tag-gray']);
         }
 
-        var infoHtml = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">';
-        if (item.price) infoHtml += '💰 ' + item.price.toFixed(2) + '  ';
-        if (item.industry) infoHtml += '📌 ' + esc(item.industry) + '  ';
-        if (st) infoHtml += '⏰ 封板' + st.slice(0,2) + ':' + st.slice(2) + '  ';
-        if (item.turnover) infoHtml += '🔄 换手' + item.turnover + '%';
-        infoHtml += '</div>';
-
-        var adviceHtml = '';
-        if (item.advice) {
-            var ac = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div style="font-size:12px;color:' + ac + ';padding:4px 0">策略: ' + esc(item.advice) + '</div>';
-        }
-
-        // 净流入金额显示
-        var nm = item.net_money || 0;
-        var nmStr = nm >= 0 ? '+' : '';
+        const nm = item.net_money || 0;
+        let nmStr = nm >= 0 ? '+' : '';
         if (Math.abs(nm) >= 1e8) nmStr += (nm/1e8).toFixed(2) + '亿';
         else if (Math.abs(nm) >= 1e4) nmStr += (nm/1e4).toFixed(0) + '万';
         else nmStr += nm.toFixed(0);
 
+        // 左列 info
+        let infoHtml = '<div class="card-info" style="flex:1;min-width:120px;font-size:12px">';
+        if (item.price) infoHtml += '<div class="info-row"><span class="label">价格</span><span class="value">' + item.price.toFixed(2) + '</span></div>';
+        if (item.industry) infoHtml += '<div class="info-row"><span class="label">行业</span><span class="value">' + esc(item.industry) + '</span></div>';
+        if (st) infoHtml += '<div class="info-row"><span class="label">封板时间</span><span class="value">' + st.slice(0,2) + ':' + st.slice(2) + '</span></div>';
+        if (item.turnover != null) infoHtml += '<div class="info-row"><span class="label">换手</span><span class="value">' + to + '%</span></div>';
+        infoHtml += '<div class="info-row"><span class="label">净流入</span><span class="value ' + (nm >= 0 ? 'green' : 'red') + '">' + nmStr + '</span></div>';
+        infoHtml += '</div>';
+
+        // 右列 bars
+        const bars = [
+            [Math.min(100, sc), sc >= 70 ? 'high' : sc >= 50 ? 'mid' : 'low', '反包评分', sc + '', col],
+            [Math.min(100, Math.abs(nm) / 2e8 * 100), nm >= 0 ? 'high' : 'low', '资金净流', nmStr, null],
+            [Math.min(100, (item.seal_fund || 0) / 1e8 * 50), 'mid', '封单', (item.seal_fund ? (item.seal_fund/1e4).toFixed(0) + '万' : '-'), null],
+            [Math.min(100, to * 4), to > 15 ? 'high' : to > 5 ? 'mid' : 'low', '换手', to + '%', null],
+        ];
+        let barsHtml = '<div class="card-bars" style="flex:1.5;min-width:150px">';
+        for (const [pct, cls, lb, val, vc] of bars) {
+            barsHtml += '<div class="bar-row"><span class="bar-label">' + lb + '</span><div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div><span class="bar-val"' + (vc ? ' style="color:' + vc + '"' : '') + '>' + val + '</span></div>';
+        }
+        barsHtml += '</div>';
+
+        let adviceHtml = '';
+        if (item.advice) {
+            const ac = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 策略: ' + esc(item.advice) + '</div>';
+        }
+
+        const tagsHtml = '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>';
+
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
-            '<span class="card-rank">' + item.code + '</span>',
+            '<span class="card-rank">#' + (i + 1) + '</span>',
             '<span class="card-name">' + esc(item.name) + '</span>',
-            '<span class="card-score" style="color:' + col + '">' + sc + '</span>',
+            '<span class="card-code">' + esc(item.code) + '</span>',
+            '<span class="copy-btn" onclick="copyCode(\'' + esc(item.code) + '\',\'' + esc(item.name) + '\');event.stopPropagation();return false" title="复制代码">📋</span>',
+            scoreRingHTML(sc),
             '</div>',
-            '<div class="card-body"><div class="card-bars">',
-            '<div class="bar-row"><span class="bar-label">反包评分</span><div class="bar-track"><div class="bar-fill ' + (sc >= 70 ? 'high' : sc >= 50 ? 'mid' : 'low') + '" style="width:' + Math.min(100, sc) + '%"></div></div><span class="bar-val" style="color:' + col + '">' + sc + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">资金</span><div class="bar-track"><div class="bar-fill ' + (nm >= 0 ? 'high' : 'low') + '" style="width:' + Math.min(100, Math.abs(nm) / 2e8 * 100) + '%"></div></div><span class="bar-val ' + (nm >= 0 ? 'green' : 'red') + '">' + nmStr + '</span></div>',
-            '<div class="bar-row"><span class="bar-label">封板</span><div class="bar-track"><div class="bar-fill mid" style="width:' + Math.min(100, (item.seal_fund || 0) / 1e8 * 50) + '%"></div></div><span class="bar-val">' + (item.seal_fund ? (item.seal_fund/1e4).toFixed(0) + '万' : '-') + '</span></div>',
-            '</div></div>',
+            '<div class="card-body" style="display:flex;flex-wrap:wrap;gap:8px 16px">',
             infoHtml,
+            barsHtml,
+            '</div>',
             adviceHtml,
-            '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
+            tagsHtml,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
