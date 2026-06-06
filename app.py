@@ -373,6 +373,43 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
     ))
 
 
+def _fetch_three_pools(today: str, ak):
+    """板块卡片专用: 一次性拉 3 个池 (涨停/炸板/跌停)"""
+    print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
+    limit_df = ak.stock_zt_pool_em(date=today)
+    print(f"  [板块卡片] 涨停 {len(limit_df)} 只, 拉取炸板池...", file=sys.stderr)
+    zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
+    print(f"  [板块卡片] 炸板 {len(zhaban_df)} 只, 拉取跌停池...", file=sys.stderr)
+    dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
+    print(f"  [板块卡片] 跌停 {len(dieting_df)} 只, 计算板块得分...", file=sys.stderr)
+    return (limit_df, zhaban_df, dieting_df)
+
+
+def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
+    """通用 pool -> data 加载器 (缓存 + 异常处理) - P1-3 重构
+    返回 (data, from_cache, error_response):
+        - data 不为 None: 拉到的数据 (可能来自缓存)
+        - from_cache: True 表示从缓存读到的
+        - error_response 不为 None: 端点应直接 return 它
+    """
+    if not refresh:
+        cached = daily_get_pkl(cache_key)
+        if cached is not None:
+            return cached, True, None
+    try:
+        data = loader()
+    except Exception as e:
+        print(f"  [{cache_key}] 拉取失败: {e}", file=sys.stderr)
+        return None, False, JSONResponse({"ok": False, "error": str(e), "items": []})
+    # 空数据
+    if data is None:
+        return None, False, {"ok": True, "items": []}
+    if hasattr(data, 'empty') and data.empty:
+        return None, False, {"ok": True, "items": []}
+    daily_set_pkl(cache_key, data, force=refresh)
+    return data, False, None
+
+
 @app.get("/api/scan/limit-up/cards")
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
                               principal: float = Query(20000, description="本金(元)"),
@@ -384,32 +421,21 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     plan_name = plan or None
     raw_key = f"limit_up_raw_{int(principal)}_{plan_name or 'default'}"
 
-    from datetime import date
-    print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
+    print("  [涨停卡片] 开始扫描", file=sys.stderr)
     today = _today_trading()
-    try:
-        data = None
-        if not refresh:
-            cached = daily_get_pkl(raw_key)
-            if cached is not None:
-                data = cached
-                print("  [涨停卡片] 缓存命中,重算 items", file=sys.stderr)
-
-        if data is None:
-            data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
-            if data is None:
-                print("  [涨停卡片] 无数据", file=sys.stderr)
-                return {"ok": True, "stocks": [], "sentiment": {}}
-            if data.get('sentiment_ok'):
-                daily_set_pkl(raw_key, data, force=refresh)
-
-        print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
-        # 始终用最新 _make_cache_entry 重新组装 items
-        result = _make_cache_entry(data['stocks'], data['sentiment_score'],
-                                    data['sentiment_level'], data['date'])
-        return result
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e), "stocks": []})
+    data, from_cache, err = _cached_pool_loader(
+        raw_key,
+        lambda: _scan_limit_up_data(today, principal=principal, plan_name=plan_name),
+        refresh
+    )
+    if err:
+        return err
+    if data is None or not data.get('stocks'):
+        return {"ok": True, "stocks": [], "sentiment": {}}
+    print(f"  [涨停卡片] {'缓存命中' if from_cache else '完成'}, 共 {len(data['stocks'])} 只", file=sys.stderr)
+    # 始终用最新 _make_cache_entry 重新组装 items
+    return _make_cache_entry(data['stocks'], data['sentiment_score'],
+                              data['sentiment_level'], data['date'])
 
 
 @app.get("/api/scan/sector/cards")
@@ -425,30 +451,17 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     today = _today_trading()
     raw_key = f"sector_raw_{today}"
 
-    limit_df = zhaban_df = dieting_df = None
-    if not refresh:
-        cached = daily_get_pkl(raw_key)
-        if cached is not None:
-            try:
-                limit_df, zhaban_df, dieting_df = cached
-                print("  [板块卡片] 缓存命中,重算 items", file=sys.stderr)
-            except Exception:
-                limit_df = None  # 降级重算
-
-    if limit_df is None:
-        print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
-        try:
-            limit_df = ak.stock_zt_pool_em(date=today)
-            print(f"  [板块卡片] 涨停 {len(limit_df)} 只, 拉取炸板池...", file=sys.stderr)
-            zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
-            print(f"  [板块卡片] 炸板 {len(zhaban_df)} 只, 拉取跌停池...", file=sys.stderr)
-            dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
-            print(f"  [板块卡片] 跌停 {len(dieting_df)} 只, 计算板块得分...", file=sys.stderr)
-        except Exception as e:
-            print(f"  [板块卡片] 错误: {e}", file=sys.stderr)
-            return JSONResponse({"ok": False, "error": str(e), "items": []})
-        # 写 pkl 缓存
-        daily_set_pkl(raw_key, (limit_df, zhaban_df, dieting_df), force=refresh)
+    # 一次性拉 3 个池 (limit_df / zhaban_df / dieting_df)
+    pools, from_cache, err = _cached_pool_loader(
+        raw_key,
+        lambda: _fetch_three_pools(today, ak),
+        refresh
+    )
+    if err:
+        return err
+    if pools is None:
+        return {"ok": True, "items": []}
+    limit_df, zhaban_df, dieting_df = pools
 
     # 统一板块评分
     from scanner import score_sector_data
@@ -735,23 +748,18 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     today = _today_trading()
     raw_key = f"trend_raw_{today}_{int(principal)}"
 
-    trend = cols = zhaban_codes = hot_industries = industry_counts = sector_top_chg = None
-    if not refresh:
-        cached = daily_get_pkl(raw_key)
-        if cached is not None:
-            try:
-                (trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg) = cached
-                print(f"  [趋势卡片] 缓存命中,重算 items (raw={today})", file=sys.stderr)
-            except Exception:
-                trend = None  # 缓存损坏,降级重算
-
-    if trend is None:
-        # 拉原始数据 + 写缓存
-        trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg = _fetch_trend_data(today, principal)
-        if trend is None or trend.empty:
-            return {"ok": True, "items": []}
-        daily_set_pkl(raw_key, (trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg),
-                      force=refresh)
+    cached_data, from_cache, err = _cached_pool_loader(
+        raw_key,
+        lambda: _fetch_trend_data(today, principal),
+        refresh
+    )
+    if err:
+        return err
+    if cached_data is None:
+        return {"ok": True, "items": []}
+    (trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg) = cached_data
+    if trend is None or trend.empty:
+        return {"ok": True, "items": []}
 
     # 始终用最新 _build_trend_items 逻辑重算 items
     items = _build_trend_items(trend, cols, zhaban_codes, hot_industries,
@@ -767,12 +775,16 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
 
     today = _today_trading()
     print("  [反转扫描] 开始...", file=sys.stderr)
-    try:
-        prev = ak.stock_zt_pool_previous_em(date=today)
-        if prev is None or prev.empty:
-            return {"ok": True, "items": []}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    raw_key = f"reversal_raw_{today}"
+    prev, from_cache, err = _cached_pool_loader(
+        raw_key,
+        lambda: ak.stock_zt_pool_previous_em(date=today),
+        refresh
+    )
+    if err:
+        return err
+    if prev is None or prev.empty:
+        return {"ok": True, "items": []}
 
     df = filter_non_main_board(prev)
     if df.empty:
@@ -892,30 +904,15 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     today = _today_trading()
     raw_key = f"zhaban_raw_{today}"
 
-    zb = None
-    if not refresh:
-        cached = daily_get_pkl(raw_key)
-        if cached is not None:
-            try:
-                zb = cached
-                print("  [炸板卡片] 缓存命中,重算 items", file=sys.stderr)
-            except Exception:
-                zb = None  # 降级重算
-
-    if zb is None:
-        print("  [炸板卡片] 拉取炸板池...", file=sys.stderr)
-        try:
-            zb = ak.stock_zt_pool_zbgc_em(date=today)
-            print(f"  [炸板卡片] 获取 {len(zb)} 只", file=sys.stderr)
-        except Exception as e:
-            print(f"  [炸板卡片] 错误: {e}", file=sys.stderr)
-            return JSONResponse({"ok": False, "error": str(e), "items": []})
-        if zb.empty:
-            return {"ok": True, "items": []}
-        daily_set_pkl(raw_key, zb, force=refresh)
-    else:
-        if zb.empty:
-            return {"ok": True, "items": []}
+    zb, from_cache, err = _cached_pool_loader(
+        raw_key,
+        lambda: ak.stock_zt_pool_zbgc_em(date=today),
+        refresh
+    )
+    if err:
+        return err
+    if zb is None or (hasattr(zb, 'empty') and zb.empty):
+        return {"ok": True, "items": []}
 
     # 过滤 (与 /api/scan/zhaban 一致: ST/北交/科创/创业板 + 流通市值 + 价格)
     df = zb.copy()
