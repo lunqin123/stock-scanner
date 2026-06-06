@@ -25,6 +25,8 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 
+from cache import _is_trading_day, _last_trading_date  # 交易日历工具
+
 _CST = timezone(timedelta(hours=8))
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive.db")
 
