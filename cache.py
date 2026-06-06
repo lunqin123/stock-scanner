@@ -185,9 +185,29 @@ def daily_get_pkl(key: str):
         path = _daily_path(key).replace('.json', '.pkl')
         if os.path.exists(path):
             with open(path, 'rb') as f:
-                return _pickle.load(f)
+                return pickle.load(f)
     except Exception:
         return None
+    return None
+
+
+# ═══════════════════════════════════════════
+#  统一缓存 key 构造 (P2-2 重构)
+# ═══════════════════════════════════════════
+
+def make_key(module: str, feature: str, version: int = 1, **params) -> str:
+    """统一构造缓存 key, 格式: {module}_{feature}_{param_kv}_v{version}
+    避免散落各文件硬编码 key 字符串
+    """
+    parts = [module, feature]
+    # 排序 params 保证稳定性
+    for k in sorted(params):
+        v = params[k]
+        if v is None:
+            continue
+        parts.append(f"{k}{v}")
+    parts.append(f"v{version}")
+    return "_".join(str(p) for p in parts if p)
     return None
 
 

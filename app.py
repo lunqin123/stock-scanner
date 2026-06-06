@@ -419,7 +419,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     每次用最新 _make_cache_entry 重新组装 items。改组装逻辑后直接 reload 即可。
     """
     plan_name = plan or None
-    raw_key = f"limit_up_raw_{int(principal)}_{plan_name or 'default'}"
+    raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default")
 
     print("  [涨停卡片] 开始扫描", file=sys.stderr)
     today = _today_trading()
@@ -449,7 +449,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     from datetime import date
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    raw_key = f"sector_raw_{today}"
+    raw_key = make_key("app", "sector_raw", date=today)
 
     # 一次性拉 3 个池 (limit_df / zhaban_df / dieting_df)
     pools, from_cache, err = _cached_pool_loader(
@@ -746,7 +746,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     """
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    raw_key = f"trend_raw_{today}_{int(principal)}"
+    raw_key = make_key("app", "trend_raw", date=today, principal=int(principal))
 
     cached_data, from_cache, err = _cached_pool_loader(
         raw_key,
@@ -775,7 +775,7 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
 
     today = _today_trading()
     print("  [反转扫描] 开始...", file=sys.stderr)
-    raw_key = f"reversal_raw_{today}"
+    raw_key = make_key("app", "reversal_raw", date=today)
     prev, from_cache, err = _cached_pool_loader(
         raw_key,
         lambda: ak.stock_zt_pool_previous_em(date=today),
@@ -902,7 +902,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     from scanner import filter_non_main_board
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    raw_key = f"zhaban_raw_{today}"
+    raw_key = make_key("app", "zhaban_raw", date=today)
 
     zb, from_cache, err = _cached_pool_loader(
         raw_key,
