@@ -879,121 +879,121 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
 
 @app.get("/api/scan/zhaban/cards")
 def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
-    """炸板分析 — 结构化数据（含评分、分析、跳转）
-    缓存策略: 缓存原始 df(跌停池),items 每次用最新评分逻辑重算。
+    """炸板反包 — 结构化数据（含评分、信号分析、策略、跳转）
+    缓存策略: 缓存炸板池原始 df,items 每次用最新评分逻辑重算。
     改评分逻辑后直接 reload 即可看到新结果。
-    注: 当前实现里炸板端点实际拉的是跌停池(zhuanbang 误用 dtgc),
-        缓存策略独立于数据源 bug,后续单独修复。
+    数据源: ak.stock_zt_pool_zbgc_em (炸板池) + score_zhaban_data
     """
     import akshare as ak
     import pandas as pd
     from datetime import date
-    import numpy as np
-    from scanner import fetch_fund_flow_data, get_money_flow_scores, seal_time_score
+    from scanner import filter_non_main_board
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     raw_key = f"zhaban_raw_{today}"
 
-    dt = None
+    zb = None
     if not refresh:
         cached = daily_get_pkl(raw_key)
         if cached is not None:
             try:
-                dt = cached
+                zb = cached
                 print("  [炸板卡片] 缓存命中,重算 items", file=sys.stderr)
             except Exception:
-                dt = None  # 降级重算
+                zb = None  # 降级重算
 
-    if dt is None:
-        print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
+    if zb is None:
+        print("  [炸板卡片] 拉取炸板池...", file=sys.stderr)
         try:
-            dt = ak.stock_zt_pool_dtgc_em(date=today)
-            print(f"  [翘板卡片] 获取 {len(dt)} 只", file=sys.stderr)
+            zb = ak.stock_zt_pool_zbgc_em(date=today)
+            print(f"  [炸板卡片] 获取 {len(zb)} 只", file=sys.stderr)
         except Exception as e:
-            print(f"  [翘板卡片] 错误: {e}", file=sys.stderr)
+            print(f"  [炸板卡片] 错误: {e}", file=sys.stderr)
             return JSONResponse({"ok": False, "error": str(e), "items": []})
-        if dt.empty:
+        if zb.empty:
             return {"ok": True, "items": []}
-        daily_set_pkl(raw_key, dt, force=refresh)
+        daily_set_pkl(raw_key, zb, force=refresh)
     else:
-        if dt.empty:
+        if zb.empty:
             return {"ok": True, "items": []}
 
-    # 列索引
-    code_col = 1; name_col = 2; change_col = 3; price_col = 4
-    turnover_col = 9 if len(dt.columns) > 9 else None
-    seal_fund_col = 10 if len(dt.columns) > 10 else None
-    seal_time_col = 11 if len(dt.columns) > 11 else None
-    deal_col = 12 if len(dt.columns) > 12 else None
-    cont_col = 13 if len(dt.columns) > 13 else None
+    # 过滤 (与 /api/scan/zhaban 一致: ST/北交/科创/创业板 + 流通市值 + 价格)
+    df = zb.copy()
+    df = filter_non_main_board(df)
+    if '流通市值' in df.columns:
+        df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+    if len(df.columns) > 4:
+        df = df[df.iloc[:, 4].astype(float) <= 60]
+    if df.empty:
+        return {"ok": True, "items": []}
 
-    from scanner import NON_MAIN_BOARD_PREFIXES
-    # 前置过滤
-    df = dt.copy()
-    name_col_df = df.columns[2]
-    df = df[~df[name_col_df].astype(str).str.startswith(('ST', '*ST'), na=False)]
-    df = df[~df.iloc[:, 1].astype(str).str.startswith(NON_MAIN_BOARD_PREFIXES)]
-    if len(df.columns) > 6:
-        df = df[df.iloc[:, 6].astype(float).fillna(0) <= 200 * 1e8]
-    if df.empty: return {"ok": True, "items": []}
+    # 评分 (炸板反包评分函数)
+    from scanner import score_zhaban_data
+    scored = score_zhaban_data(df, today)
 
-    # 统一评分（调用 scanner 评分函数）
-    from scanner import score_dtqiaoban_data
-    scored = score_dtqiaoban_data(df)
+    # 列识别 (与 /api/scan/zhaban 一致)
+    st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
+    sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
+    zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
+    to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
+    ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
 
     items = []
     for _, row in scored.iterrows():
-        code = str(row.iloc[code_col]).strip().zfill(6)
-        name = str(row.iloc[name_col])
-        total = float(row.get('翘板评分', 0))
-        turn_val = float(row.iloc[turnover_col]) if turnover_col and pd.notna(row.iloc[turnover_col]) else 0
-        seal_val = float(row.iloc[seal_fund_col]) if seal_fund_col and pd.notna(row.iloc[seal_fund_col]) else 0
-        cont_val = int(float(row.iloc[cont_col])) if cont_col and pd.notna(row.iloc[cont_col]) else 0
-        st = str(row.iloc[seal_time_col]) if seal_time_col and pd.notna(row.iloc[seal_time_col]) else ''
+        code = str(row.iloc[1]).strip().zfill(6)
+        name = str(row.iloc[2])
+        seal_time = str(row.get(st_col, ''))[:4]
+        total = float(row.get('总分', 0))
+        price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
+        turnover = round(float(row.get(to_col, 0) or 0), 1)
+        zb_times = int(float(row.get(zb_col, 0))) if pd.notna(row.get(zb_col, None)) else 0
+        seal_fund = float(row.get(sf_col, 0) or 0)
+        net = float(row.get('净流入', 0))
+        industry = str(row.get(ind_col, ''))
 
-        # 信号描述
+        # 信号标签
         sigs = []
-        if total >= 60: sigs.append("高信号")
-        elif total >= 35: sigs.append("中等信号")
-        else: sigs.append("弱信号")
-        if turn_val > 10: sigs.append("高换手承接")
-        elif turn_val > 5: sigs.append("有换手")
-        if cont_val >= 3: sigs.append(f"N{cont_val}板超跌")
+        if seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 10: sigs.append('早盘封板')
+        elif seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 11: sigs.append('上午封板')
+        else: sigs.append('午后封板')
+        if zb_times > 0: sigs.append(f'炸板{zb_times}次')
+        if net > 1e8: sigs.append('资金承接强')
+        elif net > 0: sigs.append('有资金承接')
+        else: sigs.append('资金流出')
+        if 8 <= turnover <= 20: sigs.append('换手适中')
+        elif turnover > 20: sigs.append('高换手')
 
-        if total >= 70: advice = "竞价关注，放量高开可博弈反抽，目标+3%~+5%"
-        elif total >= 50: advice = "竞价观察，需放量确认，否则观望"
-        elif total >= 35: advice = "仅观望，需竞价放量确认方向"
-        else: advice = "无量封死，不建议参与"
+        # 建议
+        if total >= 70: advice = '反包潜力高，竞价高开放量可参与'
+        elif total >= 50: advice = '竞价观察，高开放量可博弈反包'
+        elif total >= 35: advice = '仅观望，需竞价放量确认'
+        else: advice = '不参与'
 
-        # ── 竞价条件 ──
+        # 竞价条件
         auction_parts = []
-        if total >= 70: auction_parts.append('高开1-3%翘板')
-        elif total >= 50: auction_parts.append('平开或高开1%试翘板')
-        else: auction_parts.append('平开观望')
-        if turn_val > 10: auction_parts.append('竞价量>上交易日8%放量')
-        elif turn_val > 5: auction_parts.append('竞价量>上交易日5%')
-        else: auction_parts.append('竞价量>上交易日3%否则放弃')
-        if seal_val > 0 and seal_val < 5e6: auction_parts.append('封单轻易翘')
-        elif seal_val >= 5e7: auction_parts.append('封单重难翘')
-        if cont_val >= 3: auction_parts.append('N板超跌反弹')
-        if st:
-            hh = int(st[:2]) if len(st) >= 2 else 0
-            if hh >= 14: auction_parts.append('尾盘跌停次日弱')
-            elif hh < 11: auction_parts.append('早盘跌停次日易翘')
-        auction_check = '；'.join(auction_parts)
+        if seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 10: auction_parts.append('早盘封可参与')
+        elif seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 13: auction_parts.append('午前封一般')
+        else: auction_parts.append('午后封谨慎')
+        if net > 1e8: auction_parts.append('资金强承接')
+        elif net > 0: auction_parts.append('有资金承接')
+        else: auction_parts.append('资金流出谨慎')
+        if 8 <= turnover <= 20: auction_parts.append('换手适中')
+        elif turnover > 20: auction_parts.append('换手偏高')
+        if zb_times >= 2: auction_parts.append(f'炸板{zb_times}次分歧')
 
         items.append({
-            'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
-            'score': int(total), 'price': float(row.iloc[price_col]),
-            'change': float(row.iloc[change_col]), 'turnover': round(turn_val, 1),
-            'seal_fund': seal_val, 'consecutive': cont_val, 'seal_time': st,
-            'signals': sigs, 'advice': advice, 'auction_check': auction_check,
+            'code': code, 'name': name, 'score': int(total), 'price': price,
+            'seal_time': seal_time, 'turnover': turnover, 'seal_fund': seal_fund,
+            'zhaban_times': zb_times, 'industry': industry, 'net_money': round(net, 0),
+            'signals': sigs, 'advice': advice, 'auction_check': '；'.join(auction_parts),
+            'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
 
-    items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
     # items 始终用最新逻辑重算(raw 已 pkl 缓存,无需 daily_set)
-    return result
+    return {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
+
+
+
 
 
 @app.get("/api/scan/zhaban")
