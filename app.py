@@ -377,29 +377,36 @@ def _run_limit_up_scan(today_str: str, table_mode: bool):
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
                               principal: float = Query(20000, description="本金(元)"),
                               plan: str = Query(None, description="评分方案(A/B/...)")):
-    """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）"""
+    """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）
+    缓存策略: 缓存 _scan_limit_up_data 返回的原始 dict(含 stocks/sentiment),
+    每次用最新 _make_cache_entry 重新组装 items。改组装逻辑后直接 reload 即可。
+    """
     plan_name = plan or None
-    cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
-
-    # 盘后缓存命中直接返回(避免反复重算)
-    if not refresh:
-        cached = daily_get(cache_key)
-        if cached:
-            return cached
+    raw_key = f"limit_up_raw_{int(principal)}_{plan_name or 'default'}"
 
     from datetime import date
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = _today_trading()
     try:
-        data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
+        data = None
+        if not refresh:
+            cached = daily_get_pkl(raw_key)
+            if cached is not None:
+                data = cached
+                print("  [涨停卡片] 缓存命中,重算 items", file=sys.stderr)
+
         if data is None:
-            print("  [涨停卡片] 无数据", file=sys.stderr)
-            return {"ok": True, "stocks": [], "sentiment": {}}
+            data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
+            if data is None:
+                print("  [涨停卡片] 无数据", file=sys.stderr)
+                return {"ok": True, "stocks": [], "sentiment": {}}
+            if data.get('sentiment_ok'):
+                daily_set_pkl(raw_key, data, force=refresh)
+
         print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
+        # 始终用最新 _make_cache_entry 重新组装 items
         result = _make_cache_entry(data['stocks'], data['sentiment_score'],
                                     data['sentiment_level'], data['date'])
-        if data.get('sentiment_ok'):
-            daily_set(cache_key, result, force=refresh)
         return result
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e), "stocks": []})
@@ -407,31 +414,41 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 
 @app.get("/api/scan/sector/cards")
 def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
-    """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）"""
+    """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）
+    缓存策略: 缓存 3 个原始 df(涨停/炸板/跌停池),items 每次用最新逻辑重算。
+    改 items 组装逻辑后直接 reload 即可看到新结果。
+    """
     import akshare as ak
     import pandas as pd
     from datetime import date
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    key = f"sector_cards_{today}"
+    raw_key = f"sector_raw_{today}"
 
-    # 盘后缓存命中直接返回
+    limit_df = zhaban_df = dieting_df = None
     if not refresh:
-        cached = daily_get(key)
-        if cached:
-            return cached
+        cached = daily_get_pkl(raw_key)
+        if cached is not None:
+            try:
+                limit_df, zhaban_df, dieting_df = cached
+                print("  [板块卡片] 缓存命中,重算 items", file=sys.stderr)
+            except Exception:
+                limit_df = None  # 降级重算
 
-    print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
-    try:
-        limit_df = ak.stock_zt_pool_em(date=today)
-        print(f"  [板块卡片] 涨停 {len(limit_df)} 只, 拉取炸板池...", file=sys.stderr)
-        zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
-        print(f"  [板块卡片] 炸板 {len(zhaban_df)} 只, 拉取跌停池...", file=sys.stderr)
-        dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
-        print(f"  [板块卡片] 跌停 {len(dieting_df)} 只, 计算板块得分...", file=sys.stderr)
-    except Exception as e:
-        print(f"  [板块卡片] 错误: {e}", file=sys.stderr)
-        return JSONResponse({"ok": False, "error": str(e), "items": []})
+    if limit_df is None:
+        print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
+        try:
+            limit_df = ak.stock_zt_pool_em(date=today)
+            print(f"  [板块卡片] 涨停 {len(limit_df)} 只, 拉取炸板池...", file=sys.stderr)
+            zhaban_df = ak.stock_zt_pool_zbgc_em(date=today)
+            print(f"  [板块卡片] 炸板 {len(zhaban_df)} 只, 拉取跌停池...", file=sys.stderr)
+            dieting_df = ak.stock_zt_pool_dtgc_em(date=today)
+            print(f"  [板块卡片] 跌停 {len(dieting_df)} 只, 计算板块得分...", file=sys.stderr)
+        except Exception as e:
+            print(f"  [板块卡片] 错误: {e}", file=sys.stderr)
+            return JSONResponse({"ok": False, "error": str(e), "items": []})
+        # 写 pkl 缓存
+        daily_set_pkl(raw_key, (limit_df, zhaban_df, dieting_df), force=refresh)
 
     # 统一板块评分
     from scanner import score_sector_data
@@ -490,7 +507,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
             'stocks': stock_list, 'sector_code': '', 'auction_check': auction_check,
         })
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
-    daily_set(key, result, force=refresh)
+    # items 始终用最新逻辑重算(raw 已 pkl 缓存,无需 daily_set)
     return result
 
 
@@ -862,7 +879,12 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
 
 @app.get("/api/scan/zhaban/cards")
 def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
-    """炸板分析 — 结构化数据（含评分、分析、跳转）"""
+    """炸板分析 — 结构化数据（含评分、分析、跳转）
+    缓存策略: 缓存原始 df(跌停池),items 每次用最新评分逻辑重算。
+    改评分逻辑后直接 reload 即可看到新结果。
+    注: 当前实现里炸板端点实际拉的是跌停池(zhuanbang 误用 dtgc),
+        缓存策略独立于数据源 bug,后续单独修复。
+    """
     import akshare as ak
     import pandas as pd
     from datetime import date
@@ -870,26 +892,32 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     from scanner import fetch_fund_flow_data, get_money_flow_scores, seal_time_score
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    key = f"dtqiaoban_cards_{today}"
+    raw_key = f"zhaban_raw_{today}"
 
-    # 盘后缓存命中直接返回
+    dt = None
     if not refresh:
-        cached = daily_get(key)
-        if cached:
-            return cached
+        cached = daily_get_pkl(raw_key)
+        if cached is not None:
+            try:
+                dt = cached
+                print("  [炸板卡片] 缓存命中,重算 items", file=sys.stderr)
+            except Exception:
+                dt = None  # 降级重算
 
-    print("  [翘板卡片] 开始...", file=sys.stderr)
-    today = _today_trading()
-    key = f"dtqiaoban_cards_{today}"
-    print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
-    try:
-        dt = ak.stock_zt_pool_dtgc_em(date=today)
-        print(f"  [翘板卡片] 获取 {len(dt)} 只", file=sys.stderr)
-    except Exception as e:
-        print(f"  [翘板卡片] 错误: {e}", file=sys.stderr)
-        return JSONResponse({"ok": False, "error": str(e), "items": []})
-    if dt.empty:
-        return {"ok": True, "items": []}
+    if dt is None:
+        print("  [翘板卡片] 拉取跌停数据...", file=sys.stderr)
+        try:
+            dt = ak.stock_zt_pool_dtgc_em(date=today)
+            print(f"  [翘板卡片] 获取 {len(dt)} 只", file=sys.stderr)
+        except Exception as e:
+            print(f"  [翘板卡片] 错误: {e}", file=sys.stderr)
+            return JSONResponse({"ok": False, "error": str(e), "items": []})
+        if dt.empty:
+            return {"ok": True, "items": []}
+        daily_set_pkl(raw_key, dt, force=refresh)
+    else:
+        if dt.empty:
+            return {"ok": True, "items": []}
 
     # 列索引
     code_col = 1; name_col = 2; change_col = 3; price_col = 4
@@ -964,7 +992,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
 
     items.sort(key=lambda x: x['score'], reverse=True)
     result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
-    daily_set(key, result, force=refresh)
+    # items 始终用最新逻辑重算(raw 已 pkl 缓存,无需 daily_set)
     return result
 
 
