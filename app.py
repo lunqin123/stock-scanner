@@ -16,7 +16,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from cache import daily_get, daily_set
+from cache import daily_get, daily_set, daily_get_pkl, daily_set_pkl
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
 _CST = timezone(timedelta(hours=8))
@@ -710,26 +710,36 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
 @app.get("/api/scan/trend/cards")
 def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
                     principal: float = Query(20000, description="本金(元)")):
-    """趋势扫描 — 结构化数据（含量价分析、板块、跳转）"""
+    """趋势扫描 — 结构化数据（含量价分析、板块、跳转）
+    缓存策略: 缓存原始数据(akshare df),每次用最新 _build_trend_items 重算。
+    改评分逻辑后无需 bump _CACHE_VER,直接 reload 即可看到新结果。
+    """
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    key = f"trend_cards_{today}_{int(principal)}"
+    raw_key = f"trend_raw_{today}_{int(principal)}"
 
-    # 盘后缓存命中直接返回
+    trend = cols = zhaban_codes = hot_industries = industry_counts = sector_top_chg = None
     if not refresh:
-        cached = daily_get(key)
-        if cached:
-            return cached
+        cached = daily_get_pkl(raw_key)
+        if cached is not None:
+            try:
+                (trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg) = cached
+                print(f"  [趋势卡片] 缓存命中,重算 items (raw={today})", file=sys.stderr)
+            except Exception:
+                trend = None  # 缓存损坏,降级重算
 
-    trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg = _fetch_trend_data(today, principal)
-    if trend is None or trend.empty:
-        return {"ok": True, "items": []}
+    if trend is None:
+        # 拉原始数据 + 写缓存
+        trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg = _fetch_trend_data(today, principal)
+        if trend is None or trend.empty:
+            return {"ok": True, "items": []}
+        daily_set_pkl(raw_key, (trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg),
+                      force=refresh)
 
+    # 始终用最新 _build_trend_items 逻辑重算 items
     items = _build_trend_items(trend, cols, zhaban_codes, hot_industries,
                                 industry_counts=industry_counts, sector_top_chg=sector_top_chg)
-    result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
-    daily_set(key, result, force=refresh)
-    return result
+    return {"ok": True, "items": items, "fetched_at": _fetched_at()}
 
 
 @app.get("/api/scan/reversal/cards")

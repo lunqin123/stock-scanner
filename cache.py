@@ -161,6 +161,36 @@ def daily_set(key: str, data, force=False):
         print(f"  [cache daily_set] 写入失败 ({key}): {e}", file=sys.stderr)
 
 
+def daily_set_pkl(key: str, data, force=False):
+    """pickle 模式缓存(支持 DataFrame/set/dict 等任意 Python 对象)。
+    用于缓存原始数据(akshare 返回的 df),而非计算结果。
+    这样改评分逻辑后,可用缓存原始数据 + 新逻辑重算,不用 bump _CACHE_VER。"""
+    if not _is_market_frozen():
+        return
+    try:
+        if not force:
+            path = _daily_path(key).replace('.json', '.pkl')
+            if os.path.exists(path):
+                return
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_daily_path(key).replace('.json', '.pkl'), 'wb') as f:
+            _pickle.dump(data, f)
+    except Exception as e:
+        print(f"  [cache daily_set_pkl] 写入失败 ({key}): {e}", file=sys.stderr)
+
+
+def daily_get_pkl(key: str):
+    """pickle 模式读。失败返回 None(不抛异常)"""
+    try:
+        path = _daily_path(key).replace('.json', '.pkl')
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                return _pickle.load(f)
+    except Exception:
+        return None
+    return None
+
+
 def clear_all():
     """清除所有缓存（版本号不匹配的文件也会被清理）"""
     import glob
