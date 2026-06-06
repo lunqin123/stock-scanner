@@ -433,6 +433,7 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     for s in sector_stats:
         lc = s['limit_cnt']; zc = s['zhaban_cnt']; dc = s['dieting_cnt']
         score = min(12, 4 + lc * 2)  # 保持和旧版一致的简分
+        eff = s['seal_rate']  # 封板率
 
         # 收集成分股
         stock_list = []
@@ -447,12 +448,33 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
                     'seal_fund': float(r.iloc[9]) if str(r.iloc[9]) != '--' else 0,
                 })
 
+        # ── 板块竞价条件 ──
+        auction_parts = []
+        if score >= 10: auction_parts.append('板块强势看高开')
+        elif score >= 6: auction_parts.append('板块活跃可参与')
+        else: auction_parts.append('板块弱势谨慎')
+        if eff >= 80: auction_parts.append('封板率高>80%')
+        elif eff >= 60: auction_parts.append('封板率中等')
+        else: auction_parts.append('封板率<60%分歧大')
+        if lc >= 3: auction_parts.append(f'{lc}只涨停共振')
+        if dc >= 2: auction_parts.append(f'{dc}只跌停分歧大')
+        if zc >= 2: auction_parts.append(f'{zc}只炸板分歧')
+        # 龙头竞价
+        if stock_list and stock_list[0].get('seal_time'):
+            st = stock_list[0]['seal_time']
+            if len(st) >= 4:
+                hh = int(st[:2])
+                if hh < 10: auction_parts.append('龙头早盘封可参与')
+                elif hh < 13: auction_parts.append('龙头午前封一般')
+                else: auction_parts.append('龙头午后封谨慎')
+        auction_check = '；'.join(auction_parts)
+
         items.append({
             'name': s['industry'],
             'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}",
             'limit_count': lc, 'zhaban_count': zc, 'dieting_count': dc,
             'score': score, 'efficiency': s['seal_rate'],
-            'stocks': stock_list, 'sector_code': '',
+            'stocks': stock_list, 'sector_code': '', 'auction_check': auction_check,
         })
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     daily_set(key, result, force=refresh)
@@ -592,6 +614,24 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
         elif risk_score >= 40: advice = "信号偏弱，轻仓或观望"
         else: advice = "多风险信号，不建议持有"
 
+        # ── 竞价条件 ──
+        auction_parts = []
+        if risk_score >= 60: auction_parts.append('高开1-3%延续')
+        elif risk_score >= 50: auction_parts.append('平开或小幅波动')
+        else: auction_parts.append('低开1-2%弱势')
+        if 5 <= turnover <= 15: auction_parts.append('竞价量>昨日5%')
+        elif turnover > 15: auction_parts.append('竞价量>昨日8%')
+        else: auction_parts.append('竞价量>昨日3%')
+        if hot_industries and industry in hot_industries:
+            auction_parts.append('板块跟得上')
+        else:
+            auction_parts.append('板块退潮谨慎')
+        if code in zhaban_codes: auction_parts.append('昨炸板不破昨低')
+        if consecutive >= 3 and chg < 5: auction_parts.append('高位谨慎不追')
+        if turnover > 25: auction_parts.append('换手过高警惕分歧')
+        if 2 <= chg <= 4: auction_parts.append('低涨幅延续')
+        auction_check = '；'.join(auction_parts)
+
         items.append({
             'code': code, 'name': str(row[name_col]),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
@@ -599,7 +639,7 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
             'volume': round(volume / 1e8, 2) if volume > 1e8 else round(volume / 1e4, 0),
             'volume_unit': '亿' if volume > 1e8 else '万',
             'industry': industry, 'consecutive': consecutive,
-            'signals': signals, 'advice': advice, 'risk_score': risk_score,
+            'signals': signals, 'advice': advice, 'auction_check': auction_check, 'risk_score': risk_score,
         })
 
     items = [x for x in items if x['risk_score'] >= 40]  # 过滤低分
@@ -819,11 +859,28 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         elif total_score >= 35: advice = "仅观望，需竞价放量确认"
         else: advice = "不建议参与，资金面偏弱"
 
+        # ── 竞价条件 ──
+        auction_parts = []
+        if total_score >= 70: auction_parts.append('高开2-4%反包')
+        elif total_score >= 50: auction_parts.append('高开1-2%试反包')
+        else: auction_parts.append('平开或谨慎参与')
+        if net > 1e8: auction_parts.append('竞价量>昨日8%承接')
+        elif net > 1e7: auction_parts.append('竞价量>昨日5%承接')
+        elif net > 0: auction_parts.append('竞价量>昨日3%')
+        else: auction_parts.append('竞价量>昨日5%否则放弃')
+        if seal_fund > 0 and seal_fund < 1e7: auction_parts.append('封单已消化')
+        elif seal_fund >= 1e7: auction_parts.append('封单重，需消化')
+        if zb_times >= 2: auction_parts.append('多次炸板放弃')
+        if turnover > 15: auction_parts.append('高换手可博弈')
+        elif turnover < 5: auction_parts.append('低换手弱势')
+        auction_check = '；'.join(auction_parts)
+
         items.append({
             'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'score': int(total_score), 'price': price, 'seal_time': seal_time,
             'seal_fund': seal_fund, 'zhaban_times': zb_times, 'turnover': round(turnover, 1),
             'industry': industry, 'net_money': round(net, 0), 'signals': signals, 'advice': advice,
+            'auction_check': auction_check,
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)
@@ -897,12 +954,29 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         elif total >= 35: advice = "仅观望，需竞价放量确认方向"
         else: advice = "无量封死，不建议参与"
 
+        # ── 竞价条件 ──
+        auction_parts = []
+        if total >= 70: auction_parts.append('高开1-3%翘板')
+        elif total >= 50: auction_parts.append('平开或高开1%试翘板')
+        else: auction_parts.append('平开观望')
+        if turn_val > 10: auction_parts.append('竞价量>昨日8%放量')
+        elif turn_val > 5: auction_parts.append('竞价量>昨日5%')
+        else: auction_parts.append('竞价量>昨日3%否则放弃')
+        if seal_val > 0 and seal_val < 5e6: auction_parts.append('封单轻易翘')
+        elif seal_val >= 5e7: auction_parts.append('封单重难翘')
+        if cont_val >= 3: auction_parts.append('N板超跌反弹')
+        if st:
+            hh = int(st[:2]) if len(st) >= 2 else 0
+            if hh >= 14: auction_parts.append('尾盘跌停次日弱')
+            elif hh < 11: auction_parts.append('早盘跌停次日易翘')
+        auction_check = '；'.join(auction_parts)
+
         items.append({
             'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'score': int(total), 'price': float(row.iloc[price_col]),
             'change': float(row.iloc[change_col]), 'turnover': round(turn_val, 1),
             'seal_fund': seal_val, 'consecutive': cont_val, 'seal_time': st,
-            'signals': sigs, 'advice': advice,
+            'signals': sigs, 'advice': advice, 'auction_check': auction_check,
         })
 
     items.sort(key=lambda x: x['score'], reverse=True)

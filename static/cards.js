@@ -297,6 +297,13 @@ function renderSectorCards(items) {
         }
         barsHtml += '</div>';
 
+        // 板块竞价条件
+        var auctionHtml = '';
+        if (item.auction_check) {
+            const secCol = sc >= 10 ? 'var(--green)' : sc >= 6 ? 'var(--yellow)' : 'var(--red)';
+            auctionHtml = '<div class="card-auction" style="font-size:12px;color:' + secCol + '">📋 竞价: ' + esc(item.auction_check) + '</div>';
+        }
+
         parts.push(
             '<a href="' + esc(item.url || '#') + '" target="_blank" class="stock-card">',
             '<div class="card-header">',
@@ -309,6 +316,7 @@ function renderSectorCards(items) {
             infoHtml,
             barsHtml,
             '</div>',
+            auctionHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             stockListHtml,
             '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
@@ -398,9 +406,11 @@ function renderDtqiaobanCards(items) {
         barsHtml += '</div>';
 
         let adviceHtml = '';
-        if (item.advice) {
+        if (item.auction_check) {
             const adviceColor = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + adviceColor + '">📋 策略: ' + esc(item.advice) + '</div>';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + adviceColor + '">📋 竞价: ' + esc(item.auction_check) + '</div>';
+        } else if (item.advice) {
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 策略: ' + esc(item.advice) + '</div>';
         }
 
         parts.push(
@@ -580,9 +590,11 @@ function renderTrendCards(items) {
 
         // 策略提示
         var adviceHtml = '';
-        if (item.advice) {
-            var ac = chg >= 7 ? 'var(--green)' : chg >= 5 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 策略: ' + esc(item.advice) + '</div>';
+        if (item.auction_check) {
+            var ac = sc >= 80 ? 'var(--green)' : sc >= 60 ? 'var(--yellow)' : 'var(--red)';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 竞价: ' + esc(item.auction_check) + '</div>';
+        } else if (item.advice) {
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 策略: ' + esc(item.advice) + '</div>';
         }
 
         var tagsHtml = tags.length ? '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>' : '';
@@ -736,9 +748,11 @@ function renderZhabanCards(items) {
         barsHtml += '</div>';
 
         let adviceHtml = '';
-        if (item.advice) {
+        if (item.auction_check) {
             const ac = sc >= 70 ? 'var(--green)' : sc >= 50 ? 'var(--yellow)' : 'var(--red)';
-            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 策略: ' + esc(item.advice) + '</div>';
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:' + ac + '">📋 竞价: ' + esc(item.auction_check) + '</div>';
+        } else if (item.advice) {
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 策略: ' + esc(item.advice) + '</div>';
         }
 
         const tagsHtml = '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>';
