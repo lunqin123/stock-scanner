@@ -381,6 +381,12 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     plan_name = plan or None
     cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
 
+    # 盘后缓存命中直接返回(避免反复重算)
+    if not refresh:
+        cached = daily_get(cache_key)
+        if cached:
+            return cached
+
     from datetime import date
     print("  [涨停卡片] ========= 开始扫描 =========", file=sys.stderr)
     today = _today_trading()
@@ -408,6 +414,13 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     print("  [板块卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"sector_cards_{today}"
+
+    # 盘后缓存命中直接返回
+    if not refresh:
+        cached = daily_get(key)
+        if cached:
+            return cached
+
     print("  [板块卡片] 拉取涨停池...", file=sys.stderr)
     try:
         limit_df = ak.stock_zt_pool_em(date=today)
@@ -702,6 +715,12 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     today = _today_trading()
     key = f"trend_cards_{today}_{int(principal)}"
 
+    # 盘后缓存命中直接返回
+    if not refresh:
+        cached = daily_get(key)
+        if cached:
+            return cached
+
     trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg = _fetch_trend_data(today, principal)
     if trend is None or trend.empty:
         return {"ok": True, "items": []}
@@ -841,108 +860,14 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     from scanner import fetch_fund_flow_data, get_money_flow_scores, seal_time_score
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    key = f"zhaban_cards_{today}"
-    print("  [炸板卡片] 拉取炸板数据...", file=sys.stderr)
-    try:
-        zb = ak.stock_zt_pool_zbgc_em(date=today)
-        print(f"  [炸板卡片] 获取 {len(zb)} 只", file=sys.stderr)
-    except Exception as e:
-        print(f"  [炸板卡片] 错误: {e}", file=sys.stderr)
-        return JSONResponse({"ok": False, "error": str(e), "items": []})
-    if zb.empty:
-        return {"ok": True, "items": []}
+    key = f"dtqiaoban_cards_{today}"
 
-    df = zb.copy()
-    from scanner import filter_non_main_board
-    df = filter_non_main_board(df)
+    # 盘后缓存命中直接返回
+    if not refresh:
+        cached = daily_get(key)
+        if cached:
+            return cached
 
-    # 过滤市值/股价
-    if '流通市值' in df.columns:
-        df = df[df['流通市值'].astype(float) <= 200 * 1e8]
-    price_col = df.columns[4]
-    df = df[df[price_col].astype(float) <= 60]
-
-    if df.empty:
-        return {"ok": True, "items": []}
-
-    # 统一评分（调用 scanner 评分函数）
-    from scanner import score_zhaban_data
-    scored = score_zhaban_data(df, today)
-
-    # 构建卡片输出
-    st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
-    sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
-    zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
-    to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
-    ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
-
-    items = []
-    for _, row in scored.iterrows():
-        code = str(row.iloc[1]).strip().zfill(6)
-        name = str(row.iloc[2])
-        seal_time = str(row.get(st_col, ''))[:4]
-        seal_fund = float(row.get(sf_col, 0) or 0)
-        zb_times = int(float(row.get(zb_col, 0)) or 0)
-        turnover = float(row.get(to_col, 0) or 0)
-        industry = str(row.get(ind_col, ''))
-        price = float(row.iloc[4])
-        total_score = float(row.get('总分', 0))
-        net = float(row.get('净流入', 0))
-
-        signals = []
-        if seal_time:
-            h = int(seal_time[:2])
-            if h < 10: signals.append("早盘封板")
-            elif h < 11: signals.append("上午封板")
-            else: signals.append("午后封板")
-        signals.append(f"炸板{zb_times}次")
-        if net > 1e8: signals.append("资金承接强")
-        elif net > 1e7: signals.append("有资金承接")
-        else: signals.append("资金流出")
-        if turnover > 15: signals.append("高换手")
-        elif turnover > 8: signals.append("换手适中")
-
-        if total_score >= 70: advice = "反包潜力高，竞价高开放量可参与"
-        elif total_score >= 50: advice = "竞价观察，高开放量可博弈反包"
-        elif total_score >= 35: advice = "仅观望，需竞价放量确认"
-        else: advice = "不建议参与，资金面偏弱"
-
-        # ── 竞价条件 ──
-        auction_parts = []
-        if total_score >= 70: auction_parts.append('高开2-4%反包')
-        elif total_score >= 50: auction_parts.append('高开1-2%试反包')
-        else: auction_parts.append('平开或谨慎参与')
-        if net > 1e8: auction_parts.append('竞价量>上交易日8%承接')
-        elif net > 1e7: auction_parts.append('竞价量>上交易日5%承接')
-        elif net > 0: auction_parts.append('竞价量>上交易日3%')
-        else: auction_parts.append('竞价量>上交易日5%否则放弃')
-        if seal_fund > 0 and seal_fund < 1e7: auction_parts.append('封单已消化')
-        elif seal_fund >= 1e7: auction_parts.append('封单重，需消化')
-        if zb_times >= 2: auction_parts.append('多次炸板放弃')
-        if turnover > 15: auction_parts.append('高换手可博弈')
-        elif turnover < 5: auction_parts.append('低换手弱势')
-        auction_check = '；'.join(auction_parts)
-
-        items.append({
-            'code': code, 'name': name, 'url': f"https://stockpage.10jqka.com.cn/{code}/",
-            'score': int(total_score), 'price': price, 'seal_time': seal_time,
-            'seal_fund': seal_fund, 'zhaban_times': zb_times, 'turnover': round(turnover, 1),
-            'industry': industry, 'net_money': round(net, 0), 'signals': signals, 'advice': advice,
-            'auction_check': auction_check,
-        })
-
-    items.sort(key=lambda x: x['score'], reverse=True)
-    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
-    daily_set(key, result, force=refresh)
-    return result
-
-
-@app.get("/api/scan/dtqiaoban/cards")
-def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")):
-    """跌停翘板 — 结构化数据（含评分、分析、跳转）"""
-    import akshare as ak
-    import pandas as pd
-    from datetime import date
     print("  [翘板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     key = f"dtqiaoban_cards_{today}"
