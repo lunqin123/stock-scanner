@@ -1984,6 +1984,15 @@ def _run_close_scan(principal=20000):
                 print("  [归档] 已触发后台归档", file=sys.stderr)
             except Exception as e:
                 print(f"  [归档] 启动失败: {e}", file=sys.stderr)
+            # 触发 T+1 真实回测 (后台, 不阻塞, 慢 ~2 分钟)
+            try:
+                threading.Thread(
+                    target=lambda: _run_t1_backtest_cached(max_days=30, top_n=3, capital=20000, force=True),
+                    daemon=True
+                ).start()
+                print("  [T+1 回测] 已触发后台运行 (30 天 / TOP 3)", file=sys.stderr)
+            except Exception as e:
+                print(f"  [T+1 回测] 启动失败: {e}", file=sys.stderr)
         else:
             print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
             threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
@@ -2100,6 +2109,66 @@ def api_backtest_dashboard():
         'days_with_data': days_with_data,
         'ready': ready,
         'backtest_factors': wm.BACKTEST_FACTORS,
+    }
+
+
+# ═══════════════════════════════════════════
+#  T+1 真实回测面板 (A 股 T+1 规则)
+# ═══════════════════════════════════════════
+
+_T1_BACKTEST_CACHE_KEY = "t1_backtest_result_v1"
+_T1_BACKTEST_TTL = 7200  # 2 小时缓存
+
+
+def _run_t1_backtest_cached(max_days=30, top_n=3, capital=30000, force=False):
+    """跑 T+1 真实回测, 带 2 小时缓存 (避免每次请求都拉 30 天数据)"""
+    from cache import daily_get_pkl, daily_set_pkl
+    if not force:
+        cached = daily_get_pkl(_T1_BACKTEST_CACHE_KEY)
+        if cached is not None:
+            return cached
+    try:
+        from t1_real_backtest import run_t1_backtest
+        result = run_t1_backtest(max_days=max_days, top_n=top_n, capital=capital)
+        daily_set_pkl(_T1_BACKTEST_CACHE_KEY, result, force=force)
+        return result
+    except Exception as e:
+        return {'error': f'T+1 回测失败: {str(e)[:200]}', 'summary': {}, 'trades': []}
+
+
+@app.get("/api/backtest/t1")
+def api_backtest_t1(
+    days: int = Query(30, description="回测天数"),
+    top_n: int = Query(3, description="每天取 TOP N"),
+    capital: float = Query(30000, description="单笔本金 (元)"),
+    refresh: bool = Query(False, description="强制刷新缓存")
+):
+    """T+1 真实回测面板 (A 股 T+1 规则)
+    策略: 信号日 (涨停) → D+1 开盘买入 → D+2 开盘卖出
+    返回: 胜率/平均/总盈亏/盈亏比/回撤/EV + 每日明细 + TOP5/BOTTOM5
+    """
+    result = _run_t1_backtest_cached(
+        max_days=days, top_n=top_n, capital=capital, force=refresh
+    )
+    return {
+        'ok': 'error' not in result,
+        'data': result,
+    }
+
+
+@app.get("/api/backtest/t1/top")
+def api_backtest_t1_top(
+    days: int = Query(30),
+    top_n: int = Query(3),
+    capital: float = Query(30000)
+):
+    """T+1 真实回测 - 仅返回 TOP 5 (最快)"""
+    res = _run_t1_backtest_cached(max_days=days, top_n=top_n, capital=capital)
+    return {
+        'ok': 'error' not in res,
+        'top5': res.get('top5', []),
+        'bottom5': res.get('bottom5', []),
+        'summary': res.get('summary', {}),
     }
 
 

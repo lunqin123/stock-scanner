@@ -423,7 +423,20 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderStockCards(items, data);
             } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
-            } else if (pageKey === 'backtest') { html += renderBacktestDashboard(data);
+            } else if (pageKey === 'backtest') {
+                html += renderBacktestDashboard(data);
+                // T+1 真实回测面板 (异步加载, 不阻塞调权数据展示)
+                try {
+                    const t1Resp = await fetch('/api/backtest/t1?days=30&top_n=3&capital=30000');
+                    const t1Data = await t1Resp.json();
+                    html += renderT1BacktestPanel(t1Data);
+                } catch (t1Err) {
+                    html += '<div class="card" style="margin:16px"><div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(t1Err.message) + '</div></div>';
+                }
+                // 加刷新按钮
+                html += '<div class="card" style="margin:16px;padding:12px;text-align:center">'
+                    + '<button class="btn btn-orange" onclick="refreshT1Backtest()" style="font-size:14px;padding:8px 20px">🔄 刷新 T+1 回测 (强制重跑, 约 1-2 分钟)</button>'
+                    + '</div>';
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items); } else if (pageKey === 'scan-reversal') { html += renderReversalCards(items);
             } else {
                 html += renderSimpleCards(items, pageKey);
@@ -808,3 +821,23 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshCurrent();
     });
 });
+
+// T+1 真实回测刷新 (强制重跑, ~1-2 分钟)
+async function refreshT1Backtest() {
+    if (!confirm('T+1 回测强制重跑约 1-2 分钟, 是否继续?')) return;
+    const output = document.getElementById('output');
+    output.innerHTML = '<span class="loading">⏳ T+1 回测重跑中 (约 1-2 分钟) ...</span>';
+    try {
+        const resp = await fetch('/api/backtest/t1?days=30&top_n=3&capital=30000&refresh=true');
+        const data = await resp.json();
+        let html = renderBacktestDashboard(data.ok ? (await (await fetch('/api/backtest/dashboard')).json()) : {ok: true});
+        html += renderT1BacktestPanel(data);
+        html += '<div class="card" style="margin:16px;padding:12px;text-align:center">'
+              + '<button class="btn btn-orange" onclick="refreshT1Backtest()" style="font-size:14px;padding:8px 20px">🔄 刷新 T+1 回测 (强制重跑, 约 1-2 分钟)</button>'
+              + '</div>';
+        output.innerHTML = html;
+    } catch (err) {
+        output.innerHTML = '<span class="error-text">❌ 刷新失败: ' + err.message + '</span>';
+    }
+}
+window.refreshT1Backtest = refreshT1Backtest;

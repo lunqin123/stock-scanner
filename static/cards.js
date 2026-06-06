@@ -989,3 +989,94 @@ function renderBacktestDashboard(data) {
 
 // 注册全局渲染函数
 window.renderBacktestDashboard = renderBacktestDashboard;
+
+// ═══════════════════════════════════════════
+//  T+1 真实回测面板 (A 股 T+1 规则)
+// ═══════════════════════════════════════════
+
+function renderT1BacktestPanel(data) {
+    if (!data || !data.ok) {
+        return '<div class="loading">T+1 回测加载失败 - ' + (data && data.data && data.data.error || '未知错误') + '</div>';
+    }
+    var d = data.data || {};
+    var s = d.summary || {};
+    var cfg = d.config || {};
+    var top5 = d.top5 || [];
+    var bot5 = d.bottom5 || [];
+    var skipped = d.skipped || [];
+
+    var html = '<div class="dashboard-grid" style="display:flex;flex-wrap:wrap;gap:16px;padding:16px;margin-top:8px">';
+
+    // 0. 标题 + 配置
+    html += '<div class="card" style="flex:0 0 100%"><h3 style="margin:0 0 8px">📊 T+1 真实回测 (A 股 T+1 规则)</h3>';
+    html += '<div style="font-size:12px;color:var(--text-muted)">';
+    html += '策略: ' + esc(cfg.strategy || 'N/A') + ' | 评分: ' + esc(cfg.scoring || 'N/A') + '<br>';
+    html += '区间: ' + esc(cfg.start || '?') + ' ~ ' + esc(cfg.end || '?') + ' | 每天 TOP ' + (cfg.top_n || 3) + ' | 本金 ' + (cfg.capital || 30000) + '元/笔 | 成本 ' + (cfg.commission_pct || 0.05) + '%+' + (cfg.slippage_pct || 0.1) + '%';
+    html += '</div></div>';
+
+    // 1. 核心指标卡片
+    function metric(label, value, color, sub) {
+        return '<div style="flex:1;min-width:140px;padding:12px;background:var(--card-bg,#1e2233);border-radius:8px;border:1px solid var(--border)">'
+            + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + label + '</div>'
+            + '<div style="font-size:22px;font-weight:700;color:' + (color || 'var(--text)') + '">' + value + '</div>'
+            + (sub ? '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + sub + '</div>' : '')
+            + '</div>';
+    }
+    html += '<div class="card" style="flex:0 0 100%"><h3 style="margin:0 0 12px">核心指标</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px">';
+    var wrColor = s.win_rate >= 60 ? '#22c55e' : s.win_rate >= 45 ? '#f59e0b' : '#ef4444';
+    var evColor = s.ev > 0 ? '#22c55e' : '#ef4444';
+    html += metric('笔数', s.trade_count || 0, '#3b82f6', '跳过: ' + skipped.length);
+    html += metric('胜率', (s.win_rate || 0).toFixed(1) + '%', wrColor, s.win_count + '胜 / ' + s.loss_count + '负');
+    html += metric('平均收益', (s.avg_ret || 0).toFixed(2) + '%', s.avg_ret >= 0 ? '#22c55e' : '#ef4444');
+    html += metric('总盈亏', (s.total_pnl || 0).toFixed(0) + ' 元', s.total_pnl >= 0 ? '#22c55e' : '#ef4444', '本金' + (cfg.capital || 30000) + '×' + s.trade_count + '笔');
+    html += metric('盈亏比', (s.plr || 0).toFixed(2), s.plr >= 1.5 ? '#22c55e' : 'var(--text)');
+    html += metric('最大回撤', (s.max_dd || 0).toFixed(2) + '%', '#ef4444');
+    html += metric('期望值 EV', (s.ev || 0).toFixed(2) + '%', evColor, evColor === '#22c55e' ? '长期盈利' : '长期亏损');
+    html += '</div></div>';
+
+    // 2. TOP 5 + BOTTOM 5
+    function tradeTable(title, trades, color) {
+        var h = '<div class="card" style="flex:1;min-width:380px"><h3 style="margin:0 0 8px">' + title + '</h3>';
+        h += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        h += '<tr style="border-bottom:1px solid var(--border)"><th style="padding:3px;text-align:left">日期(信→买→卖)</th><th>票</th><th>评分</th><th>买→卖</th><th>收益</th><th>盈亏</th></tr>';
+        for (var i = 0; i < trades.length; i++) {
+            var t = trades[i];
+            h += '<tr style="border-bottom:1px solid var(--border)">';
+            h += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.buy_date + '→' + t.sell_date + '</td>';
+            h += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:10px"> (' + t.code + ')</span></td>';
+            h += '<td style="padding:3px;text-align:center">' + t.score + '</td>';
+            h += '<td style="padding:3px;font-size:11px">' + t.buy_price + '→' + t.sell_price + '</td>';
+            h += '<td style="padding:3px;text-align:center;color:' + color + ';font-weight:600">' + (t.net_ret_pct > 0 ? '+' : '') + t.net_ret_pct.toFixed(2) + '%</td>';
+            h += '<td style="padding:3px;text-align:right;color:' + color + ';font-weight:600">' + (t.pnl > 0 ? '+' : '') + t.pnl.toFixed(0) + '元</td>';
+            h += '</tr>';
+        }
+        h += '</table></div>';
+        return h;
+    }
+    if (top5.length > 0) {
+        html += tradeTable('🏆 TOP 5 (最赚)', top5, '#22c55e');
+    }
+    if (bot5.length > 0) {
+        html += tradeTable('💀 BOTTOM 5 (最亏)', bot5, '#ef4444');
+    }
+
+    // 3. 操作建议
+    html += '<div class="card" style="flex:0 0 100%"><h3 style="margin:0 0 8px">⚙️ 关键参数 + 实操建议</h3>';
+    html += '<div style="font-size:12px;line-height:1.8;color:var(--text)">';
+    html += '<b>回测假设</b>: 信号日 (涨停) → D+1 开盘买入 → D+2 开盘卖出 (A 股 T+1 真实规则, 2 天持仓)<br>';
+    html += '<b>评分</b>: backtest_score_prev (回测专用, 6 因子) — plan_a 实盘评分可能更准<br>';
+    html += '<b>胜率含义</b>: 接近 50% 表示赢 1 亏 1, 心理压力大; 期望值 EV > 0 表示长期数学上盈利<br>';
+    if (s.ev > 0) {
+        html += '<b style="color:#22c55e">✅ 当前期望值 ' + s.ev.toFixed(2) + '% > 0, 长期能赚 — 但胜率 ' + s.win_rate.toFixed(1) + '% 偏低, 需要仓位控制</b><br>';
+    } else {
+        html += '<b style="color:#ef4444">⚠️ 当前期望值 ' + s.ev.toFixed(2) + '% < 0, 长期亏损, 不建议直接用</b><br>';
+    }
+    html += '<b>实盘建议</b>: 单只仓位 ≤ 1/3 总仓位; 3 连亏日主动减仓 50%; 至少 30 天数据再下结论<br>';
+    html += '<b>回撤 -' + Math.abs(s.max_dd || 0).toFixed(0) + '%</b> 是 3w 本金最大浮亏 = <b>' + (30000 * Math.abs(s.max_dd || 0) / 100).toFixed(0) + ' 元</b>';
+    html += '</div></div>';
+
+    html += '</div>';  // dashboard-grid end
+    return html;
+}
+window.renderT1BacktestPanel = renderT1BacktestPanel;
