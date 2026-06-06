@@ -195,9 +195,11 @@ def save_daily_correlations(correlations: dict, trading_date: str = None):
     """保存因子相关性到滚动缓存。trading_date 用交易日而非日历日，避免凌晨重复。"""
     if not correlations:
         return
-    # 统一为 YYYY-MM-DD 格式
-    if trading_date and len(trading_date) == 8:
-        trading_date = trading_date[:4] + '-' + trading_date[4:6] + '-' + trading_date[6:8]
+    # 统一为 YYYY-MM-DD 格式（兼容 'YYYYMMDD' 和 'YYYY-MM-DD' 两种输入）
+    if trading_date:
+        s = trading_date.replace('-', '')
+        if len(s) == 8 and s.isdigit():
+            trading_date = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     today_str = trading_date if trading_date else date.today().isoformat()
     try:
         data = _load_rolling_data()
