@@ -2047,6 +2047,12 @@ async def webhook(request: Request):
                     else:
                         shutil.copy2(s, d)
             os.remove(tmp_zip)
+            # 同步 git HEAD 指针到 origin/master，让 worktree 跟 HEAD 一致
+            # （webhook 只覆盖文件不动 git，会导致后续 SSH git pull 失败）
+            subprocess.run(
+                ["git", "update-ref", "HEAD", "origin/master"],
+                cwd="/home/ubuntu/stock-scanner",
+                capture_output=True, timeout=10)
             subprocess.run(["sudo", "systemctl", "restart", "stock-scanner"], capture_output=True, timeout=30)
         except Exception as e:
             print(f"[Webhook] 部署失败: {e}", file=sys.stderr)
