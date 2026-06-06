@@ -185,7 +185,7 @@ def daily_get_pkl(key: str):
         path = _daily_path(key).replace('.json', '.pkl')
         if os.path.exists(path):
             with open(path, 'rb') as f:
-                return pickle.load(f)
+                return _pickle.load(f)
     except Exception:
         return None
     return None

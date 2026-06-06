@@ -17,7 +17,7 @@ import numpy as np
 import akshare as ak
 from datetime import datetime, timedelta
 from scanner import backtest_score_prev
-from cache import _last_trading_date, _is_trading_day
+from cache import _last_trading_date, _is_trading_day, get as _cache_get, put as _cache_put, daily_get as _daily_get, daily_set as _daily_set, make_key
 
 CAPITAL_DEFAULT = 30000
 COMMISSION = 0.00025 * 2  # 向后兼容 (实际从 config 导入)
@@ -55,24 +55,61 @@ def _next_trading_date(d_str, max_lookahead=10):
     return None
 
 
+def _get_prev_pool_cached(date_str):
+    """拉涨停前池(昨日涨停), 用 2h 缓存(历史数据当天稳定)"""
+    key = f"t1_prev_pool_{date_str}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    df = ak.stock_zt_pool_previous_em(date=date_str)
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+    return df
+
+
+def _get_today_pool_cached(date_str):
+    """拉今日涨停池(用 score 里 sector 分析), 用 2h 缓存"""
+    key = f"t1_today_pool_{date_str}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        df = ak.stock_zt_pool_em(date=date_str)
+    except Exception:
+        df = None
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+    return df
+
+
 def _get_open_price(code, date_str):
-    """拉 d 日开盘价 - 失败返回 None"""
+    """拉 d 日开盘价 - 失败返回 None
+    永久缓存: 历史开盘价永远不变(2h 缓存即可覆盖所有回测场景)
+    """
+    key = f"t1_open_{code}_{date_str}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached if cached != '__NONE__' else None
     prefix = 'sh' if code.startswith('6') else 'sz'
     start_fmt = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    result = None
     for attempt in range(3):
         try:
             hist = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}',
                                           start_date=start_fmt, end_date=start_fmt)
             if hist is None or hist.empty:
-                return None
+                break
             hist['日期'] = pd.to_datetime(hist['date']).dt.strftime('%Y%m%d')
             row = hist[hist['日期'] == date_str]
             if row.empty:
-                return None
-            return float(row.iloc[0]['open'])
+                break
+            result = float(row.iloc[0]['open'])
+            break
         except Exception:
             time.sleep(2)
-    return None
+    # 缓存 None 也存(避免重复拉空)
+    _cache_put(key, result if result is not None else '__NONE__')
+    return result
 
 
 def run_t1_backtest(
@@ -81,10 +118,12 @@ def run_t1_backtest(
     top_n: int = TOP_N_DEFAULT,
     capital: float = CAPITAL_DEFAULT,
     max_days: int = 30,
+    use_cache: bool = True,
 ):
     """T+1 真实回测主入口
 
     start_date/end_date: 区间 (默认最近 30 天)
+    use_cache: True 走 daily_set/daily_get 缓存(盘后写, 多次刷新秒回)
     返回: dict with summary, trades, generated_at
     """
     # 默认日期: 最近 30 个交易日
@@ -102,6 +141,14 @@ def run_t1_backtest(
         start = sd.strftime('%Y%m%d')
     else:
         start = start_date
+
+    # 整体结果缓存(盘后命中, 多次刷新秒回)
+    if use_cache:
+        cache_key = make_key("t1", "result",
+                             start=start, end=end, top_n=top_n, capital=int(capital))
+        cached = _daily_get(cache_key)
+        if cached and 'summary' in cached:
+            return cached
 
     trade_dates = _trading_dates_in_range(start, end, max_count=max_days)
     if not trade_dates:
@@ -121,14 +168,11 @@ def run_t1_backtest(
             continue
 
         try:
-            prev = ak.stock_zt_pool_previous_em(date=d_signal)
+            prev = _get_prev_pool_cached(d_signal)
             if prev is None or prev.empty:
                 skipped.append({'signal': d_signal, 'reason': 'prev池空'})
                 continue
-            try:
-                today_df = ak.stock_zt_pool_em(date=d_signal)
-            except Exception:
-                today_df = None
+            today_df = _get_today_pool_cached(d_signal)
             df_res, summary = backtest_score_prev(prev, today_df=today_df, date_str=d_signal)
             if df_res is None or df_res.empty:
                 skipped.append({'signal': d_signal, 'reason': '评分后空'})
@@ -215,7 +259,7 @@ def run_t1_backtest(
     top5 = sorted_trades[:5]
     bot5 = sorted_trades[-5:][::-1]
 
-    return {
+    result = {
         'summary': summary,
         'trades': records,
         'top5': top5,
@@ -230,6 +274,12 @@ def run_t1_backtest(
             'scoring': 'backtest_score_prev (回测评分, 6 因子)',
         }
     }
+    # 整体结果缓存(盘后写, 跨日失效; use_cache 才写)
+    if use_cache:
+        cache_key = make_key("t1", "result",
+                             start=start, end=end, top_n=top_n, capital=int(capital))
+        _daily_set(cache_key, result)
+    return result
 
 
 if __name__ == '__main__':
