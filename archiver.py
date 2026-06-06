@@ -210,6 +210,37 @@ def archive_day_t(trade_date: str = None):
     print(f"[归档 Day T] 完成，共保存 {total} 条记录")
 
 
+def _calc_volume_5d_avg(code: str, trade_date: str, lookback_days: int = 5) -> tuple:
+    """
+    计算近 N 日涨停日均量,用于量比。
+    返回 (avg_volume, sample_days)。
+    - 0 天数据 → (None, 0)
+    - N 天数据 → (avg, N)
+    """
+    from cache import _last_trading_date
+    try:
+        # 用 _last_trading_date 链式找 N 个交易日(自动处理周末+节假日)
+        trading_days = [trade_date]
+        cur = trade_date
+        for _ in range(lookback_days - 1):
+            cur = _last_trading_date(cur)
+            trading_days.append(cur)
+        conn = get_db()
+        placeholders = ','.join('?' * len(trading_days))
+        r = conn.execute(
+            f"SELECT AVG(volume), COUNT(*) FROM daily_stocks "
+            f"WHERE code=? AND trade_date IN ({placeholders}) AND volume IS NOT NULL AND volume > 0",
+            [code] + trading_days
+        ).fetchone()
+        conn.close()
+        avg, cnt = r[0], r[1]
+        if avg is None or cnt == 0:
+            return (None, 0)
+        return (float(avg), int(cnt))
+    except Exception:
+        return (None, 0)
+
+
 def _save_limit_up_pool(conn, trade_date, df):
     """保存涨停池到 daily_stocks (stock_type='limit_up')"""
     import pandas as _pd

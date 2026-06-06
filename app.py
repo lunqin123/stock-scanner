@@ -624,6 +624,20 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
         elif turnover > 8: signals.append("放量健康")
         if consecutive >= 2: signals.append(f"{consecutive}连涨")
 
+        # ── 量比(近5日涨停日均量对比) ──
+        if industry_col or 'code' in cols:
+            try:
+                from archiver import _calc_volume_5d_avg
+                today_str = _today_trading()
+                cur_vol = float(row[vol_col]) if vol_col and pd.notna(row.get(vol_col)) else 0
+                avg_vol, days = _calc_volume_5d_avg(code, today_str, lookback_days=5)
+                if avg_vol and cur_vol > 0 and days >= 1:
+                    ratio = cur_vol / avg_vol
+                    if ratio >= 2.0:    signals.append(f'放量{ratio:.1f}x')
+                    elif ratio >= 1.3:  signals.append(f'温和放量{ratio:.1f}x')
+                    elif ratio <= 0.5:  signals.append(f'缩量{ratio:.1f}x')
+            except Exception: pass
+
         # ── 龙头状态(基于今日板块龙头表现) ──
         if sector_top_chg and industry in sector_top_chg:
             top_chg = sector_top_chg[industry]
