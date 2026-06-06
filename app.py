@@ -16,7 +16,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from cache import daily_get, daily_set, daily_get_pkl, daily_set_pkl
+from cache import daily_get, daily_set, daily_get_pkl, daily_set_pkl, make_key
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
 _CST = timezone(timedelta(hours=8))
