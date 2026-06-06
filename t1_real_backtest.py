@@ -141,7 +141,7 @@ def run_t1_backtest(
             if score_col is None:
                 skipped.append({'signal': d_signal, 'reason': '找不到评分列'})
                 continue
-            top = df_res.sort_values(score_col, ascending=False).head(top_n)
+            top = df_res.sort_values([score_col, df_res.columns[1]], ascending=[False, True], kind='mergesort').head(top_n)
             for rank, (_, row) in enumerate(top.iterrows(), 1):
                 code = str(row.iloc[1]).strip().zfill(6)
                 name = str(row.iloc[2])

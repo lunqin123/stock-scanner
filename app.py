@@ -1037,6 +1037,56 @@ def api_scan_dtqiaoban(table: bool = Query(False)):
     return {"ok": True, "output": out}
 
 
+@app.get("/api/scan/dtqiaoban/cards")
+def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")):
+    """跌停翘板 — 结构化卡片数据 (与 stream 端点共享逻辑, 走缓存池 + 评分)"""
+    today = _today_trading()
+    raw_key = make_key("app", "dtqiaoban_raw", date=today)
+
+    def run():
+        import akshare as ak
+        import pandas as pd
+        from scanner import filter_non_main_board, score_dtqiaoban_data
+        dt = ak.stock_zt_pool_dtgc_em(date=today)
+        if dt.empty: return [], {}
+        df = filter_non_main_board(dt)
+        if len(df.columns) > 6 and '流通市值' in df.columns:
+            df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+        elif len(df.columns) > 6:
+            df = df[df.iloc[:, 6].astype(float) <= 200 * 1e8]
+        if df.empty: return [], {}
+        scored = score_dtqiaoban_data(df)
+        items = []
+        for _, row in scored.iterrows():
+            code = str(row.iloc[1]).strip().zfill(6)
+            total = int(row.get('翘板评分', 0))
+            turn_val = float(row.iloc[9]) if len(row) > 9 and pd.notna(row.iloc[9]) else 0
+            seal_val = float(row.iloc[10]) if len(row) > 10 and pd.notna(row.iloc[10]) else 0
+            cont_val = int(float(row.iloc[13])) if len(row) > 13 and pd.notna(row.iloc[13]) else 0
+            st = str(row.iloc[11]) if len(row) > 11 and pd.notna(row.iloc[11]) else ''
+            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
+            sigs = []
+            if total >= 60: sigs.append('高信号')
+            elif total >= 35: sigs.append('中等信号')
+            else: sigs.append('弱信号')
+            if turn_val > 10: sigs.append('高换手承接')
+            if cont_val >= 3: sigs.append(f'N{cont_val}板超跌')
+            advice = '竞价观察，放量高开可博弈反抽' if total >= 60 else ('仅观望' if total >= 35 else '不参与')
+            items.append({'code': code, 'name': str(row.iloc[2]),
+                          'score': total, 'price': price,
+                          'change': float(row.iloc[3]) if pd.notna(row.iloc[3]) else -10,
+                          'seal_time': st[:4] if len(st) >= 4 else st,
+                          'turnover': turn_val, 'seal_fund': seal_val, 'consecutive': cont_val,
+                          'signals': sigs, 'advice': advice,
+                          'url': f"https://stockpage.10jqka.com.cn/{code}/"})
+        return items[:10], {}
+
+    items, meta = run()
+    if not items:
+        return {"ok": True, "items": [], "fetched_at": _fetched_at()}
+    return {"ok": True, "items": items, "fetched_at": _fetched_at()}
+
+
 @app.get("/api/backtest")
 def api_backtest():
     """运行滚动回测"""
