@@ -653,7 +653,9 @@ function renderReversalCards(items) {
         barsHtml += '</div>';
 
         let adviceHtml = '';
-        if (item.advice) {
+        if (item.auction_check) {
+            adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 ' + esc(item.auction_check) + '</div>';
+        } else if (item.advice) {
             adviceHtml = '<div class="card-auction" style="font-size:12px;color:var(--yellow)">📋 ' + esc(item.advice) + '</div>';
         }
 

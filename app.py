@@ -248,8 +248,8 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
             key = futs[f]
             try:
                 res[key] = f.result()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [情绪 future] {key} 失败: {e}", file=sys.stderr)
 
     sentiment_score, sentiment_level = 5.0, "未知"
     sentiment_detail = {}
@@ -702,6 +702,27 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
         elif s >= 45: adv = '观望，等放量信号'
         else: adv = '暂不参与'
 
+        # ── 竞价条件（具体到数字） ──
+        auction_parts = []
+        # 1) 高开要求（按反转分）
+        if s >= 85: auction_parts.append('高开3-5%')
+        elif s >= 65: auction_parts.append('高开1-3%')
+        else: auction_parts.append('平开或高开1%内')
+        # 2) 竞价量要求（按换手）
+        if to > 25: auction_parts.append('竞价量>昨日5%')
+        elif to > 15: auction_parts.append('竞价量>昨日3%')
+        elif to > 5: auction_parts.append('竞价量>昨日2%')
+        else: auction_parts.append('竞价量>昨日1%')
+        # 3) 板块联动
+        if ind in hot_inds: auction_parts.append('板块今日涨停跟得上')
+        else: auction_parts.append('板块离线，谨慎参与')
+        # 4) 不破昨低
+        auction_parts.append('不破昨低')
+        # 5) 连板提示
+        if lb >= 2: auction_parts.append(f'{lb}板强势品种')
+        # 6) 浅回调加分
+        if -3 <= chg <= 0.5: auction_parts.append('浅回调洗盘')
+
         tags = []
         if lb == 1: tags.append('首板回调')
         elif lb == 2: tags.append('二板回调')
@@ -713,7 +734,7 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
             'code': code, 'name': name, 'url': f'https://stockpage.10jqka.com.cn/{code}/',
             'change_pct': chg, 'price': price, 'turnover': round(to, 1),
             'consecutive': lb, 'industry': ind,
-            'signals': tags, 'advice': adv,
+            'signals': tags, 'advice': adv, 'auction_check': '；'.join(auction_parts),
             'risk_score': s,
         })
 
@@ -2135,8 +2156,8 @@ def _cleanup_old_cache(days=30):
                 if now - os.path.getmtime(f) > days * 86400:
                     os.remove(f)
                     cleaned += 1
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"  [启动清理] 删除 {f} 失败: {e}", file=sys.stderr)
     if cleaned > 0:
         print(f"  [启动清理] 删除 {cleaned} 个超过{days}天的旧缓存文件", file=sys.stderr)
 
