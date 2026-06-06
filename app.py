@@ -483,8 +483,11 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
 
 
 def _fetch_trend_data(today, principal):
-    """趋势扫描 — 拉取数据 + 过滤，返回 (trend_df, cols_dict, zhaban_codes, hot_industries)
-    cards 和 stream 端点共享，保证数据源完全一致。"""
+    """趋势扫描 — 拉取数据 + 过滤，返回 (trend_df, cols_dict, zhaban_codes, hot_industries, industry_counts, sector_top_chg)
+    cards 和 stream 端点共享，保证数据源完全一致。
+    industry_counts: 板块→今日涨停数(给"板块共振N只"标签用)
+    sector_top_chg: 板块→板块内今日龙头股涨幅(给"龙头在线/退潮"标签用)
+    """
     import akshare as ak
     import pandas as pd
     from datetime import datetime, timedelta
@@ -509,7 +512,7 @@ def _fetch_trend_data(today, principal):
         except: continue
 
     if prev.empty:
-        _sys.stderr = _saved; return None, None, set(), set()
+        _sys.stderr = _saved; return None, None, set(), set(), {}, {}
 
     # 2. 列索引
     cols = {
@@ -527,6 +530,8 @@ def _fetch_trend_data(today, principal):
     # 4. 风控数据：炸板池 + 今日热门板块（分开 try 防互相影响）
     zhaban_codes = set()
     hot_industries = set()
+    industry_counts = {}  # industry -> 今日涨停数
+    sector_top_chg = {}   # industry -> 板块内今日龙头涨幅
     try:
         zb_df = ak.stock_zt_pool_zbgc_em(date=today)
         if not zb_df.empty:
@@ -538,20 +543,32 @@ def _fetch_trend_data(today, principal):
         if not lt_df.empty:
             ind_col2 = '所属行业' if '所属行业' in lt_df.columns else (lt_df.columns[15] if len(lt_df.columns) > 15 else None)
             if ind_col2:
-                hot = lt_df[ind_col2].value_counts().head(5)
-                hot_industries = set(hot[hot >= 3].index)
+                vc = lt_df[ind_col2].value_counts()
+                industry_counts = vc.to_dict()
+                hot_industries = set(vc[vc >= 3].index)
+                # 算每个板块今日涨幅 TOP1（龙头）
+                chg_col_lt = lt_df.columns[3]
+                for ind_name, group in lt_df.groupby(ind_col2):
+                    try:
+                        sector_top_chg[ind_name] = float(group[chg_col_lt].astype(float).max())
+                    except Exception:
+                        pass
     except Exception: pass
 
     # 5. 趋势过滤
     df = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
     if df.empty:
-        _sys.stderr = _saved; return None, cols, zhaban_codes, hot_industries
+        _sys.stderr = _saved; return None, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg
     df = df.sort_values('涨幅', ascending=False).head(30)  # 扩大到30, 避免低涨幅高分股被挤出候选池
-    _sys.stderr = _saved; return df, cols, zhaban_codes, hot_industries
+    _sys.stderr = _saved; return df, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg
 
 
-def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
-    """趋势扫描股票评分 — 共享逻辑，cards 和 stream 端点统一调用"""
+def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
+                        industry_counts=None, sector_top_chg=None):
+    """趋势扫描股票评分 — 共享逻辑，cards 和 stream 端点统一调用
+    industry_counts: 板块→今日涨停数 (给"板块共振N只"标签)
+    sector_top_chg: 板块→板块内今日龙头涨幅 (给"龙头在线/退潮/本板块龙头"标签)
+    """
     import pandas as pd
     code_col, name_col = cols['code'], cols['name']
     price_col, turnover_col = cols['price'], cols['turnover']
@@ -606,6 +623,23 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
         if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("放量健康")
         if consecutive >= 2: signals.append(f"{consecutive}连涨")
+
+        # ── 龙头状态(基于今日板块龙头表现) ──
+        if sector_top_chg and industry in sector_top_chg:
+            top_chg = sector_top_chg[industry]
+            if abs(chg - top_chg) < 0.1:    # 这条涨幅 == 龙头涨幅 → 自己就是龙头
+                signals.append('板块龙头')
+            elif top_chg >= 3:
+                signals.append('龙头在线')
+            elif top_chg <= -3:
+                signals.append('龙头退潮')
+
+        # ── 同板块共振(今日同板块涨停数) ──
+        if industry_counts and industry in industry_counts:
+            cnt = industry_counts[industry]
+            if cnt >= 3:
+                signals.append(f'板块共振{cnt}只')
+
         signals.extend(risk_tags)
 
         if risk_score >= 60: advice = "趋势健康，持有为主"
@@ -654,11 +688,12 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     today = _today_trading()
     key = f"trend_cards_{today}_{int(principal)}"
 
-    trend, cols, zhaban_codes, hot_industries = _fetch_trend_data(today, principal)
+    trend, cols, zhaban_codes, hot_industries, industry_counts, sector_top_chg = _fetch_trend_data(today, principal)
     if trend is None or trend.empty:
         return {"ok": True, "items": []}
 
-    items = _build_trend_items(trend, cols, zhaban_codes, hot_industries)
+    items = _build_trend_items(trend, cols, zhaban_codes, hot_industries,
+                                industry_counts=industry_counts, sector_top_chg=sector_top_chg)
     result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     daily_set(key, result, force=refresh)
     return result
