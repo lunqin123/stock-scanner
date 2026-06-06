@@ -20,10 +20,13 @@ from scanner import backtest_score_prev
 from cache import _last_trading_date, _is_trading_day
 
 CAPITAL_DEFAULT = 30000
-COMMISSION = 0.00025 * 2  # 万 2.5 双向
-SLIPPAGE = 0.001  # 千 1
+COMMISSION = 0.00025 * 2  # 向后兼容 (实际从 config 导入)
+SLIPPAGE = 0.001
 TOP_N_DEFAULT = 3
 MAX_WORKERS = 4
+
+# 从 config 统一导入 (P1-1 重构)
+from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT
 
 
 def _trading_dates_in_range(start_str, end_str, max_count=60):

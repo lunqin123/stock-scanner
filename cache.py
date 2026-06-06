@@ -8,11 +8,11 @@ import time
 import pickle as _pickle
 from datetime import date, datetime, timezone, timedelta
 
-_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
+# 缓存目录统一从 config 导入 (P1-1 重构)
+from config import CACHE_DIR as _CACHE_DIR
 
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
-_CACHE_VER = 7  # v6→v7: 评分重构(seal22+黄金奖励, sector合并, tech简化, principal增强)
-_CACHE_TTL = 7200
+_CACHE_VER = 7  # v6→v7: 评分重构(seal22+黄金奖励, sector合并, tech简化, principal增强)  # 向后兼容, 实际从 config 导入
 
 # ─── 2小时短期缓存（避免重复拉取慢 API） ───
 

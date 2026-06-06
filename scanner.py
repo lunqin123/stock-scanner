@@ -30,17 +30,14 @@ import time
 
 
 # ─── 本地缓存（日内数据缓存，根据市场状态动态调整 TTL） ───
-_CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache")
-_CACHE_TTL = 7200  # 默认 2 小时
-_CST = timezone(timedelta(hours=8))
-
-# ─── 交易时间常量（所有时间统一用距零点分钟数） ───
-MARKET_OPEN_MINUTES = 570       # 09:30
-MORNING_CLOSE_MINUTES = 690     # 11:30
-AFTERNOON_OPEN_MINUTES = 780    # 13:00
-AFTERNOON_CLOSE_MINUTES = 900   # 15:00
-SEAL_TIME_RANGE = 300           # 封板时间归一化范围: 09:30→14:30=300分钟
-MAX_LATE_SEAL = "143000"        # 最晚封板时间 (HHMMSS)
+# 常量从 config 统一导入 (P1-1 重构)
+from config import (
+    CACHE_DIR as _CACHE_DIR,
+    CACHE_TTL as _CACHE_TTL,
+    CST as _CST,
+    MARKET_OPEN_MINUTES, MORNING_CLOSE_MINUTES, AFTERNOON_OPEN_MINUTES, AFTERNOON_CLOSE_MINUTES,
+    SEAL_TIME_RANGE, MAX_LATE_SEAL, MAX_MARKET_CAP, MAX_PRICE, TOP_N,
+)
 
 def money_str(val) -> str:
     """金额格式化：1亿以上→X.XX亿，1万以上→X万，否则→整数"""

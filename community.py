@@ -16,7 +16,8 @@ except ImportError:
 
 # ─── 本地缓存（日内数据不常变，避免重复拉取） ───
 _CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "claude_stock_cache")
-_CACHE_TTL = 7200  # 2小时
+# 常量从 config 统一导入
+from config import CACHE_TTL as _CACHE_TTL
 
 def _cache_get(key):
     path = os.path.join(_CACHE_DIR, f"{key}.json")
