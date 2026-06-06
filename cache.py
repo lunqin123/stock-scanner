@@ -145,12 +145,15 @@ def _is_market_frozen() -> bool:
     return False
 
 def daily_set(key: str, data, force=False):
-    # 盘后冻结：已有缓存文件时不覆盖，保留全天数据（除非 force=True）
+    # 盘中不写缓存(盘中数据是临时快照,写会污染盘后数据)
+    if not _is_market_frozen():
+        return
+    # 盘后: 已有缓存文件时不覆盖,保留全天数据(除非 force=True)
     try:
-        if not force and _is_market_frozen():
+        if not force:
             path = _daily_path(key)
             if os.path.exists(path):
-                return  # 盘后不覆盖已有缓存
+                return
         os.makedirs(_CACHE_DIR, exist_ok=True)
         with open(_daily_path(key), 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
