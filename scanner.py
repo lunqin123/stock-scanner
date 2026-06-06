@@ -81,8 +81,8 @@ def _cache_put(name, df):
         # 只保留必要列，缩小 pickle 体积
         slim = df.copy() if hasattr(df, 'columns') and len(df.columns) < 20 else df
         slim.to_pickle(os.path.join(_CACHE_DIR, f"{name}.pkl"))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [scanner L84] failed: {e}", file=sys.stderr)
 
 def _cache_get(name, ttl_override: int = None):
     path = os.path.join(_CACHE_DIR, f"{name}.pkl")
@@ -90,8 +90,8 @@ def _cache_get(name, ttl_override: int = None):
     try:
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl:
             return pd.read_pickle(path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [scanner L93] failed: {e}", file=sys.stderr)
     return None
 
 
@@ -193,8 +193,8 @@ def fetch_limit_up_pool(date_str: str = None) -> pd.DataFrame:
             if df is not None and not df.empty:
                 print(f"  → 降级成功，使用昨日数据：{len(df)} 只", file=sys.stderr)
                 return df
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [scanner L196] failed: {e}", file=sys.stderr)
         return pd.DataFrame()
     if df is None or df.empty:
         print("  → 无涨停数据（非交易日或市场休市）", file=sys.stderr)
@@ -973,8 +973,8 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
         try:
             if float(turnover) > 20:
                 risk_parts.append('换手过高')
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            print(f"  [scanner L976] failed: {e}", file=sys.stderr)
         # 连板可买性风险提示：高连板但可买性低 = 明天买不到
         try:
             lb_val = float(lianban) if lianban != '?' else 0
@@ -983,8 +983,8 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
                 risk_parts.append(f'{int(lb_val)}连板可买性仅{by_val:.0f}分，明天买不到')
             elif lb_val >= 3 and by_val < 4:
                 risk_parts.append(f'{int(lb_val)}连板可买性低，大概率被堵')
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            print(f"  [scanner L986] failed: {e}", file=sys.stderr)
         risk = '; '.join(risk_parts) if risk_parts else '关注次日竞价'
 
         try:
@@ -1244,8 +1244,8 @@ def analyze_dragon_tiger(df: pd.DataFrame, today_str: str):
                     elif net_buy < -1e7:
                         scores[idx] = -4.0
                         lhb_data[code] = f"净卖出{abs(net_buy)/1e8:.2f}亿"
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [scanner L1247] failed: {e}", file=sys.stderr)
     return scores, lhb_data
 
 
@@ -1287,10 +1287,10 @@ def score_stock_history(df: pd.DataFrame, today_str: str):
                                 elif freq >= 0.1:
                                     scores[idx] = 3.5
                                 raw_details[code] = f"{times}/{days}"
-                        except (ValueError, IndexError):
-                            pass
-    except Exception:
-        pass
+                        except (ValueError, IndexError) as e:
+                            print(f"  [scanner L1290] failed: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [scanner L1292] failed: {e}", file=sys.stderr)
     return scores, raw_details
 
 
@@ -1943,8 +1943,8 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
             try:
                 k, v = f.result()
                 pool_data[k] = v
-            except:
-                pass
+            except Exception as e:
+                print(f"  [scanner L1946] failed: {e}", file=sys.stderr)
 
     limit_df = pool_data.get('limit', pd.DataFrame())
     zhaban_df = pool_data.get('zhaban', pd.DataFrame())
@@ -1969,8 +1969,8 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
                     name = str(row.iloc[1]) if len(row) > 1 else ''
                     net_in = float(row.iloc[4]) if len(row) > 4 else 0
                     sector_fund_map[name] = net_in
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [scanner L1972] failed: {e}", file=sys.stderr)
 
     today_display = date.today().strftime('%Y-%m-%d')
     lines = [f"板块联动强度 TOP{n} ({today_display})", "=" * 80]
@@ -2095,8 +2095,8 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
     elif len(df.columns) > 6:
         try:
             df = df[df.iloc[:, 6].astype(float) <= MAX_MARKET_CAP * 1e8]
-        except:
-            pass
+        except Exception as e:
+            print(f"  [scanner L2098] failed: {e}", file=sys.stderr)
 
     after = len(df)
     print(f"  → 过滤后 {after}/{before} 只", file=sys.stderr)
@@ -2792,8 +2792,8 @@ def main():
         community_output, sentiment_data = stock_community.run(filtered_top, TOP_N)
         if community_output:
             print(community_output)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [scanner L2795] failed: {e}", file=sys.stderr)
 
     # ── 增强指标分析 ──
     try:
@@ -2804,8 +2804,8 @@ def main():
         )
         if enhanced_output:
             print(enhanced_output)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [scanner L2807] failed: {e}", file=sys.stderr)
 
     # ── 数据持久化 + 每日总结 ──
     try:

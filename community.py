@@ -24,8 +24,8 @@ def _cache_get(key):
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < _CACHE_TTL:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L27] failed: {e}", file=sys.stderr)
     return None
 
 def _cache_set(key, data):
@@ -34,8 +34,8 @@ def _cache_set(key, data):
         path = os.path.join(_CACHE_DIR, f"{key}.json")
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=None, separators=(',', ':'))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L37] failed: {e}", file=sys.stderr)
 
 TOP_NEWS = 3       # 每只股票取前N条新闻
 TOP_STOCKS = 10    # 查新闻的目标股票数
@@ -60,8 +60,8 @@ def fetch_news_for_stocks(df, top_n=TOP_STOCKS):
                     t = str(nr.get('public_time', nr.get('发布时间', '')))[:19]
                     items.append({'title': title, 'time': t})
                 return code, {'name': name, 'news': items}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [community L63] failed: {e}", file=sys.stderr)
         return None
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -73,8 +73,8 @@ def fetch_news_for_stocks(df, top_n=TOP_STOCKS):
                 r = f.result()
                 if r:
                     result[r[0]] = r[1]
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [community L76] failed: {e}", file=sys.stderr)
     return result
 
 
@@ -115,8 +115,8 @@ def fetch_guba_rank():
             }
             _cache_set(cache_key, result)
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L118] failed: {e}", file=sys.stderr)
     return {}
 
 
@@ -141,8 +141,8 @@ def fetch_comment_scores():
                 }
             _cache_set(cache_key, result)
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L144] failed: {e}", file=sys.stderr)
     return {}
 
 
@@ -168,8 +168,8 @@ def fetch_xueqiu_rank():
                     result[code] = {'xq_rank': i, 'name': row.get('股票名称', '')}
             _cache_set(cache_key, result)
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L171] failed: {e}", file=sys.stderr)
     return {}
 
 
@@ -187,8 +187,8 @@ def fetch_global_news():
                     'title': str(row.iloc[0])[:80],
                     'time': str(row.iloc[1])[:19] if len(row) > 1 else '',
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L190] failed: {e}", file=sys.stderr)
     try:
         cls = _timeout_call(ak.stock_info_global_cls, timeout=10)
         if cls is not None and not cls.empty:
@@ -198,8 +198,8 @@ def fetch_global_news():
                     'title': str(row.iloc[0])[:80],
                     'time': str(row.iloc[1])[:19] if len(row) > 1 else '',
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [community L201] failed: {e}", file=sys.stderr)
     return items
 
 
@@ -286,8 +286,8 @@ def compute_community_scores(comments: dict, guba: dict, df):
                         total += 1
                     elif cs >= 50:
                         total += 0.5
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    print(f"  [community L289] failed: {e}", file=sys.stderr)
 
             # 机构参与度 (0-2): 实际为 0-1 数值
             inst = comments[code].get('机构参与度')
@@ -295,8 +295,8 @@ def compute_community_scores(comments: dict, guba: dict, df):
                 try:
                     inst_val = float(inst)
                     total += min(2, inst_val * 2)  # 0-1 → 0-2
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    print(f"  [community L298] failed: {e}", file=sys.stderr)
 
         # 股吧热度排名 (0-2)
         if code in guba:

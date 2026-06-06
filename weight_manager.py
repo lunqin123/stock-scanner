@@ -44,8 +44,8 @@ def load_weights() -> dict:
             weights = dict(DEFAULT_WEIGHTS)
             weights.update({k: v for k, v in data.items() if k in DEFAULT_WEIGHTS})
             return weights
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [weight_manager L47] failed: {e}", file=sys.stderr)
     return dict(DEFAULT_WEIGHTS)
 
 
@@ -209,8 +209,8 @@ def save_daily_correlations(correlations: dict, trading_date: str = None):
         os.makedirs(os.path.dirname(_ROLLING_FILE), exist_ok=True)
         with open(_ROLLING_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [weight_manager L212] failed: {e}", file=sys.stderr)
 
 
 def _load_rolling_data() -> list:
@@ -218,8 +218,8 @@ def _load_rolling_data() -> list:
         if os.path.exists(_ROLLING_FILE):
             with open(_ROLLING_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [weight_manager L221] failed: {e}", file=sys.stderr)
     return []
 
 

@@ -143,8 +143,8 @@ def _batch_fetch_hist(df, top_n=10):
                     c, hist = f.result()
                     if hist is not None and len(hist) >= 10:
                         _HIST_CACHE[c] = hist
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  [indicators L146] failed: {e}", file=sys.stderr)
 
     return {c: _HIST_CACHE[c] for c in codes if c in _HIST_CACHE}
 
@@ -162,8 +162,8 @@ def fetch_volume_ratio(df: pd.DataFrame, top_n=10) -> dict:
                 today_v = volumes.iloc[-1]
                 avg5 = volumes.iloc[-6:-1].mean()
                 result[code] = round(today_v / avg5, 2) if avg5 > 0 else 1.0
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [indicators L165] failed: {e}", file=sys.stderr)
     return result
 
 
@@ -196,8 +196,8 @@ def fetch_position_type(df: pd.DataFrame, top_n=10) -> dict:
                 result[code] = '趋势上行'
             else:
                 result[code] = '震荡区间'
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [indicators L199] failed: {e}", file=sys.stderr)
     return result
 
 

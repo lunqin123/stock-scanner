@@ -134,8 +134,8 @@ def main():
                     try:
                         chg = float(r[change_col])
                         next_change_map[c] = chg
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        print(f"  [fetch_backtest L137] failed: {e}", file=sys.stderr)
             print(f"    → 获取到 {len(next_change_map)} 只次日涨跌幅数据", file=sys.stderr)
 
             # ── 2e. 组装记录 ──

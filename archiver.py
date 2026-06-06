@@ -309,22 +309,22 @@ def _save_market_snapshot(conn, trade_date):
         pool = ak.stock_zt_pool_em(date=trade_date)
         if pool is not None and not pool.empty:
             limit_up_count = len(pool)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [archiver L312] failed: {e}", file=sys.stderr)
 
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=trade_date)
         if zb is not None and not zb.empty:
             zhaban_count = len(zb)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [archiver L319] failed: {e}", file=sys.stderr)
 
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=trade_date)
         if dt is not None and not dt.empty:
             dieting_count = len(dt)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [archiver L326] failed: {e}", file=sys.stderr)
 
     # 全市场涨跌比（采样方式）
     up_count, down_count = 0, 0
@@ -337,8 +337,8 @@ def _save_market_snapshot(conn, trade_date):
             changes = spot[chg_col].astype(float)
             up_count = int((changes > 0).sum())
             down_count = int((changes < 0).sum())
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [archiver L340] failed: {e}", file=sys.stderr)
 
     # 热点行业
     hot_industries = "[]"
@@ -350,8 +350,8 @@ def _save_market_snapshot(conn, trade_date):
                 if ind_col:
                     hot = pool[ind_col].value_counts().head(5)
                     hot_industries = json.dumps(list(hot[hot >= 3].index), ensure_ascii=False)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [archiver L353] failed: {e}", file=sys.stderr)
 
     conn.execute("""
         INSERT OR REPLACE INTO market_daily
