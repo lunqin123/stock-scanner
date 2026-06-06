@@ -1876,8 +1876,8 @@ def _run_close_scan(principal=20000):
                 import archiver
                 threading.Thread(target=lambda: archiver.archive_day_t(today), daemon=True).start()
                 print("  [归档] 已触发后台归档", file=sys.stderr)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [归档] 启动失败: {e}", file=sys.stderr)
         else:
             print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
             threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
