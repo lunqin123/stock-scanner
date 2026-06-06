@@ -15,30 +15,18 @@ const _dom = {
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 let currentPage = '';
-let _outputCache = {};  // {html: string, ts: number}
-const _CACHE_TTL_MS = 5 * 60 * 1000;  // 5分钟过期
-const _CACHE_SCHEMA_VER = 2;  // 改评分逻辑时+1，自动清旧缓存
+let _outputCache = {};  // {html: string} - 服务端注入 _CACHED_RANKING 的临时展示(scan-limit fallback)
+// nav 切 tab 永远重拉(见 switchPage),此处仅供 _CACHED_RANKING fallback 路径用
 
 function _getCachedPage(page) {
     var c = _outputCache[page];
-    if (!c) return null;
-    if (Date.now() - c.ts > _CACHE_TTL_MS) { delete _outputCache[page]; return null; }
-    return c.html;
+    return c ? c.html : null;
 }
 function _setCachedPage(page, html) {
-    _outputCache[page] = { html: html, ts: Date.now() };
+    _outputCache[page] = html;
 }
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台
-
-// 跨版本自动清缓存
-(function() {
-    var v = sessionStorage.getItem('_cacheSchemaVer') || '0';
-    if (v !== String(_CACHE_SCHEMA_VER)) {
-        _outputCache = {};
-        sessionStorage.setItem('_cacheSchemaVer', String(_CACHE_SCHEMA_VER));
-    }
-})();
 
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
