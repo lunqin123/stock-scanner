@@ -65,30 +65,38 @@ def seal_time_score(t: str) -> float:
         return 5.0
 
 def _fund_flow_ttl() -> int:
-    """资金流缓存 TTL：盘中 5 分钟，盘后/非交易日不缓存"""
+    """资金流缓存 TTL:
+    - 盘中 5 分钟(资金持续变动)
+    - 盘后 4 小时(当日历史快照稳定)
+    - 非交易日 24 小时(历史数据,稳定)
+    文件名带日期前缀做天然跨日隔离,盘后缓存不会污染次日"""
     from cache import _is_trading_day
     now = datetime.now(_CST)
     if not _is_trading_day(now.strftime("%Y%m%d")):
-        return 0
+        return 86400  # 非交易日 24h
     minute = now.hour * 60 + now.minute
     if (MARKET_OPEN_MINUTES <= minute < MORNING_CLOSE_MINUTES) or (AFTERNOON_OPEN_MINUTES <= minute < AFTERNOON_CLOSE_MINUTES):
         return 300  # 盘中 5 分钟
-    return 0
+    return 14400  # 盘后 4 小时
 
 def _cache_put(name, df):
     try:
         os.makedirs(_CACHE_DIR, exist_ok=True)
-        # 只保留必要列，缩小 pickle 体积
+        # 只保留必要列,缩小 pickle 体积
         slim = df.copy() if hasattr(df, 'columns') and len(df.columns) < 20 else df
-        slim.to_pickle(os.path.join(_CACHE_DIR, f"{name}.pkl"))
+        # 文件名带日期前缀,天然跨日隔离(防盘后缓存污染次日)
+        today = datetime.now(_CST).strftime("%Y%m%d")
+        slim.to_pickle(os.path.join(_CACHE_DIR, f"{today}_{name}.pkl"))
     except Exception as e:
         print(f"  [scanner L84] failed: {e}", file=sys.stderr)
 
 def _cache_get(name, ttl_override: int = None):
-    path = os.path.join(_CACHE_DIR, f"{name}.pkl")
-    ttl = ttl_override if ttl_override is not None else _CACHE_TTL
+    if ttl_override is None: ttl_override = _CACHE_TTL
+    # 文件名带日期前缀,天然跨日隔离(防盘后缓存污染次日)
+    today = datetime.now(_CST).strftime("%Y%m%d")
+    path = os.path.join(_CACHE_DIR, f"{today}_{name}.pkl")
     try:
-        if os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl:
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < ttl_override:
             return pd.read_pickle(path)
     except Exception as e:
         print(f"  [scanner L93] failed: {e}", file=sys.stderr)
