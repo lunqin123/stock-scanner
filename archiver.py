@@ -126,7 +126,7 @@ def _log(conn, trade_date, stage, records, status, error=None):
 
 def archive_day_t(trade_date: str = None):
     """
-    归档 Day T 数据：涨停池 + 昨日涨停今日续涨(趋势候选) + 市场快照。
+    归档 Day T 数据：涨停池 + 上交易日涨停今日续涨(趋势候选) + 市场快照。
     trade_date: YYYYMMDD，默认今天
     """
     if trade_date is None:
@@ -158,8 +158,8 @@ def archive_day_t(trade_date: str = None):
             _log(conn, trade_date, 'day_t_limit_up', 0, 'error', e)
             print(f"    涨停池错误: {e}")
 
-        # ── 2. 昨日涨停今日续涨（趋势候选） ──
-        print("  [2/4] 拉取趋势候选(昨日涨停今日表现)...")
+        # ── 2. 上交易日涨停今日续涨（趋势候选） ──
+        print("  [2/4] 拉取趋势候选(上交易日涨停今日表现)...")
         try:
             prev = ak.stock_zt_pool_previous_em(date=trade_date)
             if prev is not None and not prev.empty:
@@ -172,7 +172,7 @@ def archive_day_t(trade_date: str = None):
                 count = _save_trend_stocks(conn, trade_date, trend)
                 _log(conn, trade_date, 'day_t_trend', count, 'success')
                 total += count
-                print(f"    趋势候选: {count} 只 (昨日涨停共{len(prev)}只)")
+                print(f"    趋势候选: {count} 只 (上交易日涨停共{len(prev)}只)")
             else:
                 _log(conn, trade_date, 'day_t_trend', 0, 'empty')
                 print("    趋势候选: 空")
@@ -191,15 +191,15 @@ def archive_day_t(trade_date: str = None):
             print(f"    市场快照错误: {e}")
 
         # ── 4. 尝试更新前一天的 next_day 数据 ──
-        print("  [4/4] 更新前一日 next_day 数据...")
+        print("  [4/4] 更新上交易日 next_day 数据...")
         try:
-            yesterday = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+            yesterday = _last_trading_date(trade_date)
             updated = _update_next_day_data(conn, yesterday, trade_date)
             if updated > 0:
                 _log(conn, yesterday, 'day_t1', updated, 'success')
-                print(f"    更新昨日数据: {updated} 只")
+                print(f"    更新上交易日数据: {updated} 只")
         except Exception as e:
-            print(f"    更新昨日数据错误: {e}")
+            print(f"    更新上交易日数据错误: {e}")
 
     except Exception as e:
         print(f"  [归档] 严重错误: {e}")
@@ -382,7 +382,7 @@ def _update_next_day_data(conn, target_date, current_date):
     import akshare as ak
     import pandas as _pd
 
-    # 方法1: 用 stock_zt_pool_previous_em 获取昨日涨停股的今日表现
+    # 方法1: 用 stock_zt_pool_previous_em 获取上交易日涨停股的今日表现
     updated = 0
     try:
         prev = ak.stock_zt_pool_previous_em(date=current_date)
@@ -625,7 +625,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="每日数据归档系统")
     parser.add_argument('--stage', choices=['t', 't1', 'auto'], default='auto',
-                        help='归档阶段: t=拉取当日数据, t1=补前一日next_day, auto=自动检测')
+                        help='归档阶段: t=拉取当日数据, t1=补上交易日next_day, auto=自动检测')
     parser.add_argument('--date', type=str, default=None,
                         help='指定日期 YYYYMMDD（默认今天）')
     parser.add_argument('--status', action='store_true', help='查看归档状态')

@@ -497,14 +497,13 @@ def _fetch_trend_data(today, principal):
     _saved = _sys.stderr
     _sys.stderr = getattr(_sys, '__stderr__', _sys.stderr)
 
-    # 1. 拉取昨日涨停数据
+    # 1. 拉取上交易日涨停数据
     prev = pd.DataFrame()
     for attempt in [today, None]:
         try:
             if attempt is None:
-                wd = datetime.now().weekday()
-                db = 3 if wd == 0 else (2 if wd == 6 else 1)
-                attempt = (datetime.now() - timedelta(days=db)).strftime("%Y%m%d")
+                from cache import _last_trading_date
+                attempt = _last_trading_date()
             prev = ak.stock_zt_pool_previous_em(date=attempt)
             if not prev.empty: break
         except: continue
@@ -593,7 +592,7 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
 
         # 风险扣分
         if code in zhaban_codes:
-            score -= 10; risk_tags.append("⚠️ 昨日炸板")
+            score -= 10; risk_tags.append("⚠️ 上交易日炸板")
         if consecutive >= 3 and chg < 5:
             score -= 8; risk_tags.append("⚠️ 高位缩量")
         if turnover > 25:
@@ -619,14 +618,14 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries):
         if risk_score >= 60: auction_parts.append('高开1-3%延续')
         elif risk_score >= 50: auction_parts.append('平开或小幅波动')
         else: auction_parts.append('低开1-2%弱势')
-        if 5 <= turnover <= 15: auction_parts.append('竞价量>昨日5%')
-        elif turnover > 15: auction_parts.append('竞价量>昨日8%')
-        else: auction_parts.append('竞价量>昨日3%')
+        if 5 <= turnover <= 15: auction_parts.append('竞价量>上交易日5%')
+        elif turnover > 15: auction_parts.append('竞价量>上交易日8%')
+        else: auction_parts.append('竞价量>上交易日3%')
         if hot_industries and industry in hot_industries:
             auction_parts.append('板块跟得上')
         else:
             auction_parts.append('板块退潮谨慎')
-        if code in zhaban_codes: auction_parts.append('昨炸板不破昨低')
+        if code in zhaban_codes: auction_parts.append('上交易日炸板不破上交易日最低')
         if consecutive >= 3 and chg < 5: auction_parts.append('高位谨慎不追')
         if turnover > 25: auction_parts.append('换手过高警惕分歧')
         if 2 <= chg <= 4: auction_parts.append('低涨幅延续')
@@ -667,7 +666,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
 
 @app.get("/api/scan/reversal/cards")
 def api_reversal_cards(refresh: bool = Query(False, description="强制刷新")):
-    """涨停回调反转扫描 — 昨涨停今回调→明日反包潜力"""
+    """涨停回调反转扫描 — 上交易日涨停今回调→明日反包潜力"""
     import akshare as ak; import pandas as pd
     from scanner import filter_non_main_board
 
@@ -749,15 +748,15 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
         elif s >= 65: auction_parts.append('高开1-3%')
         else: auction_parts.append('平开或高开1%内')
         # 2) 竞价量要求（按换手）
-        if to > 25: auction_parts.append('竞价量>昨日5%')
-        elif to > 15: auction_parts.append('竞价量>昨日3%')
-        elif to > 5: auction_parts.append('竞价量>昨日2%')
-        else: auction_parts.append('竞价量>昨日1%')
+        if to > 25: auction_parts.append('竞价量>上交易日5%')
+        elif to > 15: auction_parts.append('竞价量>上交易日3%')
+        elif to > 5: auction_parts.append('竞价量>上交易日2%')
+        else: auction_parts.append('竞价量>上交易日1%')
         # 3) 板块联动
         if ind in hot_inds: auction_parts.append('板块今日涨停跟得上')
         else: auction_parts.append('板块离线，谨慎参与')
-        # 4) 不破昨低
-        auction_parts.append('不破昨低')
+        # 4) 不破上交易日最低
+        auction_parts.append('不破上交易日最低')
         # 5) 连板提示
         if lb >= 2: auction_parts.append(f'{lb}板强势品种')
         # 6) 浅回调加分
@@ -864,10 +863,10 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         if total_score >= 70: auction_parts.append('高开2-4%反包')
         elif total_score >= 50: auction_parts.append('高开1-2%试反包')
         else: auction_parts.append('平开或谨慎参与')
-        if net > 1e8: auction_parts.append('竞价量>昨日8%承接')
-        elif net > 1e7: auction_parts.append('竞价量>昨日5%承接')
-        elif net > 0: auction_parts.append('竞价量>昨日3%')
-        else: auction_parts.append('竞价量>昨日5%否则放弃')
+        if net > 1e8: auction_parts.append('竞价量>上交易日8%承接')
+        elif net > 1e7: auction_parts.append('竞价量>上交易日5%承接')
+        elif net > 0: auction_parts.append('竞价量>上交易日3%')
+        else: auction_parts.append('竞价量>上交易日5%否则放弃')
         if seal_fund > 0 and seal_fund < 1e7: auction_parts.append('封单已消化')
         elif seal_fund >= 1e7: auction_parts.append('封单重，需消化')
         if zb_times >= 2: auction_parts.append('多次炸板放弃')
@@ -959,9 +958,9 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         if total >= 70: auction_parts.append('高开1-3%翘板')
         elif total >= 50: auction_parts.append('平开或高开1%试翘板')
         else: auction_parts.append('平开观望')
-        if turn_val > 10: auction_parts.append('竞价量>昨日8%放量')
-        elif turn_val > 5: auction_parts.append('竞价量>昨日5%')
-        else: auction_parts.append('竞价量>昨日3%否则放弃')
+        if turn_val > 10: auction_parts.append('竞价量>上交易日8%放量')
+        elif turn_val > 5: auction_parts.append('竞价量>上交易日5%')
+        else: auction_parts.append('竞价量>上交易日3%否则放弃')
         if seal_val > 0 and seal_val < 5e6: auction_parts.append('封单轻易翘')
         elif seal_val >= 5e7: auction_parts.append('封单重难翘')
         if cont_val >= 3: auction_parts.append('N板超跌反弹')

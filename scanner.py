@@ -184,14 +184,14 @@ def fetch_limit_up_pool(date_str: str = None) -> pd.DataFrame:
     try:
         df = ak.stock_zt_pool_em(date=today_str)
     except Exception:
-        # 降级：尝试用昨日日期
+        # 降级：尝试用上交易日日期
         print("  ⚠ akshare 涨停池获取失败，尝试降级...", file=sys.stderr)
         from datetime import timedelta
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+        yesterday = _last_trading_date()
         try:
             df = ak.stock_zt_pool_em(date=yesterday)
             if df is not None and not df.empty:
-                print(f"  → 降级成功，使用昨日数据：{len(df)} 只", file=sys.stderr)
+                print(f"  → 降级成功，使用上交易日数据：{len(df)} 只", file=sys.stderr)
                 return df
         except Exception as e:
             print(f"  [scanner L196] failed: {e}", file=sys.stderr)
@@ -608,7 +608,7 @@ def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
             penalty[idx] -= 12
             flags[idx].append("⚠️ 三无: 午后+无量+无板块")
 
-        # 规则3: 高位首板 - 昨天还是连板今天首板（高标反抽特征）(-8)
+        # 规则3: 高位首板 - 上交易日还是连板今天首板（高标反抽特征）(-8)
         zt_stat = ''
         for col in df.columns:
             if '涨停' in str(col) and '统计' in str(col):
@@ -922,7 +922,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     prev_count = (sentiment_detail or {}).get('prev_limit_count', 0)
     lines.append(f"TOP {TOP_N} 超短线标的 ({today_display}) | "
                  f"情绪:{sentiment_level} | "
-                 f"昨涨停{prev_count}只 | 溢价{avg_premium:+.2f}% | "
+                 f"上交易日涨停{prev_count}只 | 溢价{avg_premium:+.2f}% | "
                  f"晋级{promo_rate*100:.0f}% | 炸板{zhaban_rate*100:.0f}%")
     lines.append("=" * 70)
 
@@ -1017,8 +1017,8 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
 
 def detect_market_sentiment(today_str: str):
     """
-    市场情绪检测：基于昨日涨停股今日的溢价表现。
-    使用 stock_zt_pool_previous_em 获取昨日涨停池（含今日涨跌幅）。
+    市场情绪检测：基于上交易日涨停股今日的溢价表现。
+    使用 stock_zt_pool_previous_em 获取上交易日涨停池（含今日涨跌幅）。
     返回: (score, level, details_dict)
     - score: 0-10 分
     - level: 冰点/低迷/正常/活跃/高潮
@@ -1035,11 +1035,11 @@ def detect_market_sentiment(today_str: str):
     yesterday = yesterday.strftime('%Y%m%d')
 
     try:
-        print("  [情绪] 第1步: 获取昨日涨停数据...", file=sys.stderr)
+        print("  [情绪] 第1步: 获取上交易日涨停数据...", file=sys.stderr)
         prev_limit = ak.stock_zt_pool_previous_em(date=yesterday)
         if prev_limit.empty:
-            return 5.0, "未知(无昨日数据)", {"note": "no previous data"}
-        print(f"  [情绪] 昨日涨停 {len(prev_limit)} 只", file=sys.stderr)
+            return 5.0, "未知(无上交易日数据)", {"note": "no previous data"}
+        print(f"  [情绪] 上交易日涨停 {len(prev_limit)} 只", file=sys.stderr)
 
         print("  [情绪] 第2步: 获取炸板/跌停数据...", file=sys.stderr)
         zb_df = ak.stock_zt_pool_zbgc_em(date=yesterday)
@@ -1119,8 +1119,8 @@ def detect_market_sentiment(today_str: str):
         except Exception as e:
             print(f"  [情绪] 大盘数据获取异常: {e}", file=sys.stderr)
 
-        # ── 综合评分：昨天表现(40%) + 今天盘面(30%) + 涨跌停比(20%) + 炸板率(10%) ──
-        # 1. 基础分：昨日涨停今表现 (0-10)
+        # ── 综合评分：上交易日表现(40%) + 今天盘面(30%) + 涨跌停比(20%) + 炸板率(10%) ──
+        # 1. 基础分：上交易日涨停今表现 (0-10)
         if avg_premium > 3 and promo_rate > 0.3:
             prev_score = 9.0
             prev_label = "高潮"
@@ -1254,7 +1254,7 @@ def analyze_dragon_tiger(df: pd.DataFrame, today_str: str):
 def score_stock_history(df: pd.DataFrame, today_str: str):
     """
     基于近期涨停数据评估股性。
-    从 akshare 获取昨日涨停池（含今日涨跌幅）+ 近期涨停统计。
+    从 akshare 获取上交易日涨停池（含今日涨跌幅）+ 近期涨停统计。
     """
     scores = pd.Series(2.5, index=df.index)
     raw_details = {}
@@ -1383,14 +1383,14 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
 
 def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
     """
-    涨停回调反转扫描：找"昨日涨停今日下跌"的股票，评估明日反包潜力。
-    逻辑：昨天强势封板→今天回调洗盘→明天最可能反转大涨。
-    达实智能这类"昨天跌今天涨停"的反转股，昨天大概率不在涨停池，
-    但前天涨停昨天回调的股票，今天就是反转候选。
+    涨停回调反转扫描：找"上交易日涨停今日下跌"的股票，评估明日反包潜力。
+    逻辑：上交易日强势封板→今天回调洗盘→明天最可能反转大涨。
+    达实智能这类"上交易日跌今天涨停"的反转股，上交易日大概率不在涨停池，
+    但前天涨停上交易日回调的股票，今天就是反转候选。
     """
     import pandas as pd
     n = top_n if top_n is not None else TOP_N
-    print("[反转扫描] 获取昨日涨停今日表现...", file=sys.stderr)
+    print("[反转扫描] 获取上交易日涨停今日表现...", file=sys.stderr)
     try:
         prev = ak.stock_zt_pool_previous_em(date=today_str)
     except Exception as e:
@@ -1417,7 +1417,7 @@ def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
     if pullback.empty:
         print("no_data")
         return
-    print(f"  → 昨涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
+    print(f"  → 上交易日涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
 
     # ── 反转评分 (0-100，基于14日回测数据驱动) ──
     scores = pd.Series(0.0, index=pullback.index)
@@ -1815,9 +1815,9 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
             print("\n".join(lines))
             return trend_results
 
-    # ── 降级方案：昨日涨停今日续强（盘后可用）──
-    print("  强势池不可用，使用「昨日涨停今日续强」策略", file=sys.stderr)
-    print("  该策略寻找昨日涨停后今日继续走强(涨幅3-9%)的标的", file=sys.stderr)
+    # ── 降级方案：上交易日涨停今日续强（盘后可用）──
+    print("  强势池不可用，使用「上交易日涨停今日续强」策略", file=sys.stderr)
+    print("  该策略寻找上交易日涨停后今日继续走强(涨幅3-9%)的标的", file=sys.stderr)
     from datetime import datetime as dt_mod, timedelta
     today_dt = dt_mod.strptime(today_str, '%Y%m%d') if len(today_str) == 8 else dt_mod.today()
     wd = today_dt.weekday()
@@ -1844,13 +1844,13 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
     df['趋势评分'] = changes * 10
     df = df.sort_values('趋势评分', ascending=False).head(n)
 
-    lines = [f"趋势动量股 TOP{n} | 昨日涨停今日续强", "=" * 70]
+    lines = [f"趋势动量股 TOP{n} | 上交易日涨停今日续强", "=" * 70]
     for rank, (_, row) in enumerate(df.iterrows(), 1):
         code = str(row.iloc[1]).strip().zfill(6)
         name = row.iloc[2]
         chg = float(row[change_col])
         lines.append(f"{rank}. {code} {name} | 今日涨幅 {chg:+.1f}%")
-        lines.append(f"   昨日涨停后今日继续走强，趋势延续中")
+        lines.append(f"   上交易日涨停后今日继续走强，趋势延续中")
         lines.append(f"   策略: 沿5日线持有，破5日线止盈")
 
     trend_results = []
@@ -2182,9 +2182,9 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
 
 def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = None):
     """
-    对昨日涨停股进行回测评分，使用与实盘排行完全相同的 7 因子加权模型。
-    prev_df: stock_zt_pool_previous_em 返回的昨日涨停池（含今日涨跌幅）
-    date_str: 昨日日期 YYYYMMDD，用于计算历史股性等因子
+    对上交易日涨停股进行回测评分，使用与实盘排行完全相同的 7 因子加权模型。
+    prev_df: stock_zt_pool_previous_em 返回的上交易日涨停池（含今日涨跌幅）
+    date_str: 上交易日日期 YYYYMMDD，用于计算历史股性等因子
     返回: (df_with_scores, summary_dict)
     """
     df = prev_df.copy()
@@ -2213,7 +2213,7 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     w = weight_manager.load_weights()
 
     # 回测数据修复：stock_zt_pool_previous_em 没有封板时间/封板资金列
-    # 换手率代理逻辑：在"昨日涨停"票中，低换手=筹码锁定好=强封板。
+    # 换手率代理逻辑：在"上交易日涨停"票中，低换手=筹码锁定好=强封板。
     # 这是回测的固有局限——无法还原真实的封板时间和封板资金。
     has_seal_data = ('首次封板时间' in df.columns or '封板资金' in df.columns)
     if has_seal_data:
@@ -2533,8 +2533,10 @@ def run_backtest():
 
     print(f"运行 {N} 天滚动回测...")
     for i in range(N):
-        d = date.today() - timedelta(days=i * 1)
+        d = date.today() - timedelta(days=i)
         if d.weekday() >= 5:
+            continue
+        if not _is_trading_day(d.strftime("%Y%m%d")):
             continue
         d_str = d.strftime("%Y%m%d")
         try:
@@ -2614,7 +2616,7 @@ def main():
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
     parser.add_argument('--dtqiaoban', action='store_true', help='跌停翘板信号扫描')
-    parser.add_argument('--reversal', action='store_true', help='涨停回调反转扫描(昨涨停今回调→明日反包)')
+    parser.add_argument('--reversal', action='store_true', help='涨停回调反转扫描(上交易日涨停今回调→明日反包)')
     parser.add_argument('--date', type=str, default='', help='指定日期 YYYYMMDD（默认: 今天）')
     parser.add_argument('--top', type=int, default=0, help=f'输出数量（默认: {TOP_N}）')
     args = parser.parse_args()

@@ -53,6 +53,21 @@ def _trading_date() -> str:
         d -= timedelta(days=1)
     return now.strftime("%Y-%m-%d")  # fallback
 
+def _last_trading_date(date_str: str = None) -> str:
+    """返回指定日期(或今天)的上个交易日,YYYYMMDD 格式。
+    跳过周末+节假日(正确处理周一/节假日后第一天)。
+    date_str: 可选,YYYYMMDD 8位;不传则用当前交易日
+    """
+    if date_str is None:
+        date_str = _trading_date().replace('-', '')
+    cur = datetime.strptime(date_str, '%Y%m%d')
+    for _ in range(10):
+        cur = cur - timedelta(days=1)
+        s = cur.strftime('%Y%m%d')
+        if cur.weekday() < 5 and _is_trading_day(s):
+            return s
+    return cur.strftime('%Y%m%d')  # fallback
+
 def _daily_path(key: str) -> str:
     return os.path.join(_CACHE_DIR, f"daily_{_trading_date()}_{key}_v{_CACHE_VER}.json")
 

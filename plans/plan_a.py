@@ -33,9 +33,9 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
     elif st and int(st[:2]) < 11: parts.append("高开3-5%")
     elif st and int(st[:2]) < 13: parts.append("高开2-3%")
     else: parts.append("平开或高开1-2%")
-    if turnover > 15: parts.append("竞价量>昨日成交8%")
-    elif turnover > 5: parts.append("竞价量>昨日成交5%")
-    else: parts.append("竞价量>昨日成交3%")
+    if turnover > 15: parts.append("竞价量>上交易日成交8%")
+    elif turnover > 5: parts.append("竞价量>上交易日成交5%")
+    else: parts.append("竞价量>上交易日成交3%")
     # ── 板块双龙头: 情绪龙头(连板最高,游资) + 中军龙头(大市值,机构) ──
     if sm >= 10 and pool is not None and not pool.empty:
         ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)

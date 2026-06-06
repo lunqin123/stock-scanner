@@ -51,7 +51,7 @@ async function loadDashboard() {
                 <div class="dash-stat-body">
                     <div class="dash-stat-value green"><span class="dash-count" data-target="${d.limit_up_count||0}">0</span></div>
                     <div class="dash-stat-label">涨停</div>
-                    <div class="dash-stat-sub">昨 ${d.prev_limit_count||'?'} 只</div>
+                    <div class="dash-stat-sub">上交易日 ${d.prev_limit_count||'?'} 只</div>
                 </div>
             </div>
             <div class="dash-stat-card animate-fade-up stagger-4" onclick="location.hash=\'#scan-dtqiaoban\'" title="点击查看跌停翘板">

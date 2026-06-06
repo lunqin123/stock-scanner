@@ -456,7 +456,7 @@ function renderSentimentCards(data) {
 
     // 明细数据
     var items = [
-        { label: '昨日涨停', value: data.prev_limit_count + ' 只', color: 'var(--green)' },
+        { label: '上交易日涨停', value: data.prev_limit_count + ' 只', color: 'var(--green)' },
         { label: '今日涨停', value: (data.today_limit_up || 0) + ' 只', color: 'var(--green)' },
         { label: '今日跌停', value: (data.today_limit_down || 0) + ' 只', color: 'var(--red)' },
         { label: '全市场涨', value: (data.all_up || 0) + ' 家', color: data.all_up > data.all_down ? 'var(--green)' : 'var(--red)' },
@@ -622,7 +622,7 @@ function renderTrendCards(items) {
     return parts.join('');
 }
 
-// ─── 反转扫描卡片（昨涨停今回调 → 明日反包潜力） ───
+// ─── 反转扫描卡片（上交易日涨停今日回调 → 明日反包潜力） ───
 function renderReversalCards(items) {
     const parts = ['<div class="card-list">'];
     for (let i = 0; i < items.length; i++) {
