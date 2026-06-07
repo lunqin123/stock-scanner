@@ -11,6 +11,7 @@ Plan A — 9因子加权 + 本金适配 + 危险信号检测
 
 PLAN_NAME = "A"
 PLAN_DESC = "9因子加权+本金适配+危险信号"
+PLAN_SOURCES = []  # Plan A 只用 akshare 基础数据, 无需扩展源
 
 import pandas as pd
 import sys
