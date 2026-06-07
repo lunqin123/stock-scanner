@@ -58,95 +58,82 @@ PLAN_B_RAW_MAX = {
 #  新增因子计算 (a-stock-data 降级安全)
 # ═══════════════════════════════════════════
 
-def _compute_north_flow(df: pd.DataFrame, today_str: str = None) -> pd.Series:
+def _compute_north_flow(df: pd.DataFrame, cached_flows: dict) -> pd.Series:
     """
     北向资金净流入评分 (0-6)。
-    优先用 a-stock-data 直连东财 push2,不可用时给中性 3 分。
+    数据来自 raw_scan_data.pkl (拉取阶段缓存), 无数据给中性 3 分。
     """
     scores = pd.Series(3.0, index=df.index)
-    try:
-        from datasource import get_north_flow_batch
-        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
-        flows = get_north_flow_batch(codes, date_str=today_str)
-        for idx, code in zip(df.index, codes):
-            net = flows.get(code, 0)
-            # 阶梯: 净流入>1亿=6, >5千万=5, >1千万=4, >0=3.5, 0=3, 净流出=2
-            if net > 1e8: scores[idx] = 6.0
-            elif net > 5e7: scores[idx] = 5.0
-            elif net > 1e7: scores[idx] = 4.0
-            elif net > 0: scores[idx] = 3.5
-            elif net == 0: scores[idx] = 3.0
-            else: scores[idx] = 2.0
-    except Exception as e:
-        print(f"  [PlanB] 北向资金不可用(降级中性): {e}", file=sys.stderr)
+    if not cached_flows:
+        return scores
+    for idx in df.index:
+        code = str(df.loc[idx, '代码']).strip().zfill(6)
+        net = cached_flows.get(code, 0)
+        if net > 1e8: scores[idx] = 6.0
+        elif net > 5e7: scores[idx] = 5.0
+        elif net > 1e7: scores[idx] = 4.0
+        elif net > 0: scores[idx] = 3.5
+        elif net == 0: scores[idx] = 3.0
+        else: scores[idx] = 2.0
     return scores
 
 
-def _compute_margin_ratio(df: pd.DataFrame, today_str: str = None) -> pd.Series:
+def _compute_margin_ratio(df: pd.DataFrame, cached_margins: dict) -> pd.Series:
     """
     融资余额/流通市值 评分 (0-4)。
     适度杠杆(2-5%)看多信号,过高(>10%)风险,过低(<1%)无杠杆动力。
     """
     scores = pd.Series(2.0, index=df.index)
-    try:
-        from datasource import get_margin_batch
-        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
-        margins = get_margin_batch(codes)
-        for idx, code in zip(df.index, codes):
-            ratio = margins.get(code, 0)
-            if 2 <= ratio < 5: scores[idx] = 4.0       # 黄金杠杆区间
-            elif 1 <= ratio < 2 or 5 <= ratio < 8: scores[idx] = 3.0
-            elif 8 <= ratio <= 10: scores[idx] = 2.0    # 偏高风险
-            elif ratio > 10: scores[idx] = 1.0           # 过度杠杆
-            else: scores[idx] = 1.5                       # 无杠杆动力
-    except Exception as e:
-        print(f"  [PlanB] 融资融券不可用(降级中性): {e}", file=sys.stderr)
+    if not cached_margins:
+        return scores
+    for idx in df.index:
+        code = str(df.loc[idx, '代码']).strip().zfill(6)
+        ratio = cached_margins.get(code, 0)
+        if 2 <= ratio < 5: scores[idx] = 4.0
+        elif 1 <= ratio < 2 or 5 <= ratio < 8: scores[idx] = 3.0
+        elif 8 <= ratio <= 10: scores[idx] = 2.0
+        elif ratio > 10: scores[idx] = 1.0
+        else: scores[idx] = 1.5
     return scores
 
 
-def _compute_inst_rating(df: pd.DataFrame) -> pd.Series:
+def _compute_inst_rating(df: pd.DataFrame, cached_ratings: dict) -> pd.Series:
     """
     机构研报评级评分 (0-4)。
     近30天评级上调=4, 维持买入=3, 首次覆盖=3, 下调=1, 无覆盖=2。
     """
     scores = pd.Series(2.0, index=df.index)
-    try:
-        from datasource import get_rating_batch
-        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
-        ratings = get_rating_batch(codes)
-        rating_score = {'上调': 4, '买入': 3, '增持': 3, '首次': 3,
-                       '中性': 2, '持有': 2, '减持': 1, '卖出': 0}
-        for idx, code in zip(df.index, codes):
-            r = ratings.get(code, '')
-            scores[idx] = rating_score.get(r, 2.0)
-    except Exception as e:
-        print(f"  [PlanB] 机构研报不可用(降级中性): {e}", file=sys.stderr)
+    if not cached_ratings:
+        return scores
+    rating_score = {'上调': 4, '买入': 3, '增持': 3, '首次': 3,
+                   '中性': 2, '持有': 2, '减持': 1, '卖出': 0}
+    for idx in df.index:
+        code = str(df.loc[idx, '代码']).strip().zfill(6)
+        r = cached_ratings.get(code, '')
+        scores[idx] = rating_score.get(r, 2.0)
     return scores
 
 
-def _compute_limit_reason(df: pd.DataFrame) -> pd.Series:
+def _compute_limit_reason(df: pd.DataFrame, cached_reasons: dict) -> pd.Series:
     """
     涨停原因归因质量评分 (0-4)。
     强题材(政策/产业突破)=4, 公告利好=3, 板块跟风=2, 无原因/杂项=1。
     """
     scores = pd.Series(2.0, index=df.index)
-    try:
-        from datasource import get_limit_reason_batch
-        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
-        reasons = get_limit_reason_batch(codes)
-        quality = {'政策': 4, '产业': 4, '突破': 4, '公告': 3,
-                  '业绩': 3, '重组': 3, '跟风': 2, '补涨': 2,
-                  '超跌': 1, '次新': 1}
-        for idx, code in zip(df.index, codes):
-            r = reasons.get(code, '')
-            score = 2.0
-            for kw, s in quality.items():
-                if kw in str(r):
-                    score = float(s)
-                    break
-            scores[idx] = score
-    except Exception as e:
-        print(f"  [PlanB] 涨停归因不可用(降级中性): {e}", file=sys.stderr)
+    if not cached_reasons:
+        return scores
+    quality = {'政策': 4, '产业': 4, '突破': 4, '公告': 3,
+              '业绩': 3, '重组': 3, '跟风': 2, '补涨': 2,
+              '超跌': 1, '次新': 1}
+    for idx in df.index:
+        code = str(df.loc[idx, '代码']).strip().zfill(6)
+        r = cached_reasons.get(code, '')
+        score = 2.0
+        for kw, s in quality.items():
+            if kw in str(r):
+                score = float(s)
+                break
+        scores[idx] = score
     return scores
 
 
@@ -191,22 +178,29 @@ def apply_weights_plan_b(seal_scores, money_scores, sector_scores, tech_scores,
 #  评分聚合 (Plan B 版)
 # ═══════════════════════════════════════════
 
-def compute_all_factors(filtered, scoring_base, fund_df, principal, today_str=None):
+def compute_all_factors(filtered, scoring_base, fund_df, principal,
+                        today_str=None, north_flow=None, margin_ratio=None,
+                        inst_rating=None, limit_reason=None):
     """
     计算所有 13 个因子: Plan A 9 因子 + Plan B 4 因子。
     scoring_base: 因子归一化基准集 (>=filtered, 比 filtered 更全)
+    扩展数据在拉取阶段已缓存到 raw_scan_data.pkl, 这里直接评分。
     """
     # Plan A 的 9 因子在 scoring_base 上计算以保证归一化稳定
     factors_a = compute_factors(scoring_base if len(scoring_base) > len(filtered) else filtered,
                                 fund_df, principal)
 
-    # Plan B 新增 4 因子在 scoring_base 上计算
+    # Plan B 新增 4 因子: 从缓存 dict 直接评分 (无数据=空dict, 给默认分)
     base = scoring_base if len(scoring_base) > len(filtered) else filtered
+    nf = north_flow if isinstance(north_flow, dict) else {}
+    mr = margin_ratio if isinstance(margin_ratio, dict) else {}
+    ir = inst_rating if isinstance(inst_rating, dict) else {}
+    lr = limit_reason if isinstance(limit_reason, dict) else {}
     factors_b = {
-        'north_flow': _compute_north_flow(base, today_str),
-        'margin_ratio': _compute_margin_ratio(base, today_str),
-        'inst_rating': _compute_inst_rating(base),
-        'limit_reason': _compute_limit_reason(base),
+        'north_flow': _compute_north_flow(base, nf),
+        'margin_ratio': _compute_margin_ratio(base, mr),
+        'inst_rating': _compute_inst_rating(base, ir),
+        'limit_reason': _compute_limit_reason(base, lr),
     }
 
     # 缩到 filtered 索引
@@ -291,6 +285,9 @@ def score(inputs: dict) -> dict:
         filtered, scoring_base, fund_df, sentiment_score,
         sentiment_level, sentiment_detail, sentiment_ok,
         history_scores, lhb_bonus, today_str, pool, principal
+        及扩展数据 (north_flow, margin_ratio, inst_rating, limit_reason —
+        拉取阶段由 plans.datasource 拉取并缓存到 raw_scan_data.pkl,
+        不可用时为空 dict，各因子自动降级给默认分)
 
     返回 dict (与 Plan A 相同结构):
         stocks, df, seal_scores, money_scores, raw_money,
@@ -312,12 +309,21 @@ def score(inputs: dict) -> dict:
     today_str = inputs['today_str']
     pool = inputs['pool']
     principal = inputs['principal']
+    # 扩展数据 (拉取阶段已缓存到 raw_scan_data.pkl, 无数据时为空 dict)
+    north_flow = inputs.get('north_flow', {})
+    margin_ratio = inputs.get('margin_ratio', {})
+    inst_rating = inputs.get('inst_rating', {})
+    limit_reason = inputs.get('limit_reason', {})
 
     # 1. 计算 13 因子 (在 scoring_base 上归一化)
     print("  [PlanB] 计算13因子 (9+北向+融资+研报+涨停归因)...",
           file=sys.stderr)
     factors = compute_all_factors(filtered, scoring_base, fund_df,
-                                  principal, today_str)
+                                  principal, today_str,
+                                  north_flow=north_flow,
+                                  margin_ratio=margin_ratio,
+                                  inst_rating=inst_rating,
+                                  limit_reason=limit_reason)
 
     # 2. 加权 + 危险信号
     print("  [PlanB] 加权+危险信号...", file=sys.stderr)

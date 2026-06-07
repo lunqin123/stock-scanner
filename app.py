@@ -106,9 +106,23 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 4  # v3→v4: 评分重构(seal黄金奖励, sector合并, tech简化, principal增强)
+_RAW_CACHE_VERSION = 5  # v4→v5: 扩展数据源 (north_flow/margin_ratio/inst_rating/limit_reason)
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
+
+
+def _fetch_extended_data(filtered, today_str: str) -> dict:
+    """拉取扩展数据源(北向/融资/研报/涨停归因) — 降级安全"""
+    try:
+        from plans.datasource import fetch_all_extended
+        return fetch_all_extended(filtered, today_str)
+    except Exception as e:
+        print(f"  [数据源] 扩展数据拉取失败(降级): {e}", file=sys.stderr)
+        return {
+            'north_flow': {}, 'margin_ratio': {},
+            'inst_rating': {}, 'limit_reason': {},
+            'extended_ok': False,
+        }
 
 def _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level, sentiment_detail,
                     sentiment_ok, history_scores, lhb_bonus, today_str,
@@ -235,13 +249,14 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
         print("  [扫描] 本金过滤后为空", file=sys.stderr)
         return None
 
-    # 并行获取预测评分
-    print("  [扫描] 第6步: 并行获取预测评分...", file=sys.stderr)
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    # 并行获取预测评分 + 扩展数据源
+    print("  [扫描] 第6步: 并行获取预测评分 + 扩展数据...", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             ex.submit(detect_market_sentiment, today_str): "sentiment",
             ex.submit(analyze_dragon_tiger, filtered, today_str): "lhb",
             ex.submit(score_stock_history, filtered, today_str): "history",
+            ex.submit(_fetch_extended_data, filtered, today_str): "extended",
         }
         res = {}
         for f in as_completed(futs):
@@ -274,10 +289,21 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
     history_scores = res.get("history")
     history_scores = history_scores[0] if history_scores is not None else pd.Series(2.5, index=filtered.index)
 
+    # 扩展数据源 (北向/融资/研报/涨停归因)
+    extended = res.get("extended", {})
+    north_flow = extended.get('north_flow', {})
+    margin_ratio = extended.get('margin_ratio', {})
+    inst_rating = extended.get('inst_rating', {})
+    limit_reason = extended.get('limit_reason', {})
+    extended_ok = extended.get('extended_ok', False)
+
     # 保存原始数据缓存（供「运行」按钮重跑评分用）
     _save_raw_cache(filtered, fund_df, sentiment_score, sentiment_level,
                     sentiment_detail, sentiment_ok, history_scores,
-                    lhb_bonus, today_str, pool=pool, scoring_base=scoring_base)
+                    lhb_bonus, today_str, pool=pool, scoring_base=scoring_base,
+                    north_flow=north_flow, margin_ratio=margin_ratio,
+                    inst_rating=inst_rating, limit_reason=limit_reason,
+                    extended_ok=extended_ok)
 
     # ── 调用评分方案（因子在 scoring_base 上计算，输出用 filtered） ──
     print(f"  [扫描] 第7步: 调用评分方案 [{plan_name or '默认'}]...", file=sys.stderr)
@@ -295,6 +321,12 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
         'today_str': today_str,
         'pool': pool,
         'principal': principal,
+        # 扩展数据 (Plan B 等新方案从这里读取)
+        'north_flow': north_flow,
+        'margin_ratio': margin_ratio,
+        'inst_rating': inst_rating,
+        'limit_reason': limit_reason,
+        'extended_ok': extended_ok,
     })
 
     return result
@@ -343,6 +375,12 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
         'today_str': raw['date'],
         'pool': pool,
         'principal': principal,
+        # 扩展数据 (从 raw_scan_data.pkl, 旧缓存无此字段时降级为空)
+        'north_flow': raw.get('north_flow', {}),
+        'margin_ratio': raw.get('margin_ratio', {}),
+        'inst_rating': raw.get('inst_rating', {}),
+        'limit_reason': raw.get('limit_reason', {}),
+        'extended_ok': raw.get('extended_ok', False),
     })
     result['_from_cache'] = True
     return result
