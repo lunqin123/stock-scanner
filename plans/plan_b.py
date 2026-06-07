@@ -122,12 +122,39 @@ def _compute_north_flow(df: pd.DataFrame, north_flow_df=None, north_market_df=No
     return scores
 
 
-def _compute_margin_ratio(df: pd.DataFrame, margin_ratio_df=None) -> pd.Series:
-    """融资余额/流通市值评分 (0-4)。"""
+def _compute_margin_ratio(df: pd.DataFrame, margin_df=None) -> pd.Series:
+    """
+    融资融券评分 (0-4)。兼容两种数据格式:
+    - a-stock-data: code + ratio_pct 列
+    - akshare: code + margin_balance 列 (需要自己算 ratio = margin_balance / 流通市值)
+    """
     scores = pd.Series(2.0, index=df.index)
-    margin_map = _df_to_map(margin_ratio_df, 'code', 'ratio_pct')
+    if margin_df is None or margin_df.empty:
+        return scores
+
+    # 尝试直接 ratio
+    margin_map = _df_to_map(margin_df, 'code', 'ratio_pct')
+
+    # 尝试 akshare 格式: 有 margin_balance 列, 自己算 ratio
+    if not margin_map and 'margin_balance' in margin_df.columns and 'code' in margin_df.columns:
+        cap_col = '流通市值' if '流通市值' in df.columns else None
+        if cap_col:
+            for idx in df.index:
+                try:
+                    code = str(df.loc[idx, '代码']).strip().zfill(6)
+                    row = margin_df[margin_df['code'].astype(str).str.zfill(6) == code]
+                    if not row.empty:
+                        balance = float(row.iloc[0]['margin_balance'])
+                        cap = float(df.loc[idx, cap_col])
+                        if cap > 0:
+                            ratio = balance / cap * 100
+                            margin_map[code] = ratio
+                except Exception:
+                    pass
+
     if not margin_map:
         return scores
+
     for idx in df.index:
         code = str(df.loc[idx, '代码']).strip().zfill(6)
         ratio = margin_map.get(code, 0)
@@ -198,35 +225,59 @@ def _compute_seal_quality(df: pd.DataFrame) -> pd.Series:
     return scores.clip(0, 3.0)
 
 
-def _compute_sector_fund_resonance(df: pd.DataFrame, raw_money: pd.Series) -> pd.Series:
+def _compute_sector_fund_resonance(df: pd.DataFrame, raw_money: pd.Series,
+                                     industry_fund_df=None) -> pd.Series:
     """
-    板块资金共振 (0-3): 个股资金流向与同行业平均方向一致→共振加分。零依赖。
+    板块资金共振 (0-3): 个股资金流向 vs 行业资金方向。零依赖(基础) + akshare(增强)。
+    有 industry_fund_df 时优先用行业级主力净流入方向。
     """
     scores = pd.Series(1.5, index=df.index)
     ind_col = '所属行业' if '所属行业' in df.columns else (
         df.columns[15] if len(df.columns) > 15 else None)
-    if ind_col is None or raw_money is None or raw_money.empty:
+    if ind_col is None:
         return scores
 
+    # 行业级资金方向 (akshare 增强)
+    sector_fund_dir = {}  # {行业名: net_flow}
+    if industry_fund_df is not None and not industry_fund_df.empty:
+        try:
+            for _, row in industry_fund_df.iterrows():
+                name = str(row.iloc[0]) if len(row) > 0 else ''
+                net = 0.0
+                for c in industry_fund_df.columns:
+                    cl = str(c).lower()
+                    if '净流入' in str(c) or '主力净流入' in str(c):
+                        try: net = float(row[c])
+                        except: pass
+                if name:
+                    sector_fund_dir[name] = net
+        except Exception:
+            pass
+
+    # 个股级资金方向 (raw_money)
     try:
+        money_series = raw_money.reindex(df.index, fill_value=0).astype(float) if raw_money is not None and not raw_money.empty else pd.Series(0.0, index=df.index)
         df_money = pd.DataFrame({
             'industry': df[ind_col].astype(str),
-            'money': raw_money.reindex(df.index, fill_value=0).astype(float),
+            'money': money_series,
         })
-        # 行业平均资金方向
         sector_avg = df_money.groupby('industry')['money'].mean()
         for idx in df.index:
             ind = str(df.loc[idx, ind_col])
             mn = float(df_money.loc[idx, 'money']) if idx in df_money.index else 0
-            sa = float(sector_avg.get(ind, 0))
-            if mn > 0 and sa > 0:
-                scores[idx] = 3.0  # 个股+行业双流入
-            elif mn > 0 and sa < 0:
-                scores[idx] = 2.0  # 个股流入但行业流出 (逆势)
-            elif mn < 0 and sa > 0:
-                scores[idx] = 1.0  # 个股流出行业流入 (不跟)
+            # 行业方向: 优先 akshare 行业级数据, 回退到涨停池内个股均值
+            if ind in sector_fund_dir:
+                sa = sector_fund_dir[ind]
             else:
-                scores[idx] = 0.5  # 双流出
+                sa = float(sector_avg.get(ind, 0))
+            if mn > 0 and sa > 0:
+                scores[idx] = 3.0
+            elif mn > 0 and sa < 0:
+                scores[idx] = 2.0
+            elif mn < 0 and sa > 0:
+                scores[idx] = 1.0
+            else:
+                scores[idx] = 0.5
     except Exception:
         pass
     return scores
@@ -234,7 +285,8 @@ def _compute_sector_fund_resonance(df: pd.DataFrame, raw_money: pd.Series) -> pd
 
 def _compute_volume_ratio(df: pd.DataFrame, today_str: str = None) -> pd.Series:
     """
-    量比评分 (0-2): 当日换手率 vs 近5日均换手率。零依赖 (自己算5日均值)。
+    量比评分 (0-2): 当日换手率 vs 同行业涨停股中位换手率。
+    零依赖 — 不拉 akshare, 从当前涨停池直接算相对活跃度。
     """
     scores = pd.Series(1.0, index=df.index)
     turnover_col = '换手率' if '换手率' in df.columns else None
@@ -242,24 +294,36 @@ def _compute_volume_ratio(df: pd.DataFrame, today_str: str = None) -> pd.Series:
         return scores
 
     today_turnover = df[turnover_col].fillna(0).astype(float)
+    ind_col = '所属行业' if '所属行业' in df.columns else (
+        df.columns[15] if len(df.columns) > 15 else None)
 
-    # 尝试从 akshare 拉近5日 K 线算均换手 (降级: 给中位分)
     try:
-        import akshare as ak
-        for idx in df.index:
-            code = str(df.loc[idx, '代码']).strip().zfill(6)
-            try:
-                hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="")
-                if hist is not None and len(hist) >= 5:
-                    avg_turnover = hist['换手率'].tail(5).astype(float).mean()
-                    ratio = today_turnover[idx] / max(0.01, avg_turnover)
+        if ind_col and len(df) >= 3:
+            df_temp = pd.DataFrame({
+                'industry': df[ind_col].astype(str),
+                'turnover': today_turnover,
+            })
+            sector_median = df_temp.groupby('industry')['turnover'].median()
+            for idx in df.index:
+                ind = str(df.loc[idx, ind_col])
+                med = sector_median.get(ind, today_turnover.median())
+                if med > 0:
+                    ratio = today_turnover[idx] / med
                     if ratio > 2.0: scores[idx] = 2.0
                     elif ratio > 1.5: scores[idx] = 1.5
                     elif ratio > 1.0: scores[idx] = 1.0
                     elif ratio > 0.5: scores[idx] = 0.5
-                    else: scores[idx] = 0.0
-            except Exception:
-                pass
+                    else: scores[idx] = 0.3
+        else:
+            # 股票太少: 用全局中位做基准
+            med = today_turnover.median()
+            if med > 0:
+                for idx in df.index:
+                    ratio = today_turnover[idx] / med
+                    if ratio > 2.0: scores[idx] = 2.0
+                    elif ratio > 1.5: scores[idx] = 1.5
+                    elif ratio > 1.0: scores[idx] = 1.0
+                    else: scores[idx] = 0.5
     except Exception:
         pass
     return scores
@@ -336,7 +400,7 @@ def compute_all_factors(filtered, scoring_base, fund_df, principal,
     factors_b = {
         # Phase 1: 零依赖因子
         'seal_quality': _compute_seal_quality(base),
-        'sector_resonance': _compute_sector_fund_resonance(base, raw_money_for_resonance),
+        'sector_resonance': _compute_sector_fund_resonance(base, raw_money_for_resonance, ind_fund_df),
         'volume_ratio': _compute_volume_ratio(base, today_str),
         # Phase 2/3: 数据源因子
         'north_flow': _compute_north_flow(base, north_flow_df, north_market_df),
