@@ -127,11 +127,10 @@ DAILY_LR = 0.02       # 每日学习率（低，避免单日波动）
 ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
 
 
-def save_daily_correlations(correlations: dict, trading_date: str = None):
-    """保存因子相关性到滚动缓存。trading_date 用交易日而非日历日，避免凌晨重复。"""
+def save_daily_correlations(correlations: dict, trading_date: str = None, plan_name: str = 'A'):
+    """保存因子相关性到滚动缓存 (按 Plan 分组)。trading_date 用交易日而非日历日。"""
     if not correlations:
         return
-    # 统一为 YYYY-MM-DD 格式（兼容 'YYYYMMDD' 和 'YYYY-MM-DD' 两种输入）
     if trading_date:
         s = trading_date.replace('-', '')
         if len(s) == 8 and s.isdigit():
@@ -139,8 +138,9 @@ def save_daily_correlations(correlations: dict, trading_date: str = None):
     today_str = trading_date if trading_date else date.today().isoformat()
     try:
         data = _load_rolling_data()
-        data = [d for d in data if d['date'] != today_str]
-        data.append({'date': today_str, 'correlations': dict(correlations)})
+        # 去重: 同日期+同Plan
+        data = [d for d in data if not (d['date'] == today_str and d.get('plan', 'A') == plan_name)]
+        data.append({'date': today_str, 'correlations': dict(correlations), 'plan': plan_name})
         data = data[-ROLLING_WINDOW * 6:]  # keep enough history
         os.makedirs(os.path.dirname(_ROLLING_FILE), exist_ok=True)
         with open(_ROLLING_FILE, 'w', encoding='utf-8') as f:
@@ -159,28 +159,30 @@ def _load_rolling_data() -> list:
     return []
 
 
-def get_rolling_progress() -> str:
-    """返回滚动窗口数据积累情况(口径与 daily_adjust_weights 一致,基于最近 ROLLING_WINDOW 个交易日)"""
+def get_rolling_progress(plan_name: str = 'A') -> str:
+    """返回滚动窗口数据积累情况(按 Plan 分组, 口径与 daily_adjust_weights 一致)"""
     all_data = sorted(_load_rolling_data(), key=lambda d: d['date'])
-    recent = all_data[-ROLLING_WINDOW:]
-    return f"回测数据 {len(recent)}/{ROLLING_WINDOW} 天"
+    plan_data = [d for d in all_data if d.get('plan', 'A') == plan_name]
+    recent = plan_data[-ROLLING_WINDOW:]
+    label = f"Plan {plan_name}" if plan_name != 'A' else ""
+    return f"回测数据 {label} {len(recent)}/{ROLLING_WINDOW} 天"
 
 
-def daily_adjust_weights(current_weights: dict, lr: float = None):
+def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str = 'A'):
     """
-    每日调权：累积近 ROLLING_WINDOW 天的因子相关性均值。
+    每日调权：累积近 ROLLING_WINDOW 天的因子相关性均值 (按 Plan 分组)。
     数据不足时跳过（至少需要 2 天）。
 
     返回 (new_weights, summary_str):
       - 数据不足 / 有效因子不足: (None, 原因摘要)
-      - 有数据: (new_weights, 摘要) — 即使无显著变化也返 new_weights (已落盘,
-        caller 拿到的内存值必须与磁盘一致)
+      - 有数据: (new_weights, 摘要) — 即使无显著变化也返 new_weights
     """
     if lr is None:
         lr = DAILY_LR
 
-    # 显式按日期升序,避免依赖 _load_rolling_data 的隐式写入顺序
     all_data = sorted(_load_rolling_data(), key=lambda d: d['date'])
+    # 过滤该 Plan 的数据 (兼容旧数据无 plan 字段, 默认 'A')
+    all_data = [d for d in all_data if d.get('plan', 'A') == plan_name]
     if len(all_data) < 2:
         return None, f"  回测数据仅 {len(all_data)} 天，至少需要 2 天"
 

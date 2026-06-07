@@ -2071,9 +2071,20 @@ def _run_close_scan(principal=20000):
             try:
                 import archiver
                 threading.Thread(target=lambda: archiver.archive_day_t(today), daemon=True).start()
-                print("  [归档] 已触发后台归档", file=sys.stderr)
+                print("  [归档] SQLite 已触发", file=sys.stderr)
             except Exception as e:
-                print(f"  [归档] 启动失败: {e}", file=sys.stderr)
+                print(f"  [归档] SQLite 失败: {e}", file=sys.stderr)
+            # Plan 结果归档 (daily_data/日期/plan_*.json, 供回测系统使用)
+            try:
+                from plans.archiver import save_plan_result
+                plan_name_arch = 'A'
+                threading.Thread(
+                    target=lambda: save_plan_result(today, plan_name_arch, data),
+                    daemon=True
+                ).start()
+                print(f"  [归档] Plan {plan_name_arch} 结果已触发保存", file=sys.stderr)
+            except Exception as e:
+                print(f"  [归档] Plan结果 失败: {e}", file=sys.stderr)
             # 触发 T+1 真实回测 (后台, 不阻塞, 慢 ~2 分钟)
             try:
                 threading.Thread(

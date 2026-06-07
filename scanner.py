@@ -2455,21 +2455,23 @@ def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001
 
 def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weights: dict = None):
     """
-    自动回测验证：盘后自动运行。保存当日因子相关性到滚动缓存，每日调权。
-    盘中跳过（数据不完整），周末/节假日跳过。
+    回测验证：盘后自动运行。
+    优先从 Plan 归档 (daily_data/) 读取昨日评分 → 对比今日实际涨跌幅 → 计算因子相关性。
+    归档不存在时回退到 backtest_score_prev 重评分 (冷启动兼容)。
     返回: (输出文本, adjusted_weights) 或 None
     """
     import weight_manager
+    from cache import _last_trading_date
 
     wd = datetime.strptime(today_str, '%Y%m%d').weekday()
     if wd >= 5:
-        return None  # 周末跳过
+        return None
 
-    # 只在盘后运行：盘中数据不完整，相关性无意义
     market_status = get_market_status()
     if market_status == 'trading':
         return None
 
+    # 拉取今日实际涨跌幅
     try:
         prev_df = ak.stock_zt_pool_previous_em(date=today_str)
         if prev_df.empty:
@@ -2477,77 +2479,99 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     except Exception:
         return None
 
-    # 数据完整性校验：检查"今日涨幅"列是否有真实波动
     try:
         change_col = next((c for c in prev_df.columns if '涨跌幅' in str(c)), None)
         if change_col is None:
             return None
         changes = prev_df[change_col].astype(float)
-        if changes.abs().max() < 0.5:  # 所有涨幅接近0，数据陈旧
+        if changes.abs().max() < 0.5:
             return None
     except (ValueError, IndexError):
         return None
 
-    df_result, summary = backtest_score_prev(prev_df, date_str=today_str)
-    if summary['count'] == 0:
-        return None
+    # code→涨幅 映射
+    code_col_raw = next((c for c in prev_df.columns if '代码' in str(c)), prev_df.columns[1])
+    code_map = {}
+    for _, row in prev_df.iterrows():
+        try:
+            code_map[str(row[code_col_raw]).strip().zfill(6)] = float(row[change_col])
+        except Exception:
+            continue
 
-    # ── 每日滚动调权 ──
-    fc = summary.get('factor_correlations', {})
+    sep = "─" * 50
+    lines = [f"\n{sep}"]
+    all_fc = {}
+    archive_used = False
+
+    # ── 优先: 读 Plan 归档 ──
+    yesterday = _last_trading_date(today_str)
+    if yesterday:
+        try:
+            from plans.archiver import list_plan_results, load_plan_result
+            plan_names = list_plan_results(yesterday)
+            if plan_names:
+                archive_used = True
+                for plan_name in plan_names:
+                    archive = load_plan_result(yesterday, plan_name)
+                    if not archive or not archive.get('stocks'):
+                        continue
+                    stocks = archive['stocks']
+                    factor_scores = {}
+                    for s in stocks:
+                        code = s.get('code', '')
+                        if code not in code_map:
+                            continue
+                        actual = code_map[code]
+                        for fkey in ['seal_score', 'money_score', 'sector_score',
+                                     'tech_score', 'history_score', 'stock_sentiment_score',
+                                     'principal_score', 'north_flow_score', 'margin_score',
+                                     'inst_rating_score', 'limit_reason_score']:
+                            if fkey in s:
+                                factor_scores.setdefault(fkey, []).append((float(s[fkey]), actual))
+                    plan_fc = {}
+                    for fkey, pairs in factor_scores.items():
+                        if len(pairs) < 8:
+                            continue
+                        scores_arr = pd.Series([p[0] for p in pairs])
+                        returns_arr = pd.Series([p[1] for p in pairs])
+                        if scores_arr.std() < 0.01 or returns_arr.std() < 0.01:
+                            continue
+                        c = scores_arr.corr(returns_arr)
+                        if not pd.isna(c):
+                            plan_fc[fkey.replace('_score', '')] = round(float(c), 4)
+                    if plan_fc:
+                        lines.append(f" [Plan {plan_name}] 归档验证 | {len(stocks)}只")
+                        all_fc.update(plan_fc)
+        except Exception as e:
+            lines.append(f" [归档回测] 异常,回退重评分: {e}")
+            archive_used = False
+
+    # ── 回退: 旧方法 ──
+    if not archive_used:
+        df_result, summary = backtest_score_prev(prev_df, date_str=today_str)
+        if summary['count'] == 0:
+            return None
+        all_fc = summary.get('factor_correlations', {})
+        lines.append(f" 评分验证 | 昨 {summary['count']} 只 → 今晋级 {summary['promo_rate']:.0f}% | "
+                     f"正收益 {summary['pos_rate']:.0f}% | 均价 {summary['avg_change']:+.1f}%")
+        if all_fc:
+            avail = [k for k in weight_manager.BACKTEST_FACTORS if k in all_fc and all_fc[k] != 0]
+            if avail:
+                lines.append(f" 因子相关性: {' | '.join(f'{k}: {all_fc[k]:+.3f}' for k in avail)}")
+
+    # ── 滚动调权 ──
     adjusted_weights = None
     daily_msg = None
-
-    if current_weights is not None and summary['count'] >= 8 and fc:
-        # 每日保存相关性（用回测交易日期，非日历日期——避免凌晨重复）
-        weight_manager.save_daily_correlations(fc, trading_date=today_str)
-
-        # 每日调权（基于近N天滚动均值）
+    if current_weights is not None and all_fc:
+        weight_manager.save_daily_correlations(all_fc, trading_date=today_str)
         new_w, adj_msg = weight_manager.daily_adjust_weights(current_weights)
         if new_w:
             adjusted_weights = new_w
         if adj_msg:
-            daily_msg = adj_msg
+            for line in adj_msg.split('\n'):
+                lines.append(line)
 
-    sep = "─" * 50
-    lines = []
-    lines.append(f"\n{sep}")
-    lines.append(f" 评分验证 | 昨 {summary['count']} 只 → 今晋级 {summary['promo_rate']:.0f}% | "
-                 f"正收益 {summary['pos_rate']:.0f}% | 均价 {summary['avg_change']:+.1f}%")
-    # 因子相关性（显示所有可用因子）
-    if fc:
-        all_factors = weight_manager.BACKTEST_FACTORS
-        avail = [k for k in all_factors if k in fc and fc[k] != 0]
-        if avail:
-            corr_str = ' | '.join(f"{k}: {fc[k]:+.3f}" for k in avail)
-            lines.append(f" 因子相关性: {corr_str}")
-    lines.append(f"{'等级':<6} {'数量':<6} {'均价':<8} {'晋级率':<8} {'正收益比'}")
-    lines.append("─" * 42)
-    for g in ['A', 'B', 'C', 'D']:
-        gd = summary['grades'].get(g, {'count': 0, 'avg_change': 0, 'promo_rate': 0, 'pos_rate': 0})
-        if gd['count'] > 0:
-            lines.append(f"{g+'级':<6} {gd['count']:<6} {gd['avg_change']:>+6.1f}% {gd['promo_rate']:>3.0f}%   "
-                         f"{gd['pos_rate']:>3.0f}%")
-    diff = summary['top30_avg'] - summary['bot30_avg']
-    lines.append(f" 相关系数: {summary['correlation']:.3f} | "
-                 f"前30% {summary['top30_avg']:+.1f}% 后30% {summary['bot30_avg']:+.1f}% 差值 {diff:+.1f}%")
-    # 模拟交易统计
-    ts = summary.get('trade_stats', {})
-    if ts and ts.get('trade_count', 0) > 0:
-        ub = ts.get('unbuyable_count', 0)
-        ub_str = f" 排除{ub}只一字板 |" if ub > 0 else ""
-        lines.append(f" 模拟TOP10: {ub_str}均收益{ts['total_return']:+.1f}% | 胜率{ts['win_rate']:.0f}% | "
-                     f"盈亏比{ts['profit_loss_ratio']} | 最大回撤{ts['max_drawdown']}% | "
-                     f"最佳{ts['best']:+.1f}% 最差{ts['worst']:+.1f}%")
-    # 每日调权信息
-    if daily_msg:
-        for line in daily_msg.split('\n'):
-            lines.append(line)
-    else:
-        progress = weight_manager.get_rolling_progress()
-        if progress:
-            lines.append(f" {progress}（调权需>=2天）")
-    # 权重变化
-    if adjusted_weights:
+    if adjusted_weights and current_weights:
         changes = []
         for k in weight_manager.BACKTEST_FACTORS:
             if k in current_weights and k in adjusted_weights:
