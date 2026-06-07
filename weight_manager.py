@@ -160,9 +160,8 @@ def _load_rolling_data() -> list:
 
 
 def get_rolling_progress() -> str:
-    """返回滚动窗口数据积累情况"""
-    all_data = _load_rolling_data()
-    today = date.today()
+    """返回滚动窗口数据积累情况(口径与 daily_adjust_weights 一致,基于最近 ROLLING_WINDOW 个交易日)"""
+    all_data = sorted(_load_rolling_data(), key=lambda d: d['date'])
     recent = all_data[-ROLLING_WINDOW:]
     return f"回测数据 {len(recent)}/{ROLLING_WINDOW} 天"
 
@@ -171,12 +170,17 @@ def daily_adjust_weights(current_weights: dict, lr: float = None):
     """
     每日调权：累积近 ROLLING_WINDOW 天的因子相关性均值。
     数据不足时跳过（至少需要 2 天）。
-    返回 (new_weights, summary_str) 或 (None, None)
+
+    返回 (new_weights, summary_str):
+      - 数据不足 / 有效因子不足: (None, 原因摘要)
+      - 有数据: (new_weights, 摘要) — 即使无显著变化也返 new_weights (已落盘,
+        caller 拿到的内存值必须与磁盘一致)
     """
     if lr is None:
         lr = DAILY_LR
 
-    all_data = _load_rolling_data()
+    # 显式按日期升序,避免依赖 _load_rolling_data 的隐式写入顺序
+    all_data = sorted(_load_rolling_data(), key=lambda d: d['date'])
     if len(all_data) < 2:
         return None, f"  回测数据仅 {len(all_data)} 天，至少需要 2 天"
 
