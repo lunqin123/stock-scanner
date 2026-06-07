@@ -162,7 +162,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
 
     money = factors['money']
     if hasattr(lhb_bonus, 'loc') and not lhb_bonus.empty:
-        money = (money + lhb_bonus.loc[filtered.index]).clip(upper=20.0)
+        money = (money + lhb_bonus.loc[filtered.index].reindex(
+            money.index, fill_value=0)).clip(upper=20.0)
     else:
         money = money.clip(upper=20.0)
 
