@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.23.0 (2026-06-07)
+
+### 修复 — 回测系统 12 项 BUG 修复 (P0-P2)
+
+**P0 — 影响数据正确性:**
+- T+1 缓存键参数化：不同 `days`/`top_n`/`capital` 不再命中同一缓存
+- Seal 黄金奖励双计修复：`backtest_score_prev` 仅在 fallback 路径加金,`has_seal_data` 路径跳过
+
+**P1 — 影响特定场景:**
+- `auto_verify_backtest` 周末检查改用 `today_str` 而非 `date.today()`(修复历史回测日期错位)
+- `daily_adjust_weights` 无变化时也返回 `new_weights`(消除内存-磁盘不一致)
+- LHB 龙虎榜 API 参数 `date_specified`→`date` + 三层 fallback
+
+**P2 — 健壮性/死代码清理:**
+- 硬编码 `df.iloc[:, 3]` 改为列名匹配 `涨跌幅`
+- `backtest_score_prev` 删除 `today_df` 死参数及无效网络请求
+- 删除 `adjust_weights()` 死代码 (67 行,全项目 0 caller)
+- 删除 `_T1_BACKTEST_TTL` 未使用常量
+- `cache.make_key` 删除永不可达的 `return None`
+- `get_rolling_progress` 过滤窗口与显示口径统一为 `ROLLING_WINDOW`
+- `seal_time_score` 与 `_vectorized_seal_time_score` 统一阶梯逻辑
+
+### 修正
+- `weight_manager.py` docstring 准确描述三种返回路径 + 滚动窗口显式排序
+
+### 技术债务
+- 舆情模块不可用 (`No module named 'stock_community'`)
+- 服务器 git pull 被墙,暂靠 scp 推送文件
+- 测试覆盖集中在范围检查,缺少回测逻辑/缓存键等功能测试
+
+---
+
+## v1.22.0 (2026-06-06)
+
+### 新增 — 趋势扫描数据驱动重构
+- 回测发现低涨幅(2-4%)+中换手(5-15%)是唯一正收益组合
+- 炸板分析评分优化: 封板资金降权(回测负相关), sealTime+换手为主
+
+### 新增 — T+1 真实回测面板
+- `t1_real_backtest.py`: D 日收盘选股 → D+1 开盘买 → D+2 开盘卖
+- 参数化缓存 + Web 端点 `/api/backtest/t1`
+- `backtest_score_prev` 65x 提速 (1700ms → 26ms)
+
+### 重构
+- `config.py` 集中魔数 + `ak_utils.safe_ak_call()` 统一异常处理
+- `_cached_pool_loader` / `_fetch_three_pools` 减少 5 个 cards 端点重复
+- logging 框架 + 统一缓存 key 命名 + 单元测试
+
+### 修复
+- 炸板端点 `/api/scan/zhaban/cards` 用错数据池 + items 字段不匹配
+- fund_flow 缓存永远 miss 的 bug,二次响应从 7s 降到 300ms
+- `daily_get_pkl` NameError
+- T+1 回测排序不稳定导致同分选股变化
+- 缓存版本号同步更新 (`_CACHE_VER` 7→8, `_RAW_CACHE_VERSION` 4→5)
+
+---
+
 ## v1.21.0 (2026-06-05)
 
 ### 新增 — 反转扫描
