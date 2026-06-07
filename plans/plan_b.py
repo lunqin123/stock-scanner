@@ -370,28 +370,30 @@ def apply_weights_plan_b(seal_scores, money_scores, sector_scores, tech_scores,
                           history_scores, sentiment_series, stock_sent_scores,
                           principal_scores, seal_quality, sector_resonance,
                           volume_ratio, north_flow, margin_ratio,
-                          inst_rating, limit_reason) -> pd.Series:
+                          inst_rating, limit_reason,
+                          weights_b=None) -> pd.Series:
     """Plan B 16 因子加权归一化到百分制"""
-    w = PLAN_B_WEIGHTS
+    w = weights_b if weights_b else PLAN_B_WEIGHTS
     rmax = PLAN_B_RAW_MAX
 
     weighted = (
-        seal_scores * (w['seal'] / rmax['seal']) +
-        money_scores * (w['money'] / rmax['money']) +
-        sector_scores * (w['sector'] / rmax['sector']) +
-        tech_scores * (w['tech'] / rmax['tech']) +
-        history_scores * (w['history'] / rmax['history']) +
-        stock_sent_scores * (w['stock_sentiment'] / rmax['stock_sentiment']) +
-        principal_scores * (w['principal'] / rmax['principal']) +
-        seal_quality * (w['seal_quality'] / rmax['seal_quality']) +
-        sector_resonance * (w['sector_resonance'] / rmax['sector_resonance']) +
-        volume_ratio * (w['volume_ratio'] / rmax['volume_ratio']) +
-        north_flow * (w['north_flow'] / rmax['north_flow']) +
-        margin_ratio * (w['margin_ratio'] / rmax['margin_ratio']) +
-        inst_rating * (w['inst_rating'] / rmax['inst_rating']) +
-        limit_reason * (w['limit_reason'] / rmax['limit_reason'])
+        seal_scores * (w.get('seal', 0) / rmax['seal']) +
+        money_scores * (w.get('money', 0) / rmax['money']) +
+        sector_scores * (w.get('sector', 0) / rmax['sector']) +
+        tech_scores * (w.get('tech', 0) / rmax['tech']) +
+        history_scores * (w.get('history', 0) / rmax['history']) +
+        stock_sent_scores * (w.get('stock_sentiment', 0) / rmax['stock_sentiment']) +
+        principal_scores * (w.get('principal', 0) / rmax['principal']) +
+        seal_quality * (w.get('seal_quality', 0) / rmax['seal_quality']) +
+        sector_resonance * (w.get('sector_resonance', 0) / rmax['sector_resonance']) +
+        volume_ratio * (w.get('volume_ratio', 0) / rmax['volume_ratio']) +
+        north_flow * (w.get('north_flow', 0) / rmax['north_flow']) +
+        margin_ratio * (w.get('margin_ratio', 0) / rmax['margin_ratio']) +
+        inst_rating * (w.get('inst_rating', 0) / rmax['inst_rating']) +
+        limit_reason * (w.get('limit_reason', 0) / rmax['limit_reason'])
     )
-    base_scores = weighted / max(1, PLAN_B_TOTAL) * 100
+    total_w = sum(w.get(k, 0) for k in rmax)
+    base_scores = weighted / max(1, total_w) * 100
 
     # 大盘情绪温和系数 (同 Plan A: ×0.85~×1.15)
     if isinstance(sentiment_series, pd.Series):
@@ -461,6 +463,15 @@ def apply_scores(filtered, factors, sentiment_score, history_scores,
                  lhb_bonus, today_str):
     """Plan B 加权 + 危险信号"""
     from scanner import score_danger_signals
+    import weight_manager
+
+    # 加载动态权重 (回测调权后的), 无保存文件时用默认 PLAN_B_WEIGHTS
+    saved_weights = weight_manager.load_weights('B')
+    # 检查 saved_weights 是否有 Plan B 的因子 (区别于 Plan A 的默认权重)
+    if 'seal_quality' in saved_weights:
+        weights_b = saved_weights
+    else:
+        weights_b = dict(PLAN_B_WEIGHTS)
 
     money = factors['money']
     if hasattr(lhb_bonus, 'loc') and not lhb_bonus.empty:
@@ -484,13 +495,14 @@ def apply_scores(filtered, factors, sentiment_score, history_scores,
         factors['volume_ratio'],
         factors['north_flow'], factors['margin_ratio'],
         factors['inst_rating'], factors['limit_reason'],
+        weights_b=weights_b,
     )
 
     danger_penalty, danger_flags = score_danger_signals(
         filtered, factors['raw_money'], today_str)
     total = (base + danger_penalty).clip(lower=0)
 
-    return total, base, danger_flags, PLAN_B_WEIGHTS
+    return total, base, danger_flags, weights_b
 
 
 # ═══════════════════════════════════════════
@@ -586,14 +598,12 @@ def score(inputs: dict) -> dict:
     stocks = build_stocks(filtered, factors, total_scores, base_scores,
                           danger_flags, sentiment_score, history_scores, pool)
 
-    # 4. 后台回测（传给调权系统时只含 Plan A 兼容的因子，新因子暂不参与自动调权）
+    # 4. 后台回测 — Plan B 全部 16 因子参与 ICIR 调权
     try:
         from scanner import auto_verify_backtest
-        from weight_manager import DEFAULT_WEIGHTS
-        backtest_weights = {k: v for k, v in weights.items() if k in DEFAULT_WEIGHTS}
         threading.Thread(
             target=lambda: auto_verify_backtest(
-                today_str, current_weights=backtest_weights),
+                today_str, current_weights=weights_b, plan_name='B'),
             daemon=True).start()
     except Exception as e:
         print(f"  [回测] 启动失败: {e}", file=sys.stderr)

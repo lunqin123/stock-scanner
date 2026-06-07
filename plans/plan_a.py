@@ -188,8 +188,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     # 后台回测
     try:
         from scanner import auto_verify_backtest
-        threading.Thread(target=lambda: auto_verify_backtest(today_str, current_weights=weights),
-                        daemon=True).start()
+        threading.Thread(target=lambda: auto_verify_backtest(
+            today_str, current_weights=weights, plan_name='A'), daemon=True).start()
     except Exception as e:
         print(f"  [回测] 启动失败: {e}", file=sys.stderr)
 

@@ -29,31 +29,49 @@ TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96
 # 回测中可调权的因子
 BACKTEST_FACTORS = ['seal', 'tech', 'sector', 'history']
 
+# Plan B 可调权因子 (所有16个因子都参与IC检验, 弱因子自动归零)
+BACKTEST_FACTORS_B = [
+    'seal', 'money', 'sector', 'tech', 'history',
+    'stock_sentiment', 'principal',
+    'seal_quality', 'sector_resonance', 'volume_ratio',
+    'north_flow', 'margin_ratio', 'inst_rating', 'limit_reason',
+]
+
+# IC 阈值: |IC| < 此值 → 权重归零 (统计噪声)
+IC_NOISE_THRESHOLD = 0.02
+
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
     "claude_stock_cache", "weights.json"
 )
+_WEIGHTS_FILE_B = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "claude_stock_cache", "weights_b.json"
+)
 
 
-def load_weights() -> dict:
-    """加载权重，无文件则返回默认值"""
+def load_weights(plan_name: str = 'A') -> dict:
+    """加载权重。Plan A 用 weights.json, Plan B 用 weights_b.json, 无文件返回默认值"""
+    path = _WEIGHTS_FILE_B if plan_name.upper() == 'B' else _WEIGHTS_FILE
+    defaults = DEFAULT_WEIGHTS
     try:
-        if os.path.exists(_WEIGHTS_FILE):
-            with open(_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            weights = dict(DEFAULT_WEIGHTS)
-            weights.update({k: v for k, v in data.items() if k in DEFAULT_WEIGHTS})
+            weights = dict(defaults)
+            weights.update({k: v for k, v in data.items() if k in defaults})
             return weights
     except Exception as e:
         print(f"  [weight_manager L47] failed: {e}", file=sys.stderr)
-    return dict(DEFAULT_WEIGHTS)
+    return dict(defaults)
 
 
-def save_weights(weights: dict):
-    """持久化权重"""
+def save_weights(weights: dict, plan_name: str = 'A'):
+    """持久化权重。Plan A → weights.json, Plan B → weights_b.json"""
+    path = _WEIGHTS_FILE_B if plan_name.upper() == 'B' else _WEIGHTS_FILE
     try:
-        os.makedirs(os.path.dirname(_WEIGHTS_FILE), exist_ok=True)
-        with open(_WEIGHTS_FILE, 'w', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(weights, f, ensure_ascii=False, indent=None, separators=(',', ':'))
     except Exception as e:
         print(f"  [WARN] 权重保存失败: {e}", file=sys.stderr)
@@ -170,72 +188,122 @@ def get_rolling_progress(plan_name: str = 'A') -> str:
 
 def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str = 'A'):
     """
-    每日调权：累积近 ROLLING_WINDOW 天的因子相关性均值 (按 Plan 分组)。
-    数据不足时跳过（至少需要 2 天）。
+    IC/ICIR 驱动的每日调权。
 
-    返回 (new_weights, summary_str):
-      - 数据不足 / 有效因子不足: (None, 原因摘要)
-      - 有数据: (new_weights, 摘要) — 即使无显著变化也返 new_weights
+    Plan B: ICIR 加权 + |IC| < 0.02 自动归零
+    Plan A: 保持原有 delta-based 逻辑 (兼容)
+
+    返回 (new_weights, summary_str)
     """
     if lr is None:
         lr = DAILY_LR
 
     all_data = sorted(_load_rolling_data(), key=lambda d: d['date'])
-    # 过滤该 Plan 的数据 (兼容旧数据无 plan 字段, 默认 'A')
     all_data = [d for d in all_data if d.get('plan', 'A') == plan_name]
     if len(all_data) < 2:
         return None, f"  回测数据仅 {len(all_data)} 天，至少需要 2 天"
 
-    # 取最近 ROLLING_WINDOW 天的数据
     recent = all_data[-ROLLING_WINDOW:]
 
-    # 聚合各因子相关性均值
+    # 聚合各因子 IC 序列
     factor_vals = {}
     for entry in recent:
         for k, v in entry.get('correlations', {}).items():
             factor_vals.setdefault(k, []).append(v)
 
-    mean_corrs = {}
+    # 计算 IC 均值 + ICIR
+    ic_stats = {}
     for k, vals in factor_vals.items():
-        mean_corrs[k] = round(float(np.mean(vals)), 4)
+        if len(vals) < 2:
+            continue
+        ic_mean = float(np.mean(vals))
+        ic_std = float(np.std(vals)) if len(vals) > 1 else 1.0
+        icir = abs(ic_mean) / max(0.001, ic_std)
+        ic_stats[k] = {
+            'ic_mean': round(ic_mean, 4),
+            'ic_std': round(ic_std, 4),
+            'icir': round(icir, 2),
+        }
 
-    valid_factors = [f for f in BACKTEST_FACTORS if f in mean_corrs]
+    if plan_name.upper() == 'B':
+        # ── Plan B: ICIR 加权 + 噪声剔除 ──
+        from plans.plan_b import PLAN_B_WEIGHTS as defaults_b
+        factor_list = BACKTEST_FACTORS_B
+        defaults = defaults_b
+    else:
+        # ── Plan A: 保持原有 delta-based ──
+        factor_list = BACKTEST_FACTORS
+        defaults = DEFAULT_WEIGHTS
+
+    # ICIR 加权
+    valid_factors = [f for f in factor_list if f in ic_stats]
     if len(valid_factors) < 2:
         return None, f"  有效因子仅 {len(valid_factors)} 个，至少需要 2 个"
 
-    values = [mean_corrs[f] for f in valid_factors]
-    mean_corr = float(np.mean(values))
+    # 噪声剔除: |IC| < 阈值 → 权重归零
+    active_factors = []
+    dropped = []
+    for f in valid_factors:
+        if abs(ic_stats[f]['ic_mean']) >= IC_NOISE_THRESHOLD:
+            active_factors.append(f)
+        else:
+            dropped.append(f)
 
-    # 计算 delta：高相关的加权重，低相关的减权重
-    deltas = {f: 0.0 for f in DEFAULT_WEIGHTS}
-    for factor in valid_factors:
-        delta = lr * (mean_corrs[factor] - mean_corr) * DEFAULT_WEIGHTS[factor]
-        deltas[factor] = delta
+    if plan_name.upper() == 'B':
+        # ICIR 加权分配
+        total_icir = sum(ic_stats[f]['icir'] for f in active_factors)
+        new_weights = {}
+        for k in defaults:
+            new_weights[k] = 0.0
+        if total_icir > 0:
+            for f in active_factors:
+                new_weights[f] = round(defaults[f] * ic_stats[f]['icir'] / total_icir, 1)
 
-    # 应用 delta + 软钳制 [0.5×default, 1.5×default]
-    new_weights = {}
-    for k in DEFAULT_WEIGHTS:
-        w = current_weights[k] + deltas[k]
-        lo = DEFAULT_WEIGHTS[k] * 0.5
-        hi = DEFAULT_WEIGHTS[k] * 1.5
-        new_weights[k] = max(lo, min(hi, w))
+        # 软钳制 [0.5×default, 1.5×default] 对非零因子
+        for f in active_factors:
+            lo = defaults[f] * 0.5
+            hi = defaults[f] * 1.5
+            new_weights[f] = max(lo, min(hi, new_weights[f]))
 
-    save_weights(new_weights)
+        # 保留 sentiment (情绪系数, 不参与加权) — Plan B 没有 sentiment 因子
+        save_weights({k: v for k, v in new_weights.items() if v > 0}, plan_name='B')
 
-    # 摘要
-    all_corr_strs = []
-    for k in sorted(mean_corrs.keys()):
-        all_corr_strs.append(f"{k}: {mean_corrs[k]:+.3f}")
-    corr_str = " | ".join(all_corr_strs)
-    changes = []
-    for k in BACKTEST_FACTORS:
-        if k in new_weights:
-            delta = new_weights[k] - current_weights[k]
-            if abs(delta) > 0.01:
-                changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
-    if not changes:
-        summary = f"  权重无显著变化 ({len(recent)}天, 均值相关{mean_corr:+.3f})"
-        return new_weights, summary
+        # 摘要
+        lines = [f"  Plan B ICIR调权 ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
+        for f in valid_factors:
+            s = ic_stats[f]
+            status = "+" if f in active_factors else "x"
+            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} σ={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
+        if dropped:
+            lines.append(f"  噪声剔除(IC<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
+        return new_weights, '\n'.join(lines)
 
-    summary = f"  每日调权 ({len(recent)}天均值): {corr_str}\n  {' | '.join(changes)}"
-    return new_weights, summary
+    else:
+        # Plan A: 保持原有 delta-based logic
+        mean_corrs = {f: ic_stats[f]['ic_mean'] for f in valid_factors}
+        mean_corr = float(np.mean([mean_corrs[f] for f in valid_factors]))
+
+        deltas = {f: 0.0 for f in defaults}
+        for factor in valid_factors:
+            delta = lr * (mean_corrs[factor] - mean_corr) * defaults.get(factor, 1.0)
+            deltas[factor] = delta
+
+        new_weights = {}
+        for k in defaults:
+            w = current_weights.get(k, defaults.get(k, 0)) + deltas.get(k, 0)
+            lo = defaults.get(k, 0) * 0.5
+            hi = defaults.get(k, 0) * 1.5
+            new_weights[k] = max(lo, min(hi, w)) if defaults.get(k, 0) > 0 else 0.0
+
+        save_weights(new_weights, plan_name='A')
+
+        corr_str = ' | '.join(f"{k}: {mean_corrs[k]:+.3f}" for k in valid_factors)
+        changes = []
+        for k in factor_list:
+            if k in new_weights and k in current_weights:
+                delta = new_weights[k] - current_weights[k]
+                if abs(delta) > 0.01:
+                    changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
+        if not changes:
+            return new_weights, f"  权重无显著变化 ({len(recent)}天)"
+        return new_weights, f"  每日调权 ({len(recent)}天): {corr_str}\n  {' | '.join(changes)}"

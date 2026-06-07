@@ -2453,11 +2453,13 @@ def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001
     }
 
 
-def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weights: dict = None):
+def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weights: dict = None,
+                          plan_name: str = 'A'):
     """
     回测验证：盘后自动运行。
     优先从 Plan 归档 (daily_data/) 读取昨日评分 → 对比今日实际涨跌幅 → 计算因子相关性。
     归档不存在时回退到 backtest_score_prev 重评分 (冷启动兼容)。
+    plan_name: 'A' 或 'B', 用于独立调权
     返回: (输出文本, adjusted_weights) 或 None
     """
     import weight_manager
@@ -2559,12 +2561,12 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
             if avail:
                 lines.append(f" 因子相关性: {' | '.join(f'{k}: {all_fc[k]:+.3f}' for k in avail)}")
 
-    # ── 滚动调权 ──
+    # ── 滚动调权 (按 Plan 独立) ──
     adjusted_weights = None
     daily_msg = None
     if current_weights is not None and all_fc:
-        weight_manager.save_daily_correlations(all_fc, trading_date=today_str)
-        new_w, adj_msg = weight_manager.daily_adjust_weights(current_weights)
+        weight_manager.save_daily_correlations(all_fc, trading_date=today_str, plan_name=plan_name)
+        new_w, adj_msg = weight_manager.daily_adjust_weights(current_weights, plan_name=plan_name)
         if new_w:
             adjusted_weights = new_w
         if adj_msg:
