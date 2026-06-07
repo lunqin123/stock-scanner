@@ -20,6 +20,7 @@ import os as _os
 
 _PLANS = {
     "A": "plans.plan_a",
+    "B": "plans.plan_b",
 }
 
 _DEFAULT = "A"
