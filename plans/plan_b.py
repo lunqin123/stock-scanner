@@ -66,12 +66,10 @@ def _compute_north_flow(df: pd.DataFrame, today_str: str = None) -> pd.Series:
     scores = pd.Series(3.0, index=df.index)
     try:
         from datasource import get_north_flow_batch
-        flows = get_north_flow_batch(
-            [str(df.loc[i, '代码']).strip().zfill(6) for i in df.index],
-            date_str=today_str)
-        for i, code in enumerate(flows):
-            idx = df.index[i]
-            net = flows[code] if code in flows else 0
+        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
+        flows = get_north_flow_batch(codes, date_str=today_str)
+        for idx, code in zip(df.index, codes):
+            net = flows.get(code, 0)
             # 阶梯: 净流入>1亿=6, >5千万=5, >1千万=4, >0=3.5, 0=3, 净流出=2
             if net > 1e8: scores[idx] = 6.0
             elif net > 5e7: scores[idx] = 5.0
@@ -92,10 +90,9 @@ def _compute_margin_ratio(df: pd.DataFrame, today_str: str = None) -> pd.Series:
     scores = pd.Series(2.0, index=df.index)
     try:
         from datasource import get_margin_batch
-        margins = get_margin_batch(
-            [str(df.loc[i, '代码']).strip().zfill(6) for i in df.index])
-        for i, code in enumerate(margins):
-            idx = df.index[i]
+        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
+        margins = get_margin_batch(codes)
+        for idx, code in zip(df.index, codes):
             ratio = margins.get(code, 0)
             if 2 <= ratio < 5: scores[idx] = 4.0       # 黄金杠杆区间
             elif 1 <= ratio < 2 or 5 <= ratio < 8: scores[idx] = 3.0
@@ -115,12 +112,11 @@ def _compute_inst_rating(df: pd.DataFrame) -> pd.Series:
     scores = pd.Series(2.0, index=df.index)
     try:
         from datasource import get_rating_batch
-        ratings = get_rating_batch(
-            [str(df.loc[i, '代码']).strip().zfill(6) for i in df.index])
+        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
+        ratings = get_rating_batch(codes)
         rating_score = {'上调': 4, '买入': 3, '增持': 3, '首次': 3,
                        '中性': 2, '持有': 2, '减持': 1, '卖出': 0}
-        for i, code in enumerate(ratings):
-            idx = df.index[i]
+        for idx, code in zip(df.index, codes):
             r = ratings.get(code, '')
             scores[idx] = rating_score.get(r, 2.0)
     except Exception as e:
@@ -136,13 +132,12 @@ def _compute_limit_reason(df: pd.DataFrame) -> pd.Series:
     scores = pd.Series(2.0, index=df.index)
     try:
         from datasource import get_limit_reason_batch
-        reasons = get_limit_reason_batch(
-            [str(df.loc[i, '代码']).strip().zfill(6) for i in df.index])
+        codes = [str(df.loc[idx, '代码']).strip().zfill(6) for idx in df.index]
+        reasons = get_limit_reason_batch(codes)
         quality = {'政策': 4, '产业': 4, '突破': 4, '公告': 3,
                   '业绩': 3, '重组': 3, '跟风': 2, '补涨': 2,
                   '超跌': 1, '次新': 1}
-        for i, code in enumerate(reasons):
-            idx = df.index[i]
+        for idx, code in zip(df.index, codes):
             r = reasons.get(code, '')
             score = 2.0
             for kw, s in quality.items():
@@ -222,7 +217,7 @@ def compute_all_factors(filtered, scoring_base, fund_df, principal, today_str=No
                 v = fdict[k]
                 if hasattr(v, 'loc') and len(v) > 0:
                     fdict[k] = v.reindex(common_idx).fillna(
-                        v.median() if hasattr(v, 'median') else 3.0)
+                        v.median() if (hasattr(v, 'median') and not v.empty and v.notna().any()) else 3.0)
 
     # 合并
     factors_a.update(factors_b)
@@ -272,16 +267,15 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
     """在 Plan A 的 build_stocks 基础上追加 Plan B 专属字段"""
     stocks = _build_stocks_a(filtered, factors, total_scores, base_scores,
                              danger_flags, sentiment_score, history_scores, pool)
-    # 追加新因子到已有 stocks
+    # 追加新因子到已有 stocks（O(1) dict 查找）
+    code_to_idx = {str(filtered.loc[i, '代码']).strip().zfill(6): i for i in filtered.index}
     for s in stocks:
-        code = s['code']
-        for idx in filtered.index:
-            if str(filtered.loc[idx, '代码']).strip().zfill(6) == code:
-                s['north_flow_score'] = round(float(factors['north_flow'].get(idx, 3)), 1)
-                s['margin_score'] = round(float(factors['margin_ratio'].get(idx, 2)), 1)
-                s['inst_rating_score'] = round(float(factors['inst_rating'].get(idx, 2)), 1)
-                s['limit_reason_score'] = round(float(factors['limit_reason'].get(idx, 2)), 1)
-                break
+        idx = code_to_idx.get(s['code'])
+        if idx is not None:
+            s['north_flow_score'] = round(float(factors['north_flow'].get(idx, 3)), 1)
+            s['margin_score'] = round(float(factors['margin_ratio'].get(idx, 2)), 1)
+            s['inst_rating_score'] = round(float(factors['inst_rating'].get(idx, 2)), 1)
+            s['limit_reason_score'] = round(float(factors['limit_reason'].get(idx, 2)), 1)
     return stocks
 
 
@@ -336,12 +330,14 @@ def score(inputs: dict) -> dict:
     stocks = build_stocks(filtered, factors, total_scores, base_scores,
                           danger_flags, sentiment_score, history_scores, pool)
 
-    # 4. 后台回测
+    # 4. 后台回测（传给调权系统时只含 Plan A 兼容的因子，新因子暂不参与自动调权）
     try:
         from scanner import auto_verify_backtest
+        from weight_manager import DEFAULT_WEIGHTS
+        backtest_weights = {k: v for k, v in weights.items() if k in DEFAULT_WEIGHTS}
         threading.Thread(
             target=lambda: auto_verify_backtest(
-                today_str, current_weights=weights),
+                today_str, current_weights=backtest_weights),
             daemon=True).start()
     except Exception as e:
         print(f"  [回测] 启动失败: {e}", file=sys.stderr)
