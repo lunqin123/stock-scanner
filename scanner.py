@@ -50,14 +50,28 @@ def money_str(val) -> str:
         return str(val)
 
 def seal_time_score(t: str) -> float:
-    """封板时间评分 0-10: 9:30=10分, 14:30=0分。所有扫描模式共享。"""
+    """封板时间评分 0-10: 与 _vectorized_seal_time_score 统一阶梯逻辑, 缩放到 0-10。
+    早盘≤10:00=10.0, 尾盘>14:00=0.0。所有扫描模式共享。"""
     t = str(t).strip()
     try:
         if len(t) < 4:
             return 5.0
         minutes = int(t[:2]) * 60 + int(t[2:4])
-        raw = 1.0 - (minutes - MARKET_OPEN_MINUTES) / SEAL_TIME_RANGE
-        return max(0.0, min(10.0, raw * 10))
+        # 与 _vectorized_seal_time_score 相同阶梯, 缩放因子 10/12
+        if minutes <= 0:
+            return 5.0
+        elif minutes <= 600:        # ≤10:00 → 12 分
+            return 10.0
+        elif minutes <= 630:        # 10:00-10:30 → 9 分
+            return 7.5
+        elif minutes <= 690:        # 10:30-11:30 → 6 分
+            return 5.0
+        elif minutes <= 780:        # 11:30-13:00 → 4 分
+            return 3.3
+        elif minutes <= 840:        # 13:00-14:00 → 2 分
+            return 1.7
+        else:                       # >14:00 → 0 分
+            return 0.0
     except Exception:
         return 5.0
 
@@ -1229,7 +1243,13 @@ def analyze_dragon_tiger(df: pd.DataFrame, today_str: str):
     scores = pd.Series(0.0, index=df.index)
     lhb_data = {}
     try:
-        lhb = ak.stock_lhb_detail_em(date_specified=today_str)
+        try:
+            lhb = ak.stock_lhb_detail_em(date=today_str)
+        except TypeError:
+            try:
+                lhb = ak.stock_lhb_detail_em()
+            except Exception:
+                lhb = pd.DataFrame()
         if not lhb.empty:
             # 统计上榜个股的买卖情况
             code_col = '代码' if '代码' in lhb.columns else lhb.columns[1]
@@ -2204,7 +2224,7 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
 
 # ─── 回测系统 ───
 
-def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = None):
+def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     """
     对上交易日涨停股进行回测评分，使用与实盘排行完全相同的 7 因子加权模型。
     prev_df: stock_zt_pool_previous_em 返回的上交易日涨停池（含今日涨跌幅）
@@ -2259,11 +2279,12 @@ def backtest_score_prev(prev_df: pd.DataFrame, today_df=None, date_str: str = No
     tech_s = score_tech_form(df)
     sector_score = get_sector_score(df)
 
-    # 回测seal黄金奖励：代理分>=20（换手<3%）额外奖励
-    seal_gold = pd.Series(0.0, index=df.index)
-    for idx in df.index:
-        if seal_s[idx] >= 20: seal_gold[idx] = 3.0
-    seal_s = (seal_s + seal_gold).clip(upper=28.0)
+    # 回测seal黄金奖励：仅 fallback 路径需要（score_seal_strength 内部已含黄金奖励）
+    if not has_seal_data:
+        seal_gold = pd.Series(0.0, index=df.index)
+        for idx in df.index:
+            if seal_s[idx] >= 20: seal_gold[idx] = 3.0
+        seal_s = (seal_s + seal_gold).clip(upper=28.0)
 
     # 历史股性：日期可用才计算，否则用默认
     if date_str:
@@ -2438,7 +2459,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     """
     import weight_manager
 
-    wd = date.today().weekday()
+    wd = datetime.strptime(today_str, '%Y%m%d').weekday()
     if wd >= 5:
         return None  # 周末跳过
 
@@ -2454,14 +2475,12 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     except Exception:
         return None
 
-    try:
-        today_df = ak.stock_zt_pool_em(date=today_str)
-    except Exception:
-        today_df = None
-
     # 数据完整性校验：检查"今日涨幅"列是否有真实波动
     try:
-        changes = prev_df.iloc[:, 3].astype(float)
+        change_col = next((c for c in prev_df.columns if '涨跌幅' in str(c)), None)
+        if change_col is None:
+            return None
+        changes = prev_df[change_col].astype(float)
         if changes.abs().max() < 0.5:  # 所有涨幅接近0，数据陈旧
             return None
     except (ValueError, IndexError):

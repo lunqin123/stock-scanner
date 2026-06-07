@@ -208,7 +208,6 @@ def make_key(module: str, feature: str, version: int = 1, **params) -> str:
         parts.append(f"{k}{v}")
     parts.append(f"v{version}")
     return "_".join(str(p) for p in parts if p)
-    return None
 
 
 def clear_all():

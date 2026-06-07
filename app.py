@@ -2163,21 +2163,18 @@ def api_backtest_dashboard():
 #  T+1 真实回测面板 (A 股 T+1 规则)
 # ═══════════════════════════════════════════
 
-_T1_BACKTEST_CACHE_KEY = "t1_backtest_result_v1"
-_T1_BACKTEST_TTL = 7200  # 2 小时缓存
-
-
 def _run_t1_backtest_cached(max_days=30, top_n=3, capital=30000, force=False):
-    """跑 T+1 真实回测, 带 2 小时缓存 (避免每次请求都拉 30 天数据)"""
-    from cache import daily_get_pkl, daily_set_pkl
+    """跑 T+1 真实回测, 带参数化缓存 (避免每次请求都拉 30 天数据)"""
+    from cache import daily_get_pkl, daily_set_pkl, make_key
+    cache_key = make_key("t1", "outer", max_days=max_days, top_n=top_n, capital=int(capital))
     if not force:
-        cached = daily_get_pkl(_T1_BACKTEST_CACHE_KEY)
+        cached = daily_get_pkl(cache_key)
         if cached is not None:
             return cached
     try:
         from t1_real_backtest import run_t1_backtest
         result = run_t1_backtest(max_days=max_days, top_n=top_n, capital=capital)
-        daily_set_pkl(_T1_BACKTEST_CACHE_KEY, result, force=force)
+        daily_set_pkl(cache_key, result, force=force)
         return result
     except Exception as e:
         return {'error': f'T+1 回测失败: {str(e)[:200]}', 'summary': {}, 'trades': []}

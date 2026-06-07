@@ -59,70 +59,6 @@ def save_weights(weights: dict):
         print(f"  [WARN] 权重保存失败: {e}", file=sys.stderr)
 
 
-def adjust_weights(backtest_df: pd.DataFrame, current_weights: dict, lr: float = 0.05) -> dict:
-    """
-    根据回测结果调整权重。
-    对每个回测因子计算其得分与次日涨幅的 Pearson 相关系数，
-    高相关因子权重微升，低相关微降。
-
-    backtest_df: backtest_score_prev 返回的 DataFrame，含 seal_factor / seal_mom_factor / tech_factor / 今日涨幅
-    lr: 学习率，默认 0.05
-
-    返回调整后的 weights dict 并自动持久化
-    """
-    weights = dict(current_weights)
-    df = backtest_df.copy()
-
-    factor_cols = [f"{f}_factor" for f in BACKTEST_FACTORS]
-    needed = factor_cols + ['今日涨幅']
-    missing = [c for c in needed if c not in df.columns]
-    if missing:
-        print(f"  [WARN] 调整权重缺少列: {missing}", file=sys.stderr)
-        return weights
-
-    correlations = {}
-    valid_factors = []
-
-    for factor, col in zip(BACKTEST_FACTORS, factor_cols):
-        scores = df[col].astype(float)
-        returns = df['今日涨幅'].astype(float)
-
-        # 跳过方差过小的列（全同分数无法计算相关系数）
-        if scores.std() < 0.01 or returns.std() < 0.01:
-            continue
-
-        corr = scores.corr(returns)
-        if pd.isna(corr):
-            continue
-
-        correlations[factor] = corr
-        valid_factors.append(factor)
-
-    if len(valid_factors) < 1:
-        return weights  # 数据不足，不动
-
-    mean_corr = np.mean([correlations[f] for f in valid_factors])
-
-    # 计算 delta（仅对回测因子），未回测因子通过重归一化微调
-    deltas = {f: 0.0 for f in DEFAULT_WEIGHTS}
-    for factor in valid_factors:
-        delta = lr * (correlations[factor] - mean_corr) * DEFAULT_WEIGHTS[factor]
-        deltas[factor] = delta
-
-    # 应用 delta
-    new_weights = {}
-    for k in DEFAULT_WEIGHTS:
-        w = weights[k] + deltas[k]
-        # 软钳制 [0.5×default, 1.5×default]
-        lo = DEFAULT_WEIGHTS[k] * 0.5
-        hi = DEFAULT_WEIGHTS[k] * 1.5
-        new_weights[k] = max(lo, min(hi, w))
-
-    # 重归一化: community 因子固定不变，其他因子在剩余空间内分配
-    save_weights(new_weights)
-    return new_weights
-
-
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 12.0, 'sentiment': 10.0,
             'sector_res': 8.0, 'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
@@ -227,7 +163,7 @@ def get_rolling_progress() -> str:
     """返回滚动窗口数据积累情况"""
     all_data = _load_rolling_data()
     today = date.today()
-    recent = [d for d in all_data if d['date'] >= (today - timedelta(days=7)).isoformat()]
+    recent = all_data[-ROLLING_WINDOW:]
     return f"回测数据 {len(recent)}/{ROLLING_WINDOW} 天"
 
 
@@ -292,7 +228,8 @@ def daily_adjust_weights(current_weights: dict, lr: float = None):
             if abs(delta) > 0.01:
                 changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
     if not changes:
-        return None, f"  权重无显著变化 ({len(recent)}天, 均值相关{mean_corr:+.3f})"
+        summary = f"  权重无显著变化 ({len(recent)}天, 均值相关{mean_corr:+.3f})"
+        return new_weights, summary
 
     summary = f"  每日调权 ({len(recent)}天均值): {corr_str}\n  {' | '.join(changes)}"
     return new_weights, summary
