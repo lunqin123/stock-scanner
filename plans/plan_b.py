@@ -105,15 +105,19 @@ def _compute_north_flow(df: pd.DataFrame, north_flow_df=None, north_market_df=No
     # 2) 退而求其次: 市场总览 (北向净流入日 = 整体偏多)
     if north_market_df is not None and not north_market_df.empty:
         try:
-            total_net = 0
+            total_net = 0.0
             for c in north_market_df.columns:
                 cl = str(c).lower()
-                if '净买入' in str(c) or 'net' in cl or '流入' in str(c):
-                    total_net += north_market_df[c].astype(float).sum()
+                # 同花顺 hsgtApi: hgt_yi, sgt_yi (亿元)
+                # akshare: 沪股通净买入, 深股通净买入
+                if cl in ('hgt_yi', 'sgt_yi') or '净买入' in str(c) or '净流入' in str(c):
+                    last_val = north_market_df[c].dropna()
+                    if len(last_val) > 0:
+                        total_net += float(last_val.iloc[-1])
             if total_net > 0:
-                scores[:] = 3.8  # 北向净流入日: 轻微偏多
+                scores[:] = 3.8
             elif total_net < 0:
-                scores[:] = 2.2  # 北向净流出日: 轻微偏空
+                scores[:] = 2.2
         except Exception:
             pass
     return scores
@@ -179,23 +183,55 @@ def _compute_inst_rating(df: pd.DataFrame, inst_rating_df=None) -> pd.Series:
 
 
 def _compute_limit_reason(df: pd.DataFrame, limit_reason_df=None) -> pd.Series:
-    """涨停原因归因质量评分 (0-4)。"""
+    """
+    涨停原因归因质量评分 (0-4)。
+    基于同花顺热点归因标签: 标签越多=题材越丰富, 含当前热点主题=加分。
+    """
     scores = pd.Series(2.0, index=df.index)
     reason_map = _df_to_map(limit_reason_df, 'code', 'reason')
     if not reason_map:
         return scores
-    quality = {'政策': 4, '产业': 4, '突破': 4, '公告': 3,
-              '业绩': 3, '重组': 3, '跟风': 2, '补涨': 2,
-              '超跌': 1, '次新': 1}
+
+    # 当前市场热点主题 (2026 Q2)
+    hot_themes = [
+        'AI', '算力', '半导体', '芯片', '机器人', '智能', '新能源', '固态电池',
+        '低空', '航天', '军工', '创新药', '减肥药', '数据', '量子',
+        '自动驾驶', '液冷', '铜箔', '消费电子', '光伏', '储能',
+        '英伟达', '华为', '特斯拉', '苹果',
+    ]
+
     for idx in df.index:
         code = str(df.loc[idx, '代码']).strip().zfill(6)
         r = reason_map.get(code, '')
-        score = 2.0
-        for kw, s in quality.items():
-            if kw in str(r):
-                score = float(s)
-                break
-        scores[idx] = score
+        if not r:
+            continue
+
+        # 拆分标签 (分隔符: + , /)
+        import re
+        tags = re.split(r'[+/,]', str(r))
+        tags = [t.strip() for t in tags if t.strip()]
+        n_tags = len(tags)
+
+        # 检查热点匹配
+        hot_hits = 0
+        tag_lower = str(r).lower()
+        for theme in hot_themes:
+            if theme.lower() in tag_lower:
+                hot_hits += 1
+
+        # 评分: 标签数量 + 热点命中
+        if hot_hits >= 3:
+            scores[idx] = 4.0       # 多重热点共振
+        elif hot_hits >= 2:
+            scores[idx] = 3.5
+        elif hot_hits >= 1:
+            scores[idx] = 3.0       # 至少1个热点
+        elif n_tags >= 4:
+            scores[idx] = 2.5       # 标签丰富但非主流热点
+        elif n_tags >= 2:
+            scores[idx] = 2.0       # 普通
+        else:
+            scores[idx] = 1.5       # 标签稀少
     return scores
 
 
@@ -523,7 +559,8 @@ def score(inputs: dict) -> dict:
     inst_rating_df = inputs.get('inst_rating')
     limit_reason_df = inputs.get('limit_reason')
     margin_akshare_df = inputs.get('margin_akshare')
-    north_market_df = inputs.get('north_flow_market')
+    # 北向数据: 同花顺 hsgtApi 返回的既是 market 也是唯一可用数据
+    north_market_df = inputs.get('north_flow_market', north_flow_df)
     industry_fund_df = inputs.get('industry_fund_flow')
 
     # 1. 计算 16 因子
