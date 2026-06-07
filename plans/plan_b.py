@@ -14,7 +14,16 @@ Plan B — a-stock-data 增强: +北向资金 +融资融券 +研报评级 +涨�
 
 PLAN_NAME = "B"
 PLAN_DESC = "a-stock-data增强: +北向+融资+研报+涨停归因"
-PLAN_SOURCES = ['north_flow', 'margin_ratio', 'inst_rating', 'limit_reason']
+PLAN_SOURCES = [
+    # Phase 2: akshare 直连 (今天可用)
+    'margin_akshare',        # 融资融券 (akshare 沪深两市)
+    'north_flow_market',     # 北向资金市场总览 (akshare)
+    'industry_fund_flow',    # 行业资金流向 (akshare)
+    # Phase 3: 仍需 a-stock-data 的
+    'north_flow',            # 北向个股 (a-stock-data 占位)
+    'inst_rating',           # 机构研报 (a-stock-data)
+    'limit_reason',          # 涨停归因 (a-stock-data)
+]
 
 import pandas as pd
 import numpy as np
@@ -40,17 +49,20 @@ PLAN_B_WEIGHTS = {
     'history': 4.0,
     'stock_sentiment': 8.0,
     'principal': 6.0,
+    'seal_quality': 3.0,
+    'sector_resonance': 3.0,
+    'volume_ratio': 2.0,
     'north_flow': 6.0,
     'margin_ratio': 4.0,
     'inst_rating': 4.0,
     'limit_reason': 4.0,
 }
-PLAN_B_TOTAL = sum(PLAN_B_WEIGHTS.values())  # 80
+PLAN_B_TOTAL = sum(PLAN_B_WEIGHTS.values())  # 88
 
-# Plan B 因子满分 (新增因子)
 PLAN_B_RAW_MAX = {
     'seal': 28.0, 'money': 20.0, 'sector': 12.0, 'tech': 10.0,
     'history': 6.0, 'stock_sentiment': 10.0, 'principal': 10.0,
+    'seal_quality': 3.0, 'sector_resonance': 3.0, 'volume_ratio': 2.0,
     'north_flow': 6.0, 'margin_ratio': 4.0, 'inst_rating': 4.0, 'limit_reason': 4.0,
 }
 
@@ -70,24 +82,43 @@ def _df_to_map(src_df, key_col='code', val_col=None):
     return {}
 
 
-def _compute_north_flow(df: pd.DataFrame, north_flow_df=None) -> pd.Series:
-    """北向资金净流入评分 (0-6)。无数据给中性 3 分。"""
+def _compute_north_flow(df: pd.DataFrame, north_flow_df=None, north_market_df=None) -> pd.Series:
+    """
+    北向资金评分 (0-6)。
+    优先个股数据, 其次市场总览(北向净流入日全体+1), 无数据给中性 3 分。
+    """
     scores = pd.Series(3.0, index=df.index)
+
+    # 1) 尝试个股级数据 (a-stock-data)
     flow_map = _df_to_map(north_flow_df, 'code', 'net_flow_yuan')
     if not flow_map:
-        # 尝试 akshare 格式 (列名不同)
         flow_map = _df_to_map(north_flow_df, '代码', '净流入') if north_flow_df is not None and not north_flow_df.empty else {}
-    if not flow_map:
+    if flow_map:
+        for idx in df.index:
+            code = str(df.loc[idx, '代码']).strip().zfill(6)
+            net = flow_map.get(code, 0)
+            if net > 1e8: scores[idx] = 6.0
+            elif net > 5e7: scores[idx] = 5.0
+            elif net > 1e7: scores[idx] = 4.0
+            elif net > 0: scores[idx] = 3.5
+            elif net == 0: scores[idx] = 3.0
+            else: scores[idx] = 2.0
         return scores
-    for idx in df.index:
-        code = str(df.loc[idx, '代码']).strip().zfill(6)
-        net = flow_map.get(code, 0)
-        if net > 1e8: scores[idx] = 6.0
-        elif net > 5e7: scores[idx] = 5.0
-        elif net > 1e7: scores[idx] = 4.0
-        elif net > 0: scores[idx] = 3.5
-        elif net == 0: scores[idx] = 3.0
-        else: scores[idx] = 2.0
+
+    # 2) 退而求其次: 市场总览 (北向净流入日 = 整体偏多)
+    if north_market_df is not None and not north_market_df.empty:
+        try:
+            total_net = 0
+            for c in north_market_df.columns:
+                cl = str(c).lower()
+                if '净买入' in str(c) or 'net' in cl or '流入' in str(c):
+                    total_net += north_market_df[c].astype(float).sum()
+            if total_net > 0:
+                scores[:] = 3.8  # 北向净流入日: 轻微偏多
+            elif total_net < 0:
+                scores[:] = 2.2  # 北向净流出日: 轻微偏空
+        except Exception:
+            pass
     return scores
 
 
@@ -145,14 +176,105 @@ def _compute_limit_reason(df: pd.DataFrame, limit_reason_df=None) -> pd.Series:
 
 
 # ═══════════════════════════════════════════
+#  Phase 1 零依赖因子 (从现有 DataFrame 衍生)
+# ═══════════════════════════════════════════
+
+def _compute_seal_quality(df: pd.DataFrame) -> pd.Series:
+    """
+    封板质量评分 (0-3): 炸板次数 + 封板时间。零依赖, 从现有列直接算。
+    """
+    scores = pd.Series(1.5, index=df.index)
+
+    # 炸板次数=0 → +1.5
+    if '炸板次数' in df.columns:
+        zban = df['炸板次数'].fillna(0).astype(float)
+        scores += np.where(zban == 0, 1.5, 0)
+
+    # 封板时间在 10:00 前 → +1.5 (首次封板时间 < "100000")
+    if '首次封板时间' in df.columns:
+        st = df['首次封板时间'].fillna('999999').astype(str)
+        scores += np.where(st.str[:2].astype(int) < 10, 1.5, 0)
+
+    return scores.clip(0, 3.0)
+
+
+def _compute_sector_fund_resonance(df: pd.DataFrame, raw_money: pd.Series) -> pd.Series:
+    """
+    板块资金共振 (0-3): 个股资金流向与同行业平均方向一致→共振加分。零依赖。
+    """
+    scores = pd.Series(1.5, index=df.index)
+    ind_col = '所属行业' if '所属行业' in df.columns else (
+        df.columns[15] if len(df.columns) > 15 else None)
+    if ind_col is None or raw_money is None or raw_money.empty:
+        return scores
+
+    try:
+        df_money = pd.DataFrame({
+            'industry': df[ind_col].astype(str),
+            'money': raw_money.reindex(df.index, fill_value=0).astype(float),
+        })
+        # 行业平均资金方向
+        sector_avg = df_money.groupby('industry')['money'].mean()
+        for idx in df.index:
+            ind = str(df.loc[idx, ind_col])
+            mn = float(df_money.loc[idx, 'money']) if idx in df_money.index else 0
+            sa = float(sector_avg.get(ind, 0))
+            if mn > 0 and sa > 0:
+                scores[idx] = 3.0  # 个股+行业双流入
+            elif mn > 0 and sa < 0:
+                scores[idx] = 2.0  # 个股流入但行业流出 (逆势)
+            elif mn < 0 and sa > 0:
+                scores[idx] = 1.0  # 个股流出行业流入 (不跟)
+            else:
+                scores[idx] = 0.5  # 双流出
+    except Exception:
+        pass
+    return scores
+
+
+def _compute_volume_ratio(df: pd.DataFrame, today_str: str = None) -> pd.Series:
+    """
+    量比评分 (0-2): 当日换手率 vs 近5日均换手率。零依赖 (自己算5日均值)。
+    """
+    scores = pd.Series(1.0, index=df.index)
+    turnover_col = '换手率' if '换手率' in df.columns else None
+    if turnover_col is None:
+        return scores
+
+    today_turnover = df[turnover_col].fillna(0).astype(float)
+
+    # 尝试从 akshare 拉近5日 K 线算均换手 (降级: 给中位分)
+    try:
+        import akshare as ak
+        for idx in df.index:
+            code = str(df.loc[idx, '代码']).strip().zfill(6)
+            try:
+                hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="")
+                if hist is not None and len(hist) >= 5:
+                    avg_turnover = hist['换手率'].tail(5).astype(float).mean()
+                    ratio = today_turnover[idx] / max(0.01, avg_turnover)
+                    if ratio > 2.0: scores[idx] = 2.0
+                    elif ratio > 1.5: scores[idx] = 1.5
+                    elif ratio > 1.0: scores[idx] = 1.0
+                    elif ratio > 0.5: scores[idx] = 0.5
+                    else: scores[idx] = 0.0
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return scores
+
+
+# ═══════════════════════════════════════════
 #  Plan B 加权
 # ═══════════════════════════════════════════
 
 def apply_weights_plan_b(seal_scores, money_scores, sector_scores, tech_scores,
                           history_scores, sentiment_series, stock_sent_scores,
-                          principal_scores, north_flow, margin_ratio,
+                          principal_scores, seal_quality, sector_resonance,
+                          volume_ratio, north_flow, margin_ratio,
                           inst_rating, limit_reason) -> pd.Series:
-    """Plan B 13 因子加权归一化到百分制"""
+    """Plan B 16 因子加权归一化到百分制"""
     w = PLAN_B_WEIGHTS
     rmax = PLAN_B_RAW_MAX
 
@@ -164,6 +286,9 @@ def apply_weights_plan_b(seal_scores, money_scores, sector_scores, tech_scores,
         history_scores * (w['history'] / rmax['history']) +
         stock_sent_scores * (w['stock_sentiment'] / rmax['stock_sentiment']) +
         principal_scores * (w['principal'] / rmax['principal']) +
+        seal_quality * (w['seal_quality'] / rmax['seal_quality']) +
+        sector_resonance * (w['sector_resonance'] / rmax['sector_resonance']) +
+        volume_ratio * (w['volume_ratio'] / rmax['volume_ratio']) +
         north_flow * (w['north_flow'] / rmax['north_flow']) +
         margin_ratio * (w['margin_ratio'] / rmax['margin_ratio']) +
         inst_rating * (w['inst_rating'] / rmax['inst_rating']) +
@@ -188,21 +313,34 @@ def apply_weights_plan_b(seal_scores, money_scores, sector_scores, tech_scores,
 def compute_all_factors(filtered, scoring_base, fund_df, principal,
                         today_str=None, north_flow_df=None,
                         margin_ratio_df=None, inst_rating_df=None,
-                        limit_reason_df=None):
+                        limit_reason_df=None,
+                        margin_akshare_df=None, north_market_df=None,
+                        industry_fund_df=None):
     """
-    计算所有 13 个因子: Plan A 9 因子 + Plan B 4 因子。
-    scoring_base: 因子归一化基准集 (>=filtered, 比 filtered 更全)
-    扩展数据在拉取阶段已缓存到 raw_scan_data.pkl, 这里直接评分。
+    计算所有 16 个因子。
+    scoring_base: 因子归一化基准集
+    扩展数据在拉取阶段已缓存到 raw_scan_data.pkl.
     """
     # Plan A 的 9 因子在 scoring_base 上计算以保证归一化稳定
     factors_a = compute_factors(scoring_base if len(scoring_base) > len(filtered) else filtered,
                                 fund_df, principal)
 
-    # Plan B 新增 4 因子: 从 DataFrame 评分 (空DF=默认分)
+    # Plan B 新增因子: Phase 1 (零依赖) + Phase 2/3 (数据源)
     base = scoring_base if len(scoring_base) > len(filtered) else filtered
+    raw_money_for_resonance = factors_a.get('raw_money')
+    # 融资数据: 优先 akshare (margin_akshare_df 有 margin_balance), 其次 a-stock-data
+    margin_df = margin_akshare_df if (margin_akshare_df is not None and not margin_akshare_df.empty) else margin_ratio_df
+    # 行业资金流: 传给 sector_resonance 增强
+    ind_fund_df = industry_fund_df if (industry_fund_df is not None and not industry_fund_df.empty) else None
+
     factors_b = {
-        'north_flow': _compute_north_flow(base, north_flow_df),
-        'margin_ratio': _compute_margin_ratio(base, margin_ratio_df),
+        # Phase 1: 零依赖因子
+        'seal_quality': _compute_seal_quality(base),
+        'sector_resonance': _compute_sector_fund_resonance(base, raw_money_for_resonance),
+        'volume_ratio': _compute_volume_ratio(base, today_str),
+        # Phase 2/3: 数据源因子
+        'north_flow': _compute_north_flow(base, north_flow_df, north_market_df),
+        'margin_ratio': _compute_margin_ratio(base, margin_df),
         'inst_rating': _compute_inst_rating(base, inst_rating_df),
         'limit_reason': _compute_limit_reason(base, limit_reason_df),
     }
@@ -245,6 +383,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores,
         factors['seal'], money, sector_merged,
         factors['tech'], h_scores, sentiment_series,
         factors['stock_sentiment'], factors['principal'],
+        factors['seal_quality'], factors['sector_resonance'],
+        factors['volume_ratio'],
         factors['north_flow'], factors['margin_ratio'],
         factors['inst_rating'], factors['limit_reason'],
     )
@@ -270,10 +410,13 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
     for s in stocks:
         idx = code_to_idx.get(s['code'])
         if idx is not None:
-            s['north_flow_score'] = round(float(factors['north_flow'].get(idx, 3)), 1)
-            s['margin_score'] = round(float(factors['margin_ratio'].get(idx, 2)), 1)
-            s['inst_rating_score'] = round(float(factors['inst_rating'].get(idx, 2)), 1)
-            s['limit_reason_score'] = round(float(factors['limit_reason'].get(idx, 2)), 1)
+            s['seal_quality_score'] = round(float(factors['seal_quality'].get(idx, 1.5) or 1.5), 1)
+            s['sector_resonance_score'] = round(float(factors['sector_resonance'].get(idx, 1.5) or 1.5), 1)
+            s['volume_ratio_score'] = round(float(factors['volume_ratio'].get(idx, 1.0) or 1.0), 1)
+            s['north_flow_score'] = round(float(factors['north_flow'].get(idx, 3) or 3.0), 1)
+            s['margin_score'] = round(float(factors['margin_ratio'].get(idx, 2) or 2.0), 1)
+            s['inst_rating_score'] = round(float(factors['inst_rating'].get(idx, 2) or 2.0), 1)
+            s['limit_reason_score'] = round(float(factors['limit_reason'].get(idx, 2) or 2.0), 1)
     return stocks
 
 
@@ -318,16 +461,21 @@ def score(inputs: dict) -> dict:
     margin_ratio_df = inputs.get('margin_ratio')
     inst_rating_df = inputs.get('inst_rating')
     limit_reason_df = inputs.get('limit_reason')
+    margin_akshare_df = inputs.get('margin_akshare')
+    north_market_df = inputs.get('north_flow_market')
+    industry_fund_df = inputs.get('industry_fund_flow')
 
-    # 1. 计算 13 因子 (在 scoring_base 上归一化)
-    print("  [PlanB] 计算13因子 (9+北向+融资+研报+涨停归因)...",
-          file=sys.stderr)
+    # 1. 计算 16 因子
+    print("  [PlanB] 计算16因子...", file=sys.stderr)
     factors = compute_all_factors(filtered, scoring_base, fund_df,
                                   principal, today_str,
                                   north_flow_df=north_flow_df,
                                   margin_ratio_df=margin_ratio_df,
                                   inst_rating_df=inst_rating_df,
-                                  limit_reason_df=limit_reason_df)
+                                  limit_reason_df=limit_reason_df,
+                                  margin_akshare_df=margin_akshare_df,
+                                  north_market_df=north_market_df,
+                                  industry_fund_df=industry_fund_df)
 
     # 2. 加权 + 危险信号
     print("  [PlanB] 加权+危险信号...", file=sys.stderr)
@@ -365,7 +513,10 @@ def score(inputs: dict) -> dict:
         'buyability_scores': factors['buyability'],
         'stock_sent_scores': factors['stock_sentiment'],
         'principal_scores': factors['principal'],
-        # Plan B 新增
+        # Plan B 新增 (Phase 1 零依赖 + Phase 2/3 数据源)
+        'seal_quality': factors['seal_quality'],
+        'sector_resonance': factors['sector_resonance'],
+        'volume_ratio': factors['volume_ratio'],
         'north_flow': factors['north_flow'],
         'margin_ratio': factors['margin_ratio'],
         'inst_rating': factors['inst_rating'],

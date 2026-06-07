@@ -362,7 +362,8 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
         'principal': principal,
     }
     # 扩展数据源: 从 raw_scan_data.pkl 读取 DataFrame (旧缓存无此字段→None)
-    for src_name in ['north_flow', 'margin_ratio', 'inst_rating', 'limit_reason']:
+    for src_name in ['north_flow', 'margin_ratio', 'inst_rating', 'limit_reason',
+                     'margin_akshare', 'north_flow_market', 'industry_fund_flow']:
         val = raw.get(src_name)
         if val is not None:
             plan_inputs[src_name] = val

@@ -75,3 +75,76 @@ def source_limit_reason(date_str: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 SOURCES['limit_reason'] = source_limit_reason
+
+
+# ═══════════════════════════════════════════
+#  Phase 2: akshare 直连 (今天可用)
+# ═══════════════════════════════════════════
+
+def source_margin_akshare(date_str: str) -> pd.DataFrame:
+    """
+    融资融券个股余额 (akshare 直连, 沪深两市)。
+    返回 DataFrame(code, margin_balance, market_cap) → Plan B 自己算 ratio。
+    """
+    frames = []
+    try:
+        import akshare as ak
+        # 沪市
+        dt = date_str.replace('-', '') if date_str else ''
+        if dt:
+            df_sse = ak.stock_margin_detail_sse(date=dt)
+            if df_sse is not None and not df_sse.empty:
+                frames.append(df_sse)
+        # 深市
+            df_szse = ak.stock_margin_detail_szse(date=dt)
+            if df_szse is not None and not df_szse.empty:
+                frames.append(df_szse)
+    except Exception:
+        pass
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    # 标准化列名
+    for c in result.columns:
+        cl = str(c).lower()
+        if '股票代码' in str(c) or 'code' in cl or '代码' in str(c):
+            result.rename(columns={c: 'code'}, inplace=True)
+        if '融资余额' in str(c) or 'margin_balance' in cl:
+            result.rename(columns={c: 'margin_balance'}, inplace=True)
+    return result
+
+SOURCES['margin_akshare'] = source_margin_akshare
+
+
+def source_north_flow_market(date_str: str) -> pd.DataFrame:
+    """
+    北向资金市场总览 (akshare, 市场级)。
+    返回 DataFrame(date, net_flow_沪股通, net_flow_深股通) → Plan B 判断当日北向方向。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_hsgt_north_net_flow_in_em()
+        if df is not None and not df.empty:
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+SOURCES['north_flow_market'] = source_north_flow_market
+
+
+def source_industry_fund_flow(date_str: str) -> pd.DataFrame:
+    """
+    行业资金流向 (akshare 同花顺)。
+    返回 DataFrame(行业名称, 主力净流入) → Plan B 判断行业资金方向。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
+        if df is not None and not df.empty:
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+SOURCES['industry_fund_flow'] = source_industry_fund_flow
