@@ -278,7 +278,9 @@ def score_seal_strength(df: pd.DataFrame) -> pd.Series:
     scores = pd.Series(0.0, index=df.index)
 
     # 1. 封板时间阶梯化 (0-12) - 向量化
-    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+    if seal_time_col is None:
+        return scores  # 无封板时间数据，返回全 0
     scores += _vectorized_seal_time_score(df[seal_time_col])
 
     # 2. 封单充沛度 (0-8) - 已向量化
@@ -746,8 +748,8 @@ def can_buy_filter(df: pd.DataFrame) -> pd.DataFrame:
     - 炸板次数 ≥ 4 → 主力放弃
     """
     mask = pd.Series(True, index=df.index)
-    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
-    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
     cap_col = '流通市值' if '流通市值' in df.columns else df.columns[13]
     lb_col = '连板数' if '连板数' in df.columns else df.columns[14]
     zban_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
@@ -1341,12 +1343,12 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
     返回带评分列的DataFrame（已排序、取TOP_N）。"""
     df = df.copy()
 
-    # ── 列识别 ──
-    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else df.columns[11]
-    seal_fund_col = '封板资金' if '封板资金' in df.columns else df.columns[14]
-    zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else df.columns[12]
-    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
-    industry_col = '所属行业' if '所属行业' in df.columns else df.columns[15]
+    # ── 列识别（优先名称匹配，fallback 硬编码加长度保护） ──
+    seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+    seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
+    zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else (df.columns[12] if len(df.columns) > 12 else None)
+    turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+    industry_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
 
     # 1. 封板质量 (0-25): 封板时间早 + 封板资金大
     seal_scores = pd.Series(0.0, index=df.index)
@@ -1876,7 +1878,7 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
         print("no_data")
         return
 
-    change_col = prev.columns[3]
+    change_col = '涨跌幅' if '涨跌幅' in prev.columns else (prev.columns[3] if len(prev.columns) > 3 else prev.columns[0])
     df = prev.copy()
     df = filter_non_main_board(df)
     changes = df[change_col].astype(float)
@@ -2586,11 +2588,6 @@ def run_backtest():
             prev = ak.stock_zt_pool_previous_em(date=d_str)
             if prev.empty:
                 continue
-            # 取当日涨停池（作为"今日"行业分布）
-            try:
-                lim = ak.stock_zt_pool_em(date=d_str)
-            except Exception:
-                lim = None
             df_res, summary = backtest_score_prev(prev, date_str=d_str)
             if summary['count'] >= 5:
                 results.append(summary)

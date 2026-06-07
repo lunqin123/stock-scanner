@@ -67,21 +67,6 @@ def _get_prev_pool_cached(date_str):
     return df
 
 
-def _get_today_pool_cached(date_str):
-    """拉今日涨停池(用 score 里 sector 分析), 用 2h 缓存"""
-    key = f"t1_today_pool_{date_str}"
-    cached = _cache_get(key)
-    if cached is not None:
-        return cached
-    try:
-        df = ak.stock_zt_pool_em(date=date_str)
-    except Exception:
-        df = None
-    if df is not None and not df.empty:
-        _cache_put(key, df)
-    return df
-
-
 def _get_open_price(code, date_str):
     """拉 d 日开盘价 - 失败返回 None
     永久缓存: 历史开盘价永远不变(2h 缓存即可覆盖所有回测场景)
@@ -172,8 +157,7 @@ def run_t1_backtest(
             if prev is None or prev.empty:
                 skipped.append({'signal': d_signal, 'reason': 'prev池空'})
                 continue
-            today_df = _get_today_pool_cached(d_signal)
-            df_res, summary = backtest_score_prev(prev, today_df=today_df, date_str=d_signal)
+            df_res, summary = backtest_score_prev(prev, date_str=d_signal)
             if df_res is None or df_res.empty:
                 skipped.append({'signal': d_signal, 'reason': '评分后空'})
                 continue
@@ -185,10 +169,14 @@ def run_t1_backtest(
             if score_col is None:
                 skipped.append({'signal': d_signal, 'reason': '找不到评分列'})
                 continue
-            top = df_res.sort_values([score_col, df_res.columns[1]], ascending=[False, True], kind='mergesort').head(top_n)
+            # 排序列：评分降序，名称列升序做 tiebreaker
+            name_sort_col = '名称' if '名称' in df_res.columns else (df_res.columns[2] if len(df_res.columns) > 2 else df_res.columns[-1])
+            top = df_res.sort_values([score_col, name_sort_col], ascending=[False, True], kind='mergesort').head(top_n)
+            code_col = '代码' if '代码' in df_res.columns else (df_res.columns[1] if len(df_res.columns) > 1 else df_res.columns[0])
+            name_col_r = '名称' if '名称' in df_res.columns else (df_res.columns[2] if len(df_res.columns) > 2 else df_res.columns[1])
             for rank, (_, row) in enumerate(top.iterrows(), 1):
-                code = str(row.iloc[1]).strip().zfill(6)
-                name = str(row.iloc[2])
+                code = str(row.get(code_col, '') or row.iloc[0]).strip().zfill(6)
+                name = str(row.get(name_col_r, '') or row.iloc[0])
                 sc = float(row.get(score_col, 0))
                 buy_price = _get_open_price(code, d_buy)
                 if buy_price is None:

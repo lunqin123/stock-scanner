@@ -557,10 +557,14 @@ def _fetch_trend_data(today, principal):
     if prev.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
 
-    # 2. 列索引
+    # 2. 列索引（名称匹配优先，硬编码 fallback 加长度保护）
     cols = {
-        'code': prev.columns[1], 'name': prev.columns[2], 'chg': prev.columns[3],
-        'price': prev.columns[4], 'vol': prev.columns[6], 'turnover': prev.columns[9],
+        'code': '代码' if '代码' in prev.columns else (prev.columns[1] if len(prev.columns) > 1 else prev.columns[0]),
+        'name': '名称' if '名称' in prev.columns else (prev.columns[2] if len(prev.columns) > 2 else prev.columns[1]),
+        'chg': '涨跌幅' if '涨跌幅' in prev.columns else (prev.columns[3] if len(prev.columns) > 3 else prev.columns[0]),
+        'price': prev.columns[4] if len(prev.columns) > 4 else prev.columns[0],
+        'vol': prev.columns[6] if len(prev.columns) > 6 else prev.columns[0],
+        'turnover': '换手率' if '换手率' in prev.columns else (prev.columns[9] if len(prev.columns) > 9 else None),
         'seal_stat': prev.columns[14] if len(prev.columns) > 14 else None,
         'industry': prev.columns[15] if len(prev.columns) > 15 else None,
     }
@@ -580,7 +584,8 @@ def _fetch_trend_data(today, principal):
         if not zb_df.empty:
             zb_code_col = zb_df.columns[1] if len(zb_df.columns) > 1 else zb_df.columns[0]
             zhaban_codes = set(zb_df[zb_code_col].astype(str).str.zfill(6))
-    except Exception: pass
+    except Exception as e:
+        print(f"  [trend] 炸板池拉取失败: {e}", file=sys.stderr)
     try:
         lt_df = ak.stock_zt_pool_em(date=today)
         if not lt_df.empty:
@@ -590,13 +595,15 @@ def _fetch_trend_data(today, principal):
                 industry_counts = vc.to_dict()
                 hot_industries = set(vc[vc >= 3].index)
                 # 算每个板块今日涨幅 TOP1（龙头）
-                chg_col_lt = lt_df.columns[3]
-                for ind_name, group in lt_df.groupby(ind_col2):
-                    try:
-                        sector_top_chg[ind_name] = float(group[chg_col_lt].astype(float).max())
-                    except Exception:
-                        pass
-    except Exception: pass
+                chg_col_lt = '涨跌幅' if '涨跌幅' in lt_df.columns else (lt_df.columns[3] if len(lt_df.columns) > 3 else None)
+                if chg_col_lt:
+                    for ind_name, group in lt_df.groupby(ind_col2):
+                        try:
+                            sector_top_chg[ind_name] = float(group[chg_col_lt].astype(float).max())
+                        except Exception as e_inner:
+                            print(f"  [trend] 板块{ind_name}涨幅计算失败: {e_inner}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [trend] 今日涨停池拉取失败: {e}", file=sys.stderr)
 
     # 5. 趋势过滤
     df = prev[(prev['涨幅'] >= 2) & (prev['涨幅'] < 9)].copy()
@@ -790,8 +797,11 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
     if df.empty:
         return {"ok": True, "items": []}
 
-    chg_col = df.columns[3]; code_col = df.columns[1]; name_col = df.columns[2]
-    price_col = df.columns[4]; turnover_col = df.columns[9]
+    chg_col = '涨跌幅' if '涨跌幅' in df.columns else (df.columns[3] if len(df.columns) > 3 else df.columns[0])
+    code_col = '代码' if '代码' in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
+    name_col = '名称' if '名称' in df.columns else (df.columns[2] if len(df.columns) > 2 else df.columns[1])
+    price_col = df.columns[4] if len(df.columns) > 4 else df.columns[0]
+    turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
     ind_col = df.columns[15] if len(df.columns) > 15 else None
     seal_stat_col = df.columns[14] if len(df.columns) > 14 else None
 
@@ -808,7 +818,8 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
             lt_ic = '所属行业' if '所属行业' in lt.columns else (lt.columns[15] if len(lt.columns) > 15 else None)
             if lt_ic:
                 hot_inds = set(lt[lt_ic].value_counts().head(10).index)
-    except: pass
+    except Exception as e:
+        print(f"  [zhaban] 今日涨停行业拉取失败: {e}", file=sys.stderr)
 
     items = []
     for _, row in pullback.iterrows():
@@ -889,6 +900,20 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
     return result
 
 
+def _zhaban_columns(df):
+    """检测炸板相关列索引，名称匹配优先 + fallback 长度保护"""
+    return {
+        'st': '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None),
+        'sf': '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None),
+        'zb': '炸板次数' if '炸板次数' in df.columns else (df.columns[12] if len(df.columns) > 12 else None),
+        'to': '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None),
+        'ind': '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None),
+        'code': '代码' if '代码' in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0]),
+        'name': '名称' if '名称' in df.columns else (df.columns[2] if len(df.columns) > 2 else df.columns[1]),
+        'price': df.columns[4] if len(df.columns) > 4 else df.columns[0],
+    }
+
+
 @app.get("/api/scan/zhaban/cards")
 def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     """炸板反包 — 结构化数据（含评分、信号分析、策略、跳转）
@@ -928,25 +953,21 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     from scanner import score_zhaban_data
     scored = score_zhaban_data(df, today)
 
-    # 列识别 (与 /api/scan/zhaban 一致)
-    st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
-    sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
-    zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
-    to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
-    ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
+    # 列识别 (与 /api/scan/zhaban/stream 共享逻辑)
+    zc = _zhaban_columns(scored)
 
     items = []
     for _, row in scored.iterrows():
-        code = str(row.iloc[1]).strip().zfill(6)
-        name = str(row.iloc[2])
-        seal_time = str(row.get(st_col, ''))[:4]
+        code = str(row.get(zc['code'], '') or row.iloc[0]).strip().zfill(6)
+        name = str(row.get(zc['name'], '') or row.iloc[0])
+        seal_time = str(row.get(zc['st'], ''))[:4]
         total = float(row.get('总分', 0))
-        price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
-        turnover = round(float(row.get(to_col, 0) or 0), 1)
-        zb_times = int(float(row.get(zb_col, 0))) if pd.notna(row.get(zb_col, None)) else 0
-        seal_fund = float(row.get(sf_col, 0) or 0)
+        price = float(row.get(zc['price'], 0)) if pd.notna(row.get(zc['price'], None)) else 0
+        turnover = round(float(row.get(zc['to'], 0) or 0), 1)
+        zb_times = int(float(row.get(zc['zb'], 0))) if pd.notna(row.get(zc['zb'], None)) else 0
+        seal_fund = float(row.get(zc['sf'], 0) or 0)
         net = float(row.get('净流入', 0))
-        industry = str(row.get(ind_col, ''))
+        industry = str(row.get(zc['ind'], ''))
 
         # 信号标签
         sigs = []
@@ -1248,7 +1269,8 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             for k, v in detail.items():
                 if k not in ("zhaban_count", "dieting_count"):
                     result[k] = v
-    except:
+    except Exception as _e:
+        print(f"  [dashboard] 情绪检测失败: {_e}", file=sys.stderr)
         result["sentiment"] = {"score": 0, "level": "未知"}
 
     # 涨停池 + 行业分布
@@ -1256,7 +1278,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         pool = fetch_limit_up_pool()
         if pool is not None and not pool.empty:
             result["limit_up_count"] = len(pool)
-            ind_col = '所属行业' if '所属行业' in pool.columns else pool.columns[15]
+            ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
             top5 = pool[ind_col].value_counts().head(5)
             result["hot_sectors"] = [
                 {
@@ -1269,7 +1291,8 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         else:
             result["limit_up_count"] = 0
             result["hot_sectors"] = []
-    except:
+    except Exception as _e:
+        print(f"  [dashboard] 涨停池拉取失败: {_e}", file=sys.stderr)
         result["limit_up_count"] = 0
         result["hot_sectors"] = []
 
@@ -1279,7 +1302,8 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         try:
             df = getattr(ak, api_name)(date=today)
             result[key] = len(df) if df is not None and not df.empty else 0
-        except:
+        except Exception as _e:
+            print(f"  [dashboard] {api_name} 拉取失败: {_e}", file=sys.stderr)
             result[key] = 0
 
     result["fetched_at"] = _fetched_at()
@@ -1525,7 +1549,7 @@ def _stream_scan_generic(run_fn, complete_fn, on_success=None):
             result_holder["data"] = data
             if data and on_success:
                 try: on_success(data)
-                except: pass
+                except Exception as _sce: print(f"  [stream] on_success 回调异常: {_sce}", file=sys.stderr)
         except Exception as e:
             result_holder["error"] = str(e)
         finally:
@@ -1822,28 +1846,24 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
         from scanner import filter_non_main_board
         df = filter_non_main_board(df)
         if '流通市值' in df.columns: df = df[df['流通市值'].astype(float) <= 200 * 1e8]
-        price_col = df.columns[4]; df = df[df[price_col].astype(float) <= 60]
+        price_f = df.columns[4] if len(df.columns) > 4 else df.columns[0]; df = df[df[price_f].astype(float) <= 60]
         if df.empty: return [], {}
         print(f"  [炸板] 共 {len(df)} 只, 评分中...", file=sys.stderr)
         from scanner import score_zhaban_data
         scored = score_zhaban_data(df, today)
         items = []
-        st_col = '首次封板时间' if '首次封板时间' in scored.columns else scored.columns[11]
-        sf_col = '封板资金' if '封板资金' in scored.columns else scored.columns[14]
-        zb_col = '炸板次数' if '炸板次数' in scored.columns else scored.columns[12]
-        to_col = '换手率' if '换手率' in scored.columns else scored.columns[9]
-        ind_col = '所属行业' if '所属行业' in scored.columns else scored.columns[15]
+        zc = _zhaban_columns(scored)
         for _, row in scored.iterrows():
-            code = str(row.iloc[1]).strip().zfill(6)
-            name = str(row.iloc[2])
-            seal_time = str(row.get(st_col, ''))[:4]
+            code = str(row.get(zc['code'], '') or row.iloc[0]).strip().zfill(6)
+            name = str(row.get(zc['name'], '') or row.iloc[0])
+            seal_time = str(row.get(zc['st'], ''))[:4]
             total = float(row.get('总分', 0))
-            price = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0
-            turnover = round(float(row.get(to_col, 0) or 0), 1)
-            zb_times = int(float(row.get(zb_col, 0))) if pd.notna(row.get(zb_col, None)) else 0
-            seal_fund = float(row.get(sf_col, 0) or 0)
+            price = float(row.get(zc['price'], 0)) if pd.notna(row.get(zc['price'], None)) else 0
+            turnover = round(float(row.get(zc['to'], 0) or 0), 1)
+            zb_times = int(float(row.get(zc['zb'], 0))) if pd.notna(row.get(zc['zb'], None)) else 0
+            seal_fund = float(row.get(zc['sf'], 0) or 0)
             net = float(row.get('净流入', 0))
-            industry = str(row.get(ind_col, ''))
+            industry = str(row.get(zc['ind'], ''))
             # 信号标签
             sigs = []
             if seal_time and len(seal_time) >= 4 and int(seal_time[:2]) < 10: sigs.append('早盘封板')
@@ -2309,7 +2329,7 @@ def index():
             _ver = _json.load(_vf)
             _ver_str = f'v{_ver["version"]} ({_ver["date"]})'
             html = html.replace('<span id="version-label">版本</span>', f'<span id="version-label">{_ver_str}</span>')
-    except: pass
+    except Exception as _ve: print(f"  [app] version.json 加载失败: {_ve}", file=sys.stderr)
     # 请求级随机数，每次刷新页面都不一样，彻底破一切缓存
     import random as _random
     _nonce = str(_random.randint(100000, 999999))
