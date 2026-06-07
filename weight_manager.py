@@ -218,7 +218,8 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
             continue
         ic_mean = float(np.mean(vals))
         ic_std = float(np.std(vals)) if len(vals) > 1 else 1.0
-        icir = abs(ic_mean) / max(0.001, ic_std)
+        icir = abs(ic_mean) / max(0.005, ic_std)  # cap at 20.0 for zero-variance factors
+        icir = min(icir, 20.0)
         ic_stats[k] = {
             'ic_mean': round(ic_mean, 4),
             'ic_std': round(ic_std, 4),
@@ -249,61 +250,29 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
         else:
             dropped.append(f)
 
-    if plan_name.upper() == 'B':
-        # ICIR 加权分配
-        total_icir = sum(ic_stats[f]['icir'] for f in active_factors)
-        new_weights = {}
-        for k in defaults:
-            new_weights[k] = 0.0
-        if total_icir > 0:
-            for f in active_factors:
-                new_weights[f] = round(defaults[f] * ic_stats[f]['icir'] / total_icir, 1)
+    # ── 统一 ICIR 加权 (Plan A / Plan B 共用) ──
+    total_icir = sum(ic_stats[f]['icir'] for f in active_factors) or 1.0
+    new_weights = {}
+    for k in defaults:
+        new_weights[k] = 0.0
+    for f in active_factors:
+        new_weights[f] = round(defaults[f] * ic_stats[f]['icir'] / total_icir, 1)
 
-        # 软钳制 [0.5×default, 1.5×default] 对非零因子
-        for f in active_factors:
-            lo = defaults[f] * 0.5
-            hi = defaults[f] * 1.5
-            new_weights[f] = max(lo, min(hi, new_weights[f]))
+    # 软钳制 [0.5×default, 1.5×default]
+    for f in active_factors:
+        lo = defaults[f] * 0.5
+        hi = defaults[f] * 1.5
+        new_weights[f] = max(lo, min(hi, new_weights[f]))
 
-        # 保留 sentiment (情绪系数, 不参与加权) — Plan B 没有 sentiment 因子
-        save_weights({k: v for k, v in new_weights.items() if v > 0}, plan_name='B')
+    save_weights({k: v for k, v in new_weights.items() if v > 0}, plan_name=plan_name)
 
-        # 摘要
-        lines = [f"  Plan B ICIR调权 ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
-        for f in valid_factors:
-            s = ic_stats[f]
-            status = "+" if f in active_factors else "x"
-            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} σ={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
-        if dropped:
-            lines.append(f"  噪声剔除(IC<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
-        return new_weights, '\n'.join(lines)
-
-    else:
-        # Plan A: 保持原有 delta-based logic
-        mean_corrs = {f: ic_stats[f]['ic_mean'] for f in valid_factors}
-        mean_corr = float(np.mean([mean_corrs[f] for f in valid_factors]))
-
-        deltas = {f: 0.0 for f in defaults}
-        for factor in valid_factors:
-            delta = lr * (mean_corrs[factor] - mean_corr) * defaults.get(factor, 1.0)
-            deltas[factor] = delta
-
-        new_weights = {}
-        for k in defaults:
-            w = current_weights.get(k, defaults.get(k, 0)) + deltas.get(k, 0)
-            lo = defaults.get(k, 0) * 0.5
-            hi = defaults.get(k, 0) * 1.5
-            new_weights[k] = max(lo, min(hi, w)) if defaults.get(k, 0) > 0 else 0.0
-
-        save_weights(new_weights, plan_name='A')
-
-        corr_str = ' | '.join(f"{k}: {mean_corrs[k]:+.3f}" for k in valid_factors)
-        changes = []
-        for k in factor_list:
-            if k in new_weights and k in current_weights:
-                delta = new_weights[k] - current_weights[k]
-                if abs(delta) > 0.01:
-                    changes.append(f"{k}: {current_weights[k]:.0f}→{new_weights[k]:.0f} ({delta:+.1f})")
-        if not changes:
-            return new_weights, f"  权重无显著变化 ({len(recent)}天)"
-        return new_weights, f"  每日调权 ({len(recent)}天): {corr_str}\n  {' | '.join(changes)}"
+    # 摘要
+    pname = f"Plan {plan_name}"
+    lines = [f"  {pname} ICIR调权 ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
+    for f in valid_factors:
+        s = ic_stats[f]
+        status = "+" if f in active_factors else "x"
+        lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} sigma={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
+    if dropped:
+        lines.append(f"  噪声剔除(|IC|<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
+    return new_weights, '\n'.join(lines)
