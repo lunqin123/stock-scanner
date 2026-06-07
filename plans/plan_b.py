@@ -15,14 +15,11 @@ Plan B — a-stock-data 增强: +北向资金 +融资融券 +研报评级 +涨�
 PLAN_NAME = "B"
 PLAN_DESC = "a-stock-data增强: +北向+融资+研报+涨停归因"
 PLAN_SOURCES = [
-    # Phase 2: akshare 直连 (今天可用)
+    'north_flow',            # 北向资金 (同花顺 hsgtApi → akshare)
     'margin_akshare',        # 融资融券 (akshare 沪深两市)
-    'north_flow_market',     # 北向资金市场总览 (akshare)
+    'inst_rating',           # 机构研报 (akshare → 东财 reportapi)
+    'limit_reason',          # 涨停归因 (同花顺热点 API)
     'industry_fund_flow',    # 行业资金流向 (akshare)
-    # Phase 3: 仍需 a-stock-data 的
-    'north_flow',            # 北向个股 (a-stock-data 占位)
-    'inst_rating',           # 机构研报 (a-stock-data)
-    'limit_reason',          # 涨停归因 (a-stock-data)
 ]
 
 import pandas as pd
