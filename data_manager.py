@@ -8,6 +8,7 @@ from datetime import date, timedelta
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SUMMARY_FILE = os.path.join(DATA_DIR, "daily_summary.md")
+_BACKTEST_RESULTS_FILE = os.path.join(DATA_DIR, "backtest_results.json")
 
 def ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -81,6 +82,39 @@ def _grade_from_stock(s):
     if score >= 45:
         return 'B+'
     return 'C'
+
+
+def save_backtest_result(result: dict) -> str:
+    ensure_data_dir()
+    history = []
+    if os.path.exists(_BACKTEST_RESULTS_FILE):
+        with open(_BACKTEST_RESULTS_FILE, 'r', encoding='utf-8') as f:
+            history = json.load(f)
+    entry = {
+        'generated_at': result['generated_at'],
+        'summary': result.get('summary', {}),
+        'trades_count': len(result.get('trades', [])),
+        'top5': result.get('top5', []),
+        'bottom5': result.get('bottom5', []),
+        'config': result.get('config', {}),
+        'skipped_count': len(result.get('skipped', [])),
+        'comparison': result.get('comparison', {}),
+    }
+    dedup_key = (entry['generated_at'][:10], str(entry['config'].get('top_n', '')))
+    history = [h for h in history
+               if (h.get('generated_at', '')[:10], str(h.get('config', {}).get('top_n', ''))) != dedup_key]
+    history.append(entry)
+    history = history[-30:]
+    with open(_BACKTEST_RESULTS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+    return _BACKTEST_RESULTS_FILE
+
+
+def load_backtest_history(max_days: int = 30) -> list:
+    if not os.path.exists(_BACKTEST_RESULTS_FILE):
+        return []
+    with open(_BACKTEST_RESULTS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)[-max_days:]
 
 
 def generate_summary(today_data: dict, history: list) -> str:
