@@ -78,6 +78,6 @@ async function loadDashboard() {
         });
 
     } catch (e) {
-        bar.innerHTML = '<div class="dash-loading">⚠️ 市场数据加载失败</div>';
+        bar.innerHTML = '<div class="dash-loading" style="cursor:pointer" onclick="location.reload()">⚠️ 数据加载失败 · 点击重试</div>';
     }
 }
