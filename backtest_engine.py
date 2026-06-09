@@ -155,10 +155,17 @@ def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
 
 
 def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
-    """反转池: 上交易日涨停今日下跌"""
-    df = _fetch_limit_up_pool(date_str)
-    if df is None or df.empty:
-        return df
+    """反转池: 上交易日涨停今日下跌 (P3.2: 使用 prev_pool, 含涨跌幅列)"""
+    key = f"engine_reversal_{date_str}"
+    cached = _cached_pool_get(key)
+    if cached is not None:
+        return cached
+    df = ak.stock_zt_pool_previous_em(date=date_str)
+    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
+        df = _try_local_fallback(date_str, 'prev_pool', key)
+    if df is None or not hasattr(df, 'empty') or df.empty:
+        _cache_put(key, '__NONE__')
+        return None
     # 列识别
     chg_col = None
     for c in df.columns:
@@ -168,6 +175,10 @@ def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
     chg_col = chg_col or df.columns[3]
     df['_chg'] = df[chg_col].astype(float)
     pullback = df[(df['_chg'] >= -7) & (df['_chg'] <= 1)].copy()
+    if not pullback.empty:
+        _cache_put(key, pullback)
+    else:
+        _cache_put(key, '__NONE__')
     return pullback
 
 
