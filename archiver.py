@@ -203,6 +203,55 @@ def list_archive_dates(pool_type: str = None):
 
 
 # ═══════════════════════════════════════════
+#  扫描输入归档 (fund_df/sentiment/lhb/history — 实时数据, 历史不可得)
+# ═══════════════════════════════════════════
+
+def save_scan_inputs(trade_date: str, fund_df, sentiment_score, sentiment_level,
+                     sentiment_detail, sentiment_ok, lhb_bonus, history_scores):
+    """保存每日扫描的实时输入数据, 供回测引擎历史回放使用。
+
+    Args:
+        trade_date: YYYYMMDD
+        fund_df: DataFrame from fetch_fund_flow_data() or None
+        sentiment_score/level/detail/ok: from detect_market_sentiment()
+        lhb_bonus: Series from analyze_dragon_tiger() or empty Series
+        history_scores: Series from score_stock_history()
+    """
+    _ensure_archive_dir()
+    path = os.path.join(_ARCHIVE_POOL_DIR, f'scan_inputs_{trade_date}.pkl')
+    data = {
+        'fund_df': fund_df,
+        'sentiment_score': sentiment_score,
+        'sentiment_level': sentiment_level,
+        'sentiment_detail': sentiment_detail,
+        'sentiment_ok': sentiment_ok,
+        'lhb_bonus': lhb_bonus,
+        'history_scores': history_scores,
+    }
+    try:
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+    except Exception as e:
+        print(f"  [归档 scan_inputs] {trade_date} 保存失败: {e}", file=sys.stderr)
+
+
+def load_scan_inputs(trade_date: str):
+    """加载历史扫描输入数据
+
+    Returns:
+        dict with fund_df/sentiment_*/lhb_bonus/history_scores, or None
+    """
+    path = os.path.join(_ARCHIVE_POOL_DIR, f'scan_inputs_{trade_date}.pkl')
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+# ═══════════════════════════════════════════
 #  Day T 阶段: 拉取当日数据
 # ═══════════════════════════════════════════
 

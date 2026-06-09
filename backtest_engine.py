@@ -300,11 +300,40 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
     from plans.plan_a import compute_factors, apply_scores
     principal = 30000
 
-    factors = compute_factors(scoring_base, fund_df=None, principal=principal)
+    # P3.2: 尝试加载历史归档的实时数据
+    try:
+        from archiver import load_scan_inputs
+        archived = load_scan_inputs(date_str)
+    except Exception:
+        archived = None
 
-    sentiment_score = 3.0  # 中性
-    history_scores = pd.Series(2.5, index=filtered.index)
-    lhb_bonus = pd.Series(0.0, index=filtered.index)
+    if archived is not None:
+        fund_df = archived.get('fund_df')
+        sentiment_score = archived.get('sentiment_score', 3.0)
+        sentiment_level = archived.get('sentiment_level', 'neutral')
+        sentiment_detail = archived.get('sentiment_detail', {})
+        sentiment_ok = archived.get('sentiment_ok', True)
+        # lhb_bonus/history_scores 重新对齐到当前 filtered.index
+        lhb_raw = archived.get('lhb_bonus', pd.Series(0.0, index=filtered.index))
+        if lhb_raw is not None and hasattr(lhb_raw, 'reindex'):
+            lhb_bonus = lhb_raw.reindex(filtered.index, fill_value=0.0)
+        else:
+            lhb_bonus = pd.Series(0.0, index=filtered.index)
+        hist_raw = archived.get('history_scores', pd.Series(2.5, index=filtered.index))
+        if hist_raw is not None and hasattr(hist_raw, 'reindex'):
+            history_scores = hist_raw.reindex(filtered.index, fill_value=2.5)
+        else:
+            history_scores = pd.Series(2.5, index=filtered.index)
+    else:
+        fund_df = None
+        sentiment_score = 3.0
+        sentiment_level = 'neutral'
+        sentiment_detail = {}
+        sentiment_ok = True
+        lhb_bonus = pd.Series(0.0, index=filtered.index)
+        history_scores = pd.Series(2.5, index=filtered.index)
+
+    factors = compute_factors(scoring_base, fund_df=fund_df, principal=principal)
 
     total_scores, base_scores, danger_flags, weights = apply_scores(
         filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt)

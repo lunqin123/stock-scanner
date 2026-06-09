@@ -315,7 +315,31 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
     plan_inputs.update(source_data)  # DataFrames 直接注入 inputs
     result = plan_obj.score(plan_inputs)
 
+    # 异步归档扫描输入 (供回测引擎历史回放)
+    _archive_scan_inputs_async(today_str, fund_df, sentiment_score, sentiment_level,
+                               sentiment_detail, sentiment_ok, lhb_bonus, history_scores)
+
     return result
+
+
+def _archive_scan_inputs_async(today_str, fund_df, sentiment_score, sentiment_level,
+                                sentiment_detail, sentiment_ok, lhb_bonus, history_scores):
+    """异步保存扫描输入, 不阻塞主流程"""
+    try:
+        import threading
+        from archiver import save_scan_inputs
+        threading.Thread(target=lambda: save_scan_inputs(
+            trade_date=today_str,
+            fund_df=fund_df,
+            sentiment_score=sentiment_score,
+            sentiment_level=sentiment_level,
+            sentiment_detail=sentiment_detail,
+            sentiment_ok=sentiment_ok,
+            lhb_bonus=lhb_bonus,
+            history_scores=history_scores,
+        ), daemon=True).start()
+    except Exception:
+        pass
 
 
 def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
@@ -370,6 +394,10 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
             plan_inputs[src_name] = val
     result = plan.score(plan_inputs)
     result['_from_cache'] = True
+
+    _archive_scan_inputs_async(raw['date'], fund_df, sentiment_score, sentiment_level,
+                               sentiment_detail, sentiment_ok, lhb_bonus, history_scores)
+
     return result
 
 
