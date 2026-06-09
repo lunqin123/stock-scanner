@@ -712,11 +712,20 @@ def run_tab_backtest(
     sum_open = _aggregate(records_open, '开盘买')
     sum_close = _aggregate(records_close, '尾盘买')
 
+    # ── 近30天聚合 ──
+    cutoff_30d = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+    records_open_30d = [r for r in records_open if r['signal_date'] >= cutoff_30d]
+    records_close_30d = [r for r in records_close if r['signal_date'] >= cutoff_30d]
+    sum_open_30d = _aggregate(records_open_30d, '开盘买(近30天)')
+    sum_close_30d = _aggregate(records_close_30d, '尾盘买(近30天)')
+
     if sum_open is None and sum_close is None:
+        empty_summary = {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0,
+                    'total_pnl': 0, 'plr': 0, 'max_dd': 0, 'best': 0,
+                    'worst': 0, 'ev': 0, 'cumulative_ret': 0}
         result = {
-            'summary': {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0,
-                        'total_pnl': 0, 'plr': 0, 'max_dd': 0, 'best': 0,
-                        'worst': 0, 'ev': 0, 'cumulative_ret': 0},
+            'summary': dict(empty_summary),
+            'summary_30d': dict(empty_summary),
             'trades': [],
             'skipped': skipped,
             'generated_at': datetime.now().isoformat(),
@@ -731,6 +740,7 @@ def run_tab_backtest(
 
     result = {
         'summary': sum_open or sum_close,
+        'summary_30d': sum_open_30d or sum_close_30d,
         'trades': records_open or records_close,
         'top5': top5, 'bottom5': bot5,
         'skipped': skipped,

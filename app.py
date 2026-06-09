@@ -1166,6 +1166,7 @@ def api_backtest_tab(tab: str = FastAPIPath(..., pattern=r"^(limit-up|trend|zhab
             "ok": True,
             "tab": tab,
             "summary": result.get("summary", {}),
+            "summary_30d": result.get("summary_30d", {}),
             "trades": result.get("trades", []),
             "top5": result.get("top5", []),
             "bottom5": result.get("bottom5", []),

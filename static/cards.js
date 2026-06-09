@@ -996,10 +996,12 @@ window.renderBacktestDashboard = renderBacktestDashboard;
 
 function renderT1BacktestPanel(data) {
     if (!data || !data.ok) {
-        return '<div class="loading">T+1 回测加载失败 - ' + (data && data.data && data.data.error || '未知错误') + '</div>';
+        return '<div class="loading">T+1 回测加载失败 - ' + (data && (data.error || (data.data && data.data.error)) || '未知错误') + '</div>';
     }
-    var d = data.data || {};
+    // 兼容两种格式: {data:{summary,...}} (旧 /api/backtest/t1) 与扁平 {summary,...} (新 /api/bt/{tab})
+    var d = data.data || data;
     var s = d.summary || {};
+    var s30 = d.summary_30d || {};
     var cfg = d.config || {};
     var top5 = d.top5 || [];
     var bot5 = d.bottom5 || [];
@@ -1014,30 +1016,43 @@ function renderT1BacktestPanel(data) {
     html += '区间: ' + esc(cfg.start || '?') + ' ~ ' + esc(cfg.end || '?') + ' | 每天 TOP ' + (cfg.top_n || 3) + ' | 本金 ' + (cfg.capital || 30000) + '元/笔 | 成本 ' + (cfg.commission_pct || 0.05) + '%+' + (cfg.slippage_pct || 0.1) + '%';
     html += '</div></div>';
 
-    // ===== 大大的胜率横幅 =====
-    var wr = s.win_rate || 0;
-    var wrColor = wr >= 60 ? '#22c55e' : wr >= 45 ? '#f59e0b' : '#ef4444';
-    var grade = wr >= 70 ? 'S' : wr >= 55 ? 'A' : wr >= 40 ? 'B' : wr >= 25 ? 'C' : 'D';
-    var gradeColor = wr >= 70 ? '#ffd700' : wr >= 55 ? '#22c55e' : wr >= 40 ? '#f59e0b' : '#ef4444';
-    var barPct = Math.min(100, Math.max(0, wr));
+    // ===== 胜率横幅: 近30天 vs 全部历史 =====
+    var s30 = d.summary_30d || {};
     var unbuyable = (d.comparison && d.comparison.unbuyable_count) || 0;
-    html += '<div class="card" style="flex:0 0 100%;padding:24px 20px;background:linear-gradient(135deg,var(--card-bg,#1a1f2e) 0%,' + wrColor + '11 100%);border:1px solid ' + wrColor + '44;text-align:center">';
-    // 评级徽章
-    html += '<div style="display:inline-block;padding:2px 14px;border-radius:12px;background:' + gradeColor + ';color:#000;font-size:13px;font-weight:700;margin-bottom:12px">评级 ' + grade + '</div>';
-    // 大大的胜率数字
-    html += '<div style="font-size:64px;font-weight:800;line-height:1;color:' + wrColor + ';letter-spacing:-1px;margin:8px 0">' + wr.toFixed(1) + '%</div>';
-    html += '<div style="font-size:14px;color:var(--text-muted);margin-bottom:12px">WIN RATE</div>';
-    // 进度条
-    html += '<div style="max-width:400px;margin:0 auto 12px;height:8px;background:var(--border,#333);border-radius:4px;overflow:hidden">';
-    html += '<div style="height:100%;width:' + barPct + '%;background:linear-gradient(90deg,' + wrColor + ',' + wrColor + '88);border-radius:4px;transition:width 0.5s"></div></div>';
-    // 统计
-    html += '<div style="font-size:13px;color:var(--text-muted)">';
-    html += '<span style="color:' + wrColor + ';font-weight:600">' + (s.win_count || 0) + '胜</span>';
-    html += ' / <span style="font-weight:600">' + (s.loss_count || 0) + '负</span>';
-    html += ' | 累计收益 <span style="color:' + (s.cumulative_ret >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret || 0).toFixed(2) + '%</span>';
+
+    function _wrBlock(label, sum, isPrimary) {
+        var wr = sum.win_rate || 0;
+        var wrColor = wr >= 60 ? '#22c55e' : wr >= 45 ? '#f59e0b' : '#ef4444';
+        var grade = wr >= 70 ? 'S' : wr >= 55 ? 'A' : wr >= 40 ? 'B' : wr >= 25 ? 'C' : 'D';
+        var gradeColor = wr >= 70 ? '#ffd700' : wr >= 55 ? '#22c55e' : wr >= 40 ? '#f59e0b' : '#ef4444';
+        var barPct = Math.min(100, Math.max(0, wr));
+        var size = isPrimary ? '48px' : '36px';
+        var opacity = isPrimary ? '1' : '0.85';
+        var h = '<div style="flex:1;min-width:220px;padding:16px 12px;opacity:' + opacity + '">';
+        h += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;letter-spacing:1px">' + label + '</div>';
+        h += '<div style="display:inline-block;padding:1px 10px;border-radius:10px;background:' + gradeColor + ';color:#000;font-size:11px;font-weight:700;margin-bottom:6px">' + grade + '</div>';
+        h += '<div style="font-size:' + size + ';font-weight:800;line-height:1;color:' + wrColor + ';letter-spacing:-1px;margin:4px 0">' + wr.toFixed(1) + '%</div>';
+        h += '<div style="max-width:160px;margin:6px auto;height:6px;background:var(--border,#333);border-radius:3px;overflow:hidden">';
+        h += '<div style="height:100%;width:' + barPct + '%;background:linear-gradient(90deg,' + wrColor + ',' + wrColor + '88);border-radius:3px"></div></div>';
+        h += '<div style="font-size:11px;color:var(--text-muted)">';
+        h += '<span style="color:' + wrColor + ';font-weight:600">' + (sum.win_count || 0) + '胜</span>';
+        h += ' / ' + (sum.loss_count || 0) + '负';
+        h += ' | ' + (sum.trade_count || 0) + '笔';
+        h += '</div></div>';
+        return h;
+    }
+
+    html += '<div class="card" style="flex:0 0 100%;padding:20px 16px;background:linear-gradient(135deg,var(--card-bg,#1a1f2e) 0%,#22c55e08 100%);border:1px solid var(--border);text-align:center">';
+    html += '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px">';
+    html += _wrBlock('近30天胜率', s30, true);
+    html += '<div style="width:1px;background:var(--border);align-self:stretch;margin:8px 0"></div>';
+    html += _wrBlock('全部历史胜率', s, false);
+    html += '</div>';
+    // 底部统计
+    html += '<div style="font-size:12px;color:var(--text-muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">';
+    html += '累计收益 <span style="color:' + (s.cumulative_ret >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret || 0).toFixed(2) + '%</span>';
     html += ' | 总盈亏 <span style="color:' + (s.total_pnl >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">' + (s.total_pnl >= 0 ? '+' : '') + (s.total_pnl || 0).toFixed(0) + ' 元</span>';
-    html += ' | ' + (s.trade_count || 0) + ' 笔交易';
-    if (unbuyable > 0) { html += ' | 因涨停开盘无法买入 ' + unbuyable + ' 笔'; }
+    if (unbuyable > 0) { html += ' | 涨停开盘无法买入 ' + unbuyable + ' 笔'; }
     html += '</div></div>';
 
     // 1. 核心指标卡片
