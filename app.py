@@ -1838,6 +1838,8 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                 try:
                     tab_name = cache_key.replace('_stream', '').replace('_cards', '')
                     save_recommendations(tab_name, items, _today_trading())
+                except Exception:
+                    pass
             except Exception as e:
                 result['error'] = str(e)
             finally:
