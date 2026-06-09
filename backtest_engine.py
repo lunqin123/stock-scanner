@@ -72,6 +72,27 @@ _PENDING_TABS = set()  # 全部实现
 # 这些 tab 的 score_fn 自行拉数据 (不依赖 fetcher 返回的 pool)
 _SELF_FETCHING_TABS = {TAB_SECTOR}
 
+# P1.2.1: OHLCV 批量缓存进程级开关 (默认禁用,服务器环境东方财富 spot 接口不稳定)
+# 本地高性能环境可在导入后手动设 backtest_engine._SPOT_DISABLED = False 启用
+_SPOT_DISABLED = True
+
+# P1.2.1: 各 tab 的实际可用历史天数上限 (P1.2.1.1 修正: 经验值,aksahre 各 API 实际只返回最近 ~7 天数据)
+# 实测 20260530(7天前) 即返回 0 行,akshare 涨停/炸板/翘板/强势池都有"近期"窗口限制
+# 真实可用窗口建议: 5 天 (回测需要 D+2,所以 max_days=5 时实际有 ~3 天可交易)
+TAB_MAX_HISTORY_DAYS = {
+    TAB_LIMIT_UP: 7,
+    TAB_REVERSAL: 7,
+    TAB_TREND: 7,
+    TAB_ZHABAN: 7,
+    TAB_DTQIAOBAN: 7,
+    TAB_SECTOR: 7,
+}
+# P1.2.1.2: 重要发现 (2026-06-09 23:15 调试得出):
+# akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天), stock_zt_pool_zbgc_em/dtgc_em (~7-10天)
+# 实测 7 天前的 date 参数返回 0 行,不是抛异常而是"静默返回空"
+# → 默认 max_days 全部从 30 改为 5,确保至少有 D/D+1/D+2 三个交易日可交易
+# → 如需更长回测,等 akshare 数据范围扩大或换数据源
+
 # ═══════════════════════════════════════════
 #  信号池获取函数 (P1.1 骨架: limit-up 和 reversal 可用,其他 TBD 待 P2)
 # ═══════════════════════════════════════════
@@ -302,14 +323,19 @@ SCORE_COLUMNS = {
 def _get_daily_ohlcv_batch(date_str: str) -> dict:
     """P1.2: 按日期批量拉取当日所有股票的 OHLCV
 
-    替代原 _get_ohlcv_batch 的逐股调用:
-    - 30 天回测 × 6 tab × TOP3 × 3 日 ≈ 540 次 akshare HTTP 调用 → 5-15 分钟
-    - 改为: 30 次每日全市场拉取 + code 索引 → 30-60 秒
-
     返回: {code: {open, close, high, low, volume, amount, turnover, change_pct}}
     注: akshare stock_zh_a_spot_em 是当日实时快照,收盘后数据稳定
     注2: stock_zh_a_spot_em 不支持历史 date → 历史回测仍需逐股调用
+
+    P1.2.1 修复: 服务器上东方财富 spot_em 反复 Connection aborted
+    (akshare urllib3 默认重试 3 次,每次连接断开耗 30+ 秒)
+    → 改用**进程级开关** _SPOT_DISABLED 控制是否启用批量缓存。
+    默认禁用,确保服务器跑得通;本地高性能环境可手动开启。
     """
+    global _SPOT_DISABLED
+    if _SPOT_DISABLED:
+        return {}  # 主循环会降级到 _get_ohlcv_batch 逐股
+
     cache_key = f"daily_ohlcv_all_{date_str}"
     cached = _cache_get(cache_key)
     if cached is not None and not isinstance(cached, str):
@@ -319,7 +345,9 @@ def _get_daily_ohlcv_batch(date_str: str) -> dict:
     try:
         df = ak.stock_zh_a_spot_em()
     except Exception as e:
-        print(f"  [OHLCV 批量] {date_str} 拉取失败: {e}", file=sys.stderr)
+        print(f"  [OHLCV 批量] {date_str} spot_em 失败(降级逐股): {type(e).__name__}", file=sys.stderr)
+        # 一次失败就禁用,避免后续重复触发 urllib3 重试
+        _SPOT_DISABLED = True
         _cache_put(cache_key, '__NONE__')
         return {}
 
@@ -455,6 +483,12 @@ def run_tab_backtest(
         }
 
     # ── 默认日期 ──
+    # P1.2.1: 按 tab 限制 max_days,避免触发 akshare 30 天边界错误
+    tab_max = TAB_MAX_HISTORY_DAYS.get(tab, 30)
+    if max_days > tab_max:
+        print(f"  [警告] tab={tab} max_days {max_days} 超出实际可用 {tab_max},自动截断", file=sys.stderr)
+        max_days = tab_max
+
     if end_date is None:
         cur = datetime.now()
         end = cur.strftime('%Y%m%d')
@@ -708,7 +742,7 @@ if __name__ == '__main__':
     parser.add_argument('--tab', default='limit-up',
                         choices=ALL_TABS + ['all'],
                         help='回测 tab,默认 limit-up')
-    parser.add_argument('--days', type=int, default=30, help='回测天数')
+    parser.add_argument('--days', type=int, default=5, help='回测天数 (默认 5,aksahre 实际可用窗口限制)')
     parser.add_argument('--top', type=int, default=TOP_N_DEFAULT, help='每日 TOP N')
     parser.add_argument('--capital', type=float, default=CAPITAL_DEFAULT, help='单笔本金')
     args = parser.parse_args()

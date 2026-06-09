@@ -250,7 +250,7 @@ def run_t1_backtest(
     end_date: str = None,
     top_n: int = TOP_N_DEFAULT,
     capital: float = CAPITAL_DEFAULT,
-    max_days: int = 30,
+    max_days: int = 5,
     use_cache: bool = True,
 ):
     """T+1 真实回测主入口

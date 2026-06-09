@@ -2738,7 +2738,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     return "\n".join(lines), adjusted_weights
 
 
-def run_backtest(tab: str = 'limit-up', N: int = 20):
+def run_backtest(tab: str = 'limit-up', N: int = 5):
     """回测主入口 (P4: 支持多 tab 滚动回测)"""
     from datetime import datetime, timedelta
     from backtest_engine import run_tab_backtest, TAB_NAMES_CN
@@ -2851,7 +2851,7 @@ def main():
     parser.add_argument('--tab', type=str, default='limit-up',
                         choices=['limit-up', 'trend', 'zhaban', 'dtqiaoban', 'reversal', 'sector'],
                         help='回测 tab (与 --backtest 一起用,默认 limit-up)')
-    parser.add_argument('--days', type=int, default=20, help='回测天数 (默认 20,limit-up 可 30)')
+    parser.add_argument('--days', type=int, default=5, help='回测天数 (默认 5,akshare 实际可用窗口限制)')
     parser.add_argument('--zhaban', action='store_true', help='炸板股反包潜力扫描')
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')

@@ -32,11 +32,16 @@ async function switchBacktestTab(tab, days) {
         });
     }
     try {
-        const resp = await fetch('/api/bt/' + tab + '?days=' + days + '&top_n=3&capital=30000');
+        // P1.2.1: 加 60s 超时
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 60000);
+        const resp = await fetch('/api/bt/' + tab + '?days=' + days + '&top_n=3&capital=30000', { signal: ctrl.signal });
+        clearTimeout(tid);
         const data = await resp.json();
         contentEl.innerHTML = renderT1BacktestPanel(data);
     } catch (e) {
-        contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + e.message + '</div>';
+        const msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
+        contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
     }
 }
 const _navItems = () => document.querySelectorAll('.nav-item');
@@ -545,12 +550,12 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderBacktestDashboard(data);
                 // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
                 const tabs = [
-                    { key: 'limit-up', label: '涨停', days: 30 },
-                    { key: 'trend', label: '趋势', days: 15 },
-                    { key: 'zhaban', label: '炸板', days: 15 },
-                    { key: 'dtqiaoban', label: '翘板', days: 15 },
-                    { key: 'reversal', label: '反转', days: 20 },
-                    { key: 'sector', label: '板块', days: 15 },
+                    { key: 'limit-up', label: '涨停', days: 5 },
+                    { key: 'trend', label: '趋势', days: 5 },
+                    { key: 'zhaban', label: '炸板', days: 5 },
+                    { key: 'dtqiaoban', label: '翘板', days: 5 },
+                    { key: 'reversal', label: '反转', days: 5 },
+                    { key: 'sector', label: '板块', days: 5 },
                 ];
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'limit-up';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
@@ -562,11 +567,17 @@ async function loadCardView(output, pageKey, apiUrl) {
                 });
                 html += '</div><div id="btTabContent">';
                 try {
-                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=' + (activeTab === 'limit-up' ? 30 : 15) + '&top_n=3&capital=30000');
+                    // P1.2.1: 加 60s 超时避免无限等
+                    const ctrl = new AbortController();
+                    const tid = setTimeout(() => ctrl.abort(), 60000);
+                    const daysParam = 5;
+                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=' + daysParam + '&top_n=3&capital=30000', { signal: ctrl.signal });
+                    clearTimeout(tid);
                     const t1Data = await t1Resp.json();
                     html += renderT1BacktestPanel(t1Data);
                 } catch (t1Err) {
-                    html += '<div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(t1Err.message) + '</div>';
+                    const msg = t1Err.name === 'AbortError' ? '请求超时 (60s)' : t1Err.message;
+                    html += '<div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(msg) + '</div>';
                 }
                 html += '</div></div>';
                 // 加刷新按钮

@@ -1135,7 +1135,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
 
 @app.get("/api/backtest")
 def api_backtest(tab: str = Query('limit-up', description="回测 tab"),
-                  days: int = Query(20, description="回测天数")):
+                  days: int = Query(5, description="回测天数 (默认 5, akshare 实际可用窗口限制)")):
     """运行滚动回测 (P6: 支持多 tab + 自定义天数)"""
     from scanner import run_backtest
     out, err = _capture(run_backtest, tab, days)
@@ -1152,7 +1152,7 @@ from fastapi import Path as FastAPIPath
 
 @app.get("/api/bt/{tab}")
 def api_backtest_tab(tab: str = FastAPIPath(..., pattern=r"^(limit-up|trend|zhaban|dtqiaoban|reversal|sector)$"),
-                      days: int = Query(30, description="回测天数, 默认 30 (涨停/反转可用,炸板/翘板最大 15)"),
+                      days: int = Query(5, description="回测天数 (默认 5,aksahre 实际可用窗口限制)"),
                       top_n: int = Query(3, description="每日 TOP N"),
                       capital: float = Query(30000, description="单笔本金")):
     """P6: 多 Tab T+1 真实回测 (结构化 JSON)
@@ -1181,7 +1181,7 @@ def api_backtest_tab(tab: str = FastAPIPath(..., pattern=r"^(limit-up|trend|zhab
 
 @app.get("/api/bt/{tab}/top")
 def api_backtest_tab_top(tab: str,
-                          days: int = Query(15, description="回测天数")):
+                          days: int = Query(5, description="回测天数")):
     """P6: 多 Tab T+1 回测 TOP5 (快速版, 用于前端卡片展示)"""
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
