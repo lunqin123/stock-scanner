@@ -1124,9 +1124,9 @@ function renderT1BacktestPanel(data) {
     html += '<b>评分</b>: backtest_score_prev (回测专用, 6 因子) — plan_a 实盘评分可能更准<br>';
     html += '<b>胜率含义</b>: 接近 50% 表示赢 1 亏 1, 心理压力大; 期望值 EV > 0 表示长期数学上盈利<br>';
     if (s.ev > 0) {
-        html += '<b style="color:#22c55e">✅ 当前期望值 ' + s.ev.toFixed(2) + '% > 0, 长期能赚 — 但胜率 ' + s.win_rate.toFixed(1) + '% 偏低, 需要仓位控制</b><br>';
+        html += '<b style="color:#22c55e">✅ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% > 0, 长期能赚 — 但胜率 ' + (s.win_rate || 0).toFixed(1) + '% 偏低, 需要仓位控制</b><br>';
     } else {
-        html += '<b style="color:#ef4444">⚠️ 当前期望值 ' + s.ev.toFixed(2) + '% < 0, 长期亏损, 不建议直接用</b><br>';
+        html += '<b style="color:#ef4444">⚠️ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% < 0, 长期亏损, 不建议直接用</b><br>';
     }
     html += '<b>实盘建议</b>: 单只仓位 ≤ 1/3 总仓位; 3 连亏日主动减仓 50%; 至少 30 天数据再下结论<br>';
     html += '<b>回撤 -' + Math.abs(s.max_dd || 0).toFixed(0) + '%</b> 是 3w 本金最大浮亏 = <b>' + (30000 * Math.abs(s.max_dd || 0) / 100).toFixed(0) + ' 元</b>';
