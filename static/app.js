@@ -171,8 +171,7 @@ async function runCurrent() {
             if (cr.stocks && cr.stocks.length) {
                 var rankingHtml = renderStockCards(cr.stocks, cr);
                 var s = cr.sentiment || {};
-                rankingHtml = (s.level ? '<div class="sentiment-banner">📊 市场情绪: <strong>' + esc(s.level) + '</strong></div>' : '') +
-                    (cr.fetched_at ? '<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ' + esc(cr.fetched_at) + '</div>' : '') +
+                rankingHtml = (cr.fetched_at ? '<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ' + esc(cr.fetched_at) + '</div>' : '') +
                     rankingHtml;
                 _setCachedPage(currentPage, rankingHtml);
                 _dom.output().innerHTML = rankingHtml;
@@ -503,16 +502,7 @@ async function loadCardView(output, pageKey, apiUrl) {
             return;
         }
 
-        const s = data.sentiment || {};
         let html = '';
-        if (s.level) {
-            html += '<div class="sentiment-banner">';
-            html += `📊 市场情绪: <strong>${s.level || '未知'}</strong>`;
-            if (s.score != null) {
-                html += ' ｜ 情绪 ' + s.score + '/10';
-            }
-            html += '</div>';
-        }
         if (data.fetched_at) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(data.fetched_at)}</div>`;
 
         try {
@@ -643,16 +633,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
                             // 使用 RAF 批量渲染卡片
                             const fet = msg.fetched_at || '';
-                            const s = msg.sentiment || {};
                             let html = '';
-                            if (s.level) {
-                                html += '<div class="sentiment-banner">';
-                                html += `📊 市场情绪: <strong>${escapeHtml(s.level)}</strong>`;
-                                if (s.score != null) {
-                                    html += ' ｜ 情绪 ' + s.score + '/10';
-                                }
-                                html += '</div>';
-                            }
                             if (fet) html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ${escapeHtml(fet)}</div>`;
                             // 按 tab 类型渲染对应卡片
                             var items = msg.stocks || msg.items || [];
