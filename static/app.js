@@ -39,7 +39,6 @@ const PAGES = {
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
     'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测追踪',   api: '/api/backtest/dashboard', textApi: '/api/backtest' },
-    'tracker':      { title: '📊 各Tab胜率',  api: '/api/tracker/stats' },
 };
 
 function showProgress(text, pct) {
@@ -276,6 +275,94 @@ async function callApi(apiUrl, pageKey) {
         await loadTextView(output, pageKey, apiUrl);
     }
     _setCachedPage(pageKey, output.innerHTML);
+    // 注入各 tab 胜率追踪徽章
+    _injectTrackerBadge(pageKey, output);
+}
+
+// ─── 各 Tab 胜率徽章 ───
+var _trackerCache = null;
+var _trackerFetching = false;
+var _trackerFetchers = [];
+
+async function _fetchTrackerStats() {
+    if (_trackerCache) return _trackerCache;
+    if (_trackerFetching) {
+        return new Promise(function(resolve) { _trackerFetchers.push(resolve); });
+    }
+    _trackerFetching = true;
+    try {
+        var resp = await fetch('/api/tracker/stats?_r=' + Math.random().toString(36).slice(2));
+        var data = await resp.json();
+        _trackerCache = data;
+        _trackerFetchers.forEach(function(f) { f(data); });
+        _trackerFetchers = [];
+        return data;
+    } catch(e) {
+        _trackerFetchers.forEach(function(f) { f(null); });
+        _trackerFetchers = [];
+        return null;
+    } finally {
+        _trackerFetching = false;
+    }
+}
+
+function _pageKeyToTrackerTab(pageKey) {
+    var map = {
+        'scan-limit': 'limit-up',
+        'scan-trend': 'trend',
+        'scan-zhaban': 'zhaban',
+        'scan-dtqiaoban': 'dtqiaoban',
+        'scan-sector': 'sector',
+        'scan-reversal': 'reversal',
+        'indicators': 'indicators',
+        'community': 'community',
+    };
+    return map[pageKey] || pageKey.replace('scan-', '');
+}
+
+async function _injectTrackerBadge(pageKey, outputEl) {
+    var tab = _pageKeyToTrackerTab(pageKey);
+    if (!tab) return;
+    var statsData = await _fetchTrackerStats();
+    if (!statsData || !statsData.ok || !statsData.tabs) return;
+    var tabStats = null;
+    for (var i = 0; i < statsData.tabs.length; i++) {
+        if (statsData.tabs[i].tab === tab) { tabStats = statsData.tabs[i]; break; }
+    }
+    if (!tabStats || tabStats.count === 0) return;
+
+    var wr = tabStats.win_rate || 0;
+    var barW = Math.min(100, Math.max(0, wr));
+    var color = wr >= 60 ? '#22c55e' : wr >= 45 ? '#f59e0b' : '#ef4444';
+    var days = tabStats.days_count || '?';
+
+    // 按排名胜率
+    var rankHtml = '';
+    var rs = tabStats.rank_stats || {};
+    var rankKeys = Object.keys(rs).sort(function(a,b) { return parseInt(a) - parseInt(b); });
+    for (var ri = 0; ri < rankKeys.length; ri++) {
+        var rk = rankKeys[ri];
+        var rd = rs[rk];
+        var rwr = rd.count > 0 ? (rd.wins / rd.count * 100).toFixed(0) : 0;
+        rankHtml += '<span style="color:var(--text-muted);margin-right:6px">TOP' + rk + '<b style="color:' + (rwr >= 60 ? '#22c55e' : rwr >= 45 ? '#f59e0b' : '#ef4444') + '">' + rwr + '%</b></span>';
+    }
+
+    var badge = document.createElement('div');
+    badge.style.cssText = 'display:flex;align-items:center;gap:8px;margin:8px 14px 0;padding:8px 12px;border:1px solid ' + color + '44;border-radius:8px;background:var(--card-bg,#1a1f2e);font-size:12px';
+    badge.innerHTML = '<span style="font-weight:600;font-size:13px;color:' + color + '">胜率 ' + wr.toFixed(1) + '%</span>'
+        + '<div style="flex:1;max-width:120px;height:6px;background:var(--border,#333);border-radius:3px;overflow:hidden">'
+        + '<div style="height:100%;width:' + barW + '%;background:' + color + ';border-radius:3px"></div></div>'
+        + '<span style="color:var(--text-muted)">' + tabStats.wins + '/' + tabStats.count + '</span>'
+        + (rankHtml ? '<span style="color:var(--text-muted)">| ' + rankHtml + '</span>' : '')
+        + '<span style="color:var(--text-muted)">' + days + '天</span>';
+
+    // 插入到第一个 card 之前
+    var cards = outputEl.querySelector('.card') || outputEl.querySelector('.dashboard-grid');
+    if (cards && cards.parentNode) {
+        cards.parentNode.insertBefore(badge, cards);
+    } else {
+        outputEl.insertBefore(badge, outputEl.firstChild);
+    }
 }
 
 async function loadTextView(output, pageKey, apiUrl) {
@@ -424,8 +511,6 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderStockCards(items, data);
             } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
-            } else if (pageKey === 'tracker') {
-                html += renderTrackerPanel(data);
             } else if (pageKey === 'backtest') {
                 html += renderBacktestDashboard(data);
                 // T+1 真实回测面板 (异步加载, 不阻塞调权数据展示)
@@ -645,7 +730,7 @@ function exportOutput() {
     }
 }
 async function runAll() {
-    const pages = ['scan-trend','scan-limit','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest','tracker'];
+    const pages = ['scan-trend','scan-limit','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest'];
     for (const key of pages) {
         location.hash = key;
         await new Promise(r => setTimeout(r, 500));

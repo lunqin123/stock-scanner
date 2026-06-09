@@ -194,14 +194,32 @@ def get_per_tab_stats():
         return {}
 
     agg = {}
+    days_per_tab = {}
+    rank_agg = {}  # {tab: {rank: {count, wins}}}
+
     for date_str, day_data in perf.items():
         for tab, tab_data in day_data.items():
             if tab not in agg:
                 agg[tab] = {'count': 0, 'wins': 0, 'win_open': 0, 'buyable': 0}
+                days_per_tab[tab] = set()
             agg[tab]['count'] += tab_data['count']
             agg[tab]['wins'] += tab_data['wins']
             agg[tab]['win_open'] += tab_data['win_open']
             agg[tab]['buyable'] += tab_data['buyable']
+            days_per_tab[tab].add(date_str)
+
+            # 按排名聚合
+            for detail in tab_data.get('details', []):
+                r = detail.get('rank', 0)
+                if r < 1 or r > 5:
+                    continue
+                if tab not in rank_agg:
+                    rank_agg[tab] = {}
+                if r not in rank_agg[tab]:
+                    rank_agg[tab][r] = {'count': 0, 'wins': 0}
+                rank_agg[tab][r]['count'] += 1
+                if detail.get('win'):
+                    rank_agg[tab][r]['wins'] += 1
 
     result = []
     for tab, data in sorted(agg.items()):
@@ -213,6 +231,8 @@ def get_per_tab_stats():
             'win_rate': round(data['wins'] / data['count'] * 100, 1) if data['count'] > 0 else 0,
             'win_open_rate': round(data['win_open'] / data['count'] * 100, 1) if data['count'] > 0 else 0,
             'buyable': data['buyable'],
+            'days_count': len(days_per_tab.get(tab, set())),
+            'rank_stats': rank_agg.get(tab, {}),
         })
     # 按 win_rate 降序
     result.sort(key=lambda x: -x['win_rate'])
