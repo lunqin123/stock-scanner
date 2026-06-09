@@ -120,6 +120,14 @@ def _refresh_performance():
         except Exception:
             perf = {}
 
+    # 清理 180 天前的数据
+    cutoff = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
+    old_keys = [k for k in perf if k < cutoff]
+    for k in old_keys:
+        del perf[k]
+    if old_keys:
+        print(f"  [tracker] 清理 {len(old_keys)} 天前的旧数据", file=sys.stderr)
+
     today = datetime.now().strftime('%Y%m%d')
     updated = False
 
@@ -171,6 +179,14 @@ def _refresh_performance():
         if day_perf:
             perf[rec_date] = day_perf
             updated = True
+
+    # 清理 180 天前的推荐记录文件
+    for fname in os.listdir(DATA_DIR):
+        if not fname.endswith('.json') or fname.startswith('.'):
+            continue
+        d = fname.replace('.json', '')
+        if d.isdigit() and len(d) == 8 and d < cutoff:
+            os.remove(os.path.join(DATA_DIR, fname))
 
     if updated:
         with open(PERF_FILE, 'w', encoding='utf-8') as f:
