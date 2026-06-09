@@ -255,6 +255,65 @@ def load_scan_inputs(trade_date: str):
 #  Day T 阶段: 拉取当日数据
 # ═══════════════════════════════════════════
 
+def _prefetch_ohlcv_for_date(trade_date: str) -> int:
+    """预拉指定日期的 OHLCV 数据到持久化缓存。
+
+    收盘后调用: 遍历今日所有池的股票代码, 拉取当日 OHLCV,
+    写入持久化缓存(无 TTL), 确保明天打开回测面板时秒回。
+
+    Returns: 成功缓存的股票数
+    """
+    import akshare as ak
+    from cache import persistent_put as _p_put
+
+    # 只预拉涨停池 (主力策略, 也是唯一用 plan_a 评分需要 fund_df 的 tab)
+    # 其他 tab 的 OHLCV 在首次回测时按需拉取
+    codes = set()
+    for pool_type in ['limit_up']:
+        df = _load_pool_pickle(trade_date, pool_type)
+        if df is not None and hasattr(df, 'empty') and not df.empty:
+            code_col = '代码' if '代码' in df.columns else (df.columns[1] if len(df.columns) > 1 else None)
+            if code_col:
+                for _, row in df.iterrows():
+                    code = str(row[code_col]).strip().zfill(6)
+                    if len(code) == 6:
+                        codes.add(code)
+                # 只取前 30 只 (回测 TOP3~10 够用)
+                codes = set(list(codes)[:30])
+
+    if not codes:
+        return 0
+
+    print(f"    涨停池 {len(codes)} 只待预拉...", file=sys.stderr)
+
+    date_fmt = f'{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}'
+    count = 0
+
+    for code in codes:
+        prefix = 'sh' if code.startswith('6') else 'sz'
+        try:
+            df = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}',
+                                       start_date=date_fmt, end_date=date_fmt)
+            if df is not None and not df.empty and len(df) > 0:
+                row = df.iloc[-1]  # 取最后一行(当日)
+                o = {
+                    'open': float(row['open']), 'close': float(row['close']),
+                    'high': float(row['high']), 'low': float(row['low']),
+                    'volume': int(row.get('volume', 0) or 0),
+                    'amount': float(row.get('amount', 0) or 0),
+                    'turnover': float(row.get('turnover', 0) or 0),
+                    'change_pct': float(row.get('change', row.get('涨跌幅', 0)) or 0),
+                }
+                _p_put(f"t1_ohlcv_{code}_{trade_date}", o)
+                count += 1
+        except Exception:
+            pass
+        if count % 20 == 0 and count > 0:
+            time.sleep(0.3)  # 每 20 只休息一下
+
+    return count
+
+
 def archive_day_t(trade_date: str = None):
     """
     归档 Day T 数据：涨停池 + 上交易日涨停今日续涨(趋势候选) + 市场快照。
@@ -324,7 +383,7 @@ def archive_day_t(trade_date: str = None):
             print(f"    市场快照错误: {e}")
 
         # ── 4. 尝试更新前一天的 next_day 数据 ──
-        print("  [4/4] 更新上交易日 next_day 数据...")
+        print("  [4/5] 更新上交易日 next_day 数据...")
         try:
             yesterday = _last_trading_date(trade_date)
             updated = _update_next_day_data(conn, yesterday, trade_date)
@@ -333,6 +392,14 @@ def archive_day_t(trade_date: str = None):
                 print(f"    更新上交易日数据: {updated} 只")
         except Exception as e:
             print(f"    更新上交易日数据错误: {e}")
+
+        # ── 5. 预拉 OHLCV (收盘后数据已稳定, 写入持久化缓存) ──
+        print("  [5/5] 预拉今日OHLCV(持久化)...")
+        try:
+            count = _prefetch_ohlcv_for_date(trade_date)
+            print(f"    OHLCV预拉: {count} 只")
+        except Exception as e:
+            print(f"    OHLCV预拉错误: {e}")
 
     except Exception as e:
         print(f"  [归档] 严重错误: {e}")
