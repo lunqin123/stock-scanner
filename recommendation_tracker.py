@@ -186,12 +186,12 @@ def get_per_tab_stats():
     """
     _refresh_performance()
     if not os.path.exists(PERF_FILE):
-        return {}
+        return []
     try:
         with open(PERF_FILE, 'r', encoding='utf-8') as f:
             perf = json.load(f)
     except Exception:
-        return {}
+        return []
 
     agg = {}
     days_per_tab = {}

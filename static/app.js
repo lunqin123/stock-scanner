@@ -324,12 +324,25 @@ async function _injectTrackerBadge(pageKey, outputEl) {
     var tab = _pageKeyToTrackerTab(pageKey);
     if (!tab) return;
     var statsData = await _fetchTrackerStats();
-    if (!statsData || !statsData.ok || !statsData.tabs) return;
+    if (!statsData || !statsData.ok) return;
+    var tabsArr = statsData.tabs || [];
     var tabStats = null;
-    for (var i = 0; i < statsData.tabs.length; i++) {
-        if (statsData.tabs[i].tab === tab) { tabStats = statsData.tabs[i]; break; }
+    // Handle both array and object responses
+    if (Array.isArray(tabsArr)) {
+        for (var i = 0; i < tabsArr.length; i++) {
+            if (tabsArr[i].tab === tab) { tabStats = tabsArr[i]; break; }
+        }
     }
-    if (!tabStats || tabStats.count === 0) return;
+    if (!tabStats || tabStats.count === 0) {
+        // 暂无数据，显示一个轻提示
+        var hint = document.createElement('div');
+        hint.style.cssText = 'margin:8px 14px 0;padding:6px 12px;font-size:11px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px';
+        hint.textContent = '追踪数据收集中，运行扫描后次日自动生成胜率';
+        var first = outputEl.querySelector('.card') || outputEl.querySelector('.dashboard-grid') || outputEl.firstChild;
+        if (first && first.parentNode) first.parentNode.insertBefore(hint, first);
+        else outputEl.insertBefore(hint, outputEl.firstChild);
+        return;
+    }
 
     var wr = tabStats.win_rate || 0;
     var barW = Math.min(100, Math.max(0, wr));
