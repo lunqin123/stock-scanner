@@ -120,14 +120,6 @@ def _refresh_performance():
         except Exception:
             perf = {}
 
-    # 清理 180 天前的数据
-    cutoff = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
-    old_keys = [k for k in perf if k < cutoff]
-    for k in old_keys:
-        del perf[k]
-    if old_keys:
-        print(f"  [tracker] 清理 {len(old_keys)} 天前的旧数据", file=sys.stderr)
-
     today = datetime.now().strftime('%Y%m%d')
     updated = False
 
@@ -137,24 +129,21 @@ def _refresh_performance():
         rec_date = fname.replace('.json', '')
         if not rec_date.isdigit() or len(rec_date) != 8:
             continue
-        # 日期 key 已存在且已有表现数据 → 跳过
+        # 已有表现数据 → 跳过
         if rec_date in perf:
             continue
-        # 记录日期 >= 今天 → 还没到次日，跳过
+        # 还没到次日 → 跳过
         if rec_date >= today:
             continue
-
         try:
             with open(os.path.join(DATA_DIR, fname), 'r', encoding='utf-8') as f:
                 day_data = json.load(f)
         except Exception:
             continue
-
         # 计算下一交易日
         next_day = _next_trading_day(rec_date)
         if next_day is None or next_day >= today:
             continue
-
         day_perf = {}
         for tab, stocks in day_data.items():
             tab_results = []
@@ -179,14 +168,6 @@ def _refresh_performance():
         if day_perf:
             perf[rec_date] = day_perf
             updated = True
-
-    # 清理 180 天前的推荐记录文件
-    for fname in os.listdir(DATA_DIR):
-        if not fname.endswith('.json') or fname.startswith('.'):
-            continue
-        d = fname.replace('.json', '')
-        if d.isdigit() and len(d) == 8 and d < cutoff:
-            os.remove(os.path.join(DATA_DIR, fname))
 
     if updated:
         with open(PERF_FILE, 'w', encoding='utf-8') as f:
