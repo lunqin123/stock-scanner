@@ -1134,13 +1134,80 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
 
 
 @app.get("/api/backtest")
-def api_backtest():
-    """运行滚动回测"""
+def api_backtest(tab: str = Query('limit-up', description="回测 tab"),
+                  days: int = Query(20, description="回测天数")):
+    """运行滚动回测 (P6: 支持多 tab + 自定义天数)"""
     from scanner import run_backtest
-    out, err = _capture(run_backtest)
+    out, err = _capture(run_backtest, tab, days)
     if "[运行时错误]" in err:
         return JSONResponse({"ok": False, "error": err.strip(), "output": out})
-    return {"ok": True, "output": out}
+    return {"ok": True, "output": out, "tab": tab, "days": days}
+
+
+# ─── P6: 多 Tab T+1 真实回测 API (结构化 JSON) ───
+from backtest_engine import run_tab_backtest, TAB_LIMIT_UP, ALL_TABS
+
+
+from fastapi import Path as FastAPIPath
+
+@app.get("/api/bt/{tab}")
+def api_backtest_tab(tab: str = FastAPIPath(..., pattern=r"^(limit-up|trend|zhaban|dtqiaoban|reversal|sector)$"),
+                      days: int = Query(30, description="回测天数, 默认 30 (涨停/反转可用,炸板/翘板最大 15)"),
+                      top_n: int = Query(3, description="每日 TOP N"),
+                      capital: float = Query(30000, description="单笔本金")):
+    """P6: 多 Tab T+1 真实回测 (结构化 JSON)
+
+    支持 tab: limit-up / trend / zhaban / dtqiaoban / reversal / sector
+    注: 端点改为 /api/bt/{tab} 避开与 /api/backtest/{保留词} 冲突
+    """
+    try:
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, capital=capital)
+        return {
+            "ok": True,
+            "tab": tab,
+            "summary": result.get("summary", {}),
+            "trades": result.get("trades", []),
+            "top5": result.get("top5", []),
+            "bottom5": result.get("bottom5", []),
+            "skipped": result.get("skipped", []),
+            "comparison": result.get("comparison", {}),
+            "config": result.get("config", {}),
+            "generated_at": result.get("generated_at"),
+            "error": result.get("error"),
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
+
+
+@app.get("/api/bt/{tab}/top")
+def api_backtest_tab_top(tab: str,
+                          days: int = Query(15, description="回测天数")):
+    """P6: 多 Tab T+1 回测 TOP5 (快速版, 用于前端卡片展示)"""
+    if tab not in ALL_TABS:
+        return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
+    try:
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=3, capital=30000)
+        top5 = result.get("top5", [])
+        bot5 = result.get("bottom5", [])
+        return {
+            "ok": True,
+            "tab": tab,
+            "summary": result.get("summary", {}),
+            "top5": [
+                {"code": t.get("code"), "name": t.get("name"),
+                 "score": t.get("score"), "net_ret_pct": t.get("net_ret_pct"),
+                 "signal_date": t.get("signal_date")}
+                for t in top5
+            ],
+            "bottom5": [
+                {"code": t.get("code"), "name": t.get("name"),
+                 "score": t.get("score"), "net_ret_pct": t.get("net_ret_pct"),
+                 "signal_date": t.get("signal_date")}
+                for t in bot5
+            ],
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
 
 
 @app.get("/api/community")

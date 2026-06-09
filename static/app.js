@@ -12,6 +12,33 @@ const _dom = {
     pageTitle: () => $('page-title'),
     modulePage: () => document.querySelector('.module-page'),
 };
+
+// P6: 当前选中的回测 tab
+let _btTab = 'limit-up';
+
+// P6: 切换回测 tab
+async function switchBacktestTab(tab, days) {
+    _btTab = tab;
+    const contentEl = document.getElementById('btTabContent');
+    if (!contentEl) return;
+    contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
+    // 更新 tab 按钮高亮
+    const bar = document.getElementById('btTabBar');
+    if (bar) {
+        bar.querySelectorAll('button').forEach(btn => {
+            const isActive = btn.textContent.trim() === ({'limit-up':'涨停','trend':'趋势','zhaban':'炸板','dtqiaoban':'翘板','reversal':'反转','sector':'板块'})[tab];
+            btn.style.background = isActive ? 'var(--accent)' : 'var(--bg-secondary)';
+            btn.style.color = isActive ? '#fff' : 'var(--text)';
+        });
+    }
+    try {
+        const resp = await fetch('/api/bt/' + tab + '?days=' + days + '&top_n=3&capital=30000');
+        const data = await resp.json();
+        contentEl.innerHTML = renderT1BacktestPanel(data);
+    } catch (e) {
+        contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + e.message + '</div>';
+    }
+}
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 let currentPage = '';
@@ -516,14 +543,32 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderCommunityCards(items);
             } else if (pageKey === 'backtest') {
                 html += renderBacktestDashboard(data);
-                // T+1 真实回测面板 (异步加载, 不阻塞调权数据展示)
+                // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
+                const tabs = [
+                    { key: 'limit-up', label: '涨停', days: 30 },
+                    { key: 'trend', label: '趋势', days: 15 },
+                    { key: 'zhaban', label: '炸板', days: 15 },
+                    { key: 'dtqiaoban', label: '翘板', days: 15 },
+                    { key: 'reversal', label: '反转', days: 20 },
+                    { key: 'sector', label: '板块', days: 15 },
+                ];
+                const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'limit-up';
+                html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
+                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">📊 多 Tab T+1 真实回测</div>'
+                      + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
+                tabs.forEach(t => {
+                    const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
+                    html += '<button class="btn" style="font-size:12px;padding:6px 12px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + '</button>';
+                });
+                html += '</div><div id="btTabContent">';
                 try {
-                    const t1Resp = await fetch('/api/backtest/t1?days=30&top_n=3&capital=30000');
+                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=' + (activeTab === 'limit-up' ? 30 : 15) + '&top_n=3&capital=30000');
                     const t1Data = await t1Resp.json();
                     html += renderT1BacktestPanel(t1Data);
                 } catch (t1Err) {
-                    html += '<div class="card" style="margin:16px"><div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(t1Err.message) + '</div></div>';
+                    html += '<div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(t1Err.message) + '</div>';
                 }
+                html += '</div></div>';
                 // 加刷新按钮
                 html += '<div class="card" style="margin:16px;padding:12px;text-align:center">'
                     + '<button class="btn btn-orange" onclick="refreshT1Backtest()" style="font-size:14px;padding:8px 20px">🔄 刷新 T+1 回测 (强制重跑, 约 1-2 分钟)</button>'

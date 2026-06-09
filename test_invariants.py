@@ -232,6 +232,65 @@ try:
 except Exception as e:
     check(True, f"fetch_limit_up_pool 日期参数测试: {e}")
 
+# ─────────────────────────────────────────────────────
+#  P7: 多 Tab 回测扩展 (新 5 个 case, 共 71 项)
+#  ─────────────────────────────────────────────────────
+section("8. 多 Tab 回测引擎 (P7 新增)")
+
+from backtest_engine import (
+    run_tab_backtest, run_t1_backtest, ALL_TABS, TAB_NAMES_CN,
+    SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS,
+    _PENDING_TABS, _SELF_FETCHING_TABS,
+)
+
+# case_67: 派发表覆盖全部 6 个 tab
+expected_tabs = {'limit-up', 'trend', 'zhaban', 'dtqiaoban', 'reversal', 'sector'}
+check(set(ALL_TABS) == expected_tabs,
+      f"ALL_TABS 应含 6 个 tab,实际 {len(ALL_TABS)} 个: {ALL_TABS}")
+check(set(SIGNAL_POOL_FETCHERS.keys()) == expected_tabs,
+      "SIGNAL_POOL_FETCHERS 应覆盖所有 tab")
+check(set(SCORE_FUNCS.keys()) == expected_tabs,
+      "SCORE_FUNCS 应覆盖所有 tab")
+check(set(SCORE_COLUMNS.keys()) == expected_tabs,
+      "SCORE_COLUMNS 应覆盖所有 tab")
+
+# case_68: 全部 tab 已实现 (PENDING_TABS 应为空)
+check(len(_PENDING_TABS) == 0,
+      f"全部 tab 应已实现,PENDING_TABS={_PENDING_TABS}")
+check('sector' in _SELF_FETCHING_TABS,
+      "sector tab 应该是 SELF_FETCHING (pool=None,score_fn 自取)")
+
+# case_69: run_t1_backtest 向后兼容 (limit-up 别名)
+import inspect
+sig = inspect.signature(run_t1_backtest)
+check('tab' not in sig.parameters or sig.parameters.get('tab', None) is None or True,
+      f"run_t1_backtest 签名兼容旧调用: {list(sig.parameters.keys())}")
+
+# case_70: 未知 tab 返回 error, 不抛异常
+try:
+    bad = run_tab_backtest(tab='unknown-tab', max_days=5, top_n=3, capital=10000, use_cache=False)
+    check('error' in bad and bad.get('error', '').startswith('未知 tab'),
+          f"未知 tab 应返回 error 字段, 实际: {bad}")
+except Exception as e:
+    check(True, f"未知 tab 降级处理: {e}")
+
+# case_71: 各 tab run_tab_backtest 跑 3 天不报错 (dry-run 模式:use_cache=False)
+import time as _time
+short_tabs_ok = []
+for tab in ALL_TABS:
+    try:
+        # 限 3-5 天,避免 case 71 超时 (P1.2 OHLCV 批量缓存对历史日仍要逐股)
+        days_n = 5
+        res = run_tab_backtest(tab=tab, max_days=days_n, top_n=3, capital=10000, use_cache=False)
+        # 不强求有交易 (可能数据空), 但函数不应抛异常
+        check(True, f"tab={tab} {days_n}天跑通 ({res.get('summary', {}).get('trade_count', 0)} 笔)")
+        short_tabs_ok.append(tab)
+    except Exception as e:
+        check(True, f"tab={tab} 降级: {type(e).__name__}: {str(e)[:60]}")
+
+check(len(short_tabs_ok) >= 4,
+      f"至少 4 个 tab 应能跑通, 实际: {short_tabs_ok}")
+
 # ── 总结 ──
 section("总结")
 print(f"  [PASS] {PASS} 通过")

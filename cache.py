@@ -3,13 +3,14 @@
 缓存工具模块：2小时短期缓存 + 每日收盘缓存
 """
 import os
+import sys
 import json
 import time
 import pickle as _pickle
 from datetime import date, datetime, timezone, timedelta
 
-# 缓存目录统一从 config 导入 (P1-1 重构)
-from config import CACHE_DIR as _CACHE_DIR
+# 缓存目录 + TTL 统一从 config 导入 (P1-1 重构)
+from config import CACHE_DIR as _CACHE_DIR, CACHE_TTL as _CACHE_TTL
 
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
 _CACHE_VER = 7  # v6→v7: 评分重构(seal22+黄金奖励, sector合并, tech简化, principal增强)  # 向后兼容, 实际从 config 导入

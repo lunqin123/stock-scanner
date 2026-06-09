@@ -1428,6 +1428,87 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
     return df.sort_values('总分', ascending=False).head(TOP_N)
 
 
+def _score_reversal(pullback: pd.DataFrame, today_str: str = None) -> pd.DataFrame:
+    """纯函数: 对"上交易日涨停今日下跌"的票做反转评分
+
+    P2.1 抽出: 避免回测引擎依赖 scan_reversal 的 print/IO。
+    返回带 '反转评分' 列的 DataFrame (已按评分降序)。
+    注: '板块支撑' 因子中 today_str 可选,不传则用默认值 (历史回测场景)。
+    """
+    if pullback is None or pullback.empty:
+        return pullback
+
+    turnover_col = pullback.columns[9] if len(pullback.columns) > 9 else None
+    seal_stat_col = pullback.columns[14] if len(pullback.columns) > 14 else None
+    ind_col = pullback.columns[15] if len(pullback.columns) > 15 else None
+
+    if '今日涨幅' not in pullback.columns:
+        # 容错: caller 没加今日涨幅列,尝试加
+        chg_col = pullback.columns[3]
+        pullback['今日涨幅'] = pullback[chg_col].astype(float)
+
+    scores = pd.Series(0.0, index=pullback.index)
+
+    # 1. 换手率 (0-40)
+    if turnover_col:
+        for idx in pullback.index:
+            t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
+            if t > 25:             s = 40
+            elif 15 <= t <= 25:    s = 32
+            elif 8 <= t < 15:      s = 20
+            elif 5 <= t < 8:       s = 14
+            elif 3 <= t < 5:       s = 8
+            elif 1 <= t < 3:       s = 4
+            else:                  s = 0
+            scores[idx] = s
+
+    # 2. 连板位置 (0-35)
+    if seal_stat_col:
+        for idx in pullback.index:
+            raw = str(pullback.loc[idx, seal_stat_col]) if pd.notna(pullback.loc[idx, seal_stat_col]) else ''
+            consecutive = 0
+            if '/' in raw:
+                try: consecutive = int(raw.split('/')[1])
+                except: pass
+            if consecutive == 3:       s = 35
+            elif consecutive == 2:     s = 28
+            elif consecutive >= 4:     s = 15
+            elif consecutive == 1:     s = 10
+            else:                      s = 8
+            scores[idx] += s
+
+    # 3. 回调深度 (0-15)
+    for idx in pullback.index:
+        chg = pullback.loc[idx, '今日涨幅']
+        if -3 <= chg <= 0.5:   s = 15
+        elif -5 <= chg < -3:   s = 12
+        else:                  s = 8
+        scores[idx] += s
+
+    # 4. 板块支撑 (0-10): 历史回测时 today_str 可为 None → 用默认值
+    if today_str:
+        try:
+            lt_today = ak.stock_zt_pool_em(date=today_str)
+            if lt_today is not None and not lt_today.empty and ind_col:
+                lt_ind_col = '所属行业' if '所属行业' in lt_today.columns else (lt_today.columns[15] if len(lt_today.columns) > 15 else None)
+                if lt_ind_col:
+                    hot_inds = set(lt_today[lt_ind_col].value_counts().head(10).index)
+                    for idx in pullback.index:
+                        ind = str(pullback.loc[idx, ind_col]) if pd.notna(pullback.loc[idx, ind_col]) else ''
+                        scores[idx] += 20 if ind in hot_inds else 8
+                else:
+                    scores += pd.Series(12.0, index=pullback.index)
+            else:
+                scores += pd.Series(12.0, index=pullback.index)
+        except Exception:
+            scores += pd.Series(12.0, index=pullback.index)
+    else:
+        scores += pd.Series(12.0, index=pullback.index)
+
+    pullback['反转评分'] = scores.round(0)
+    return pullback
+
+
 def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
     """
     涨停回调反转扫描：找"上交易日涨停今日下跌"的股票，评估明日反包潜力。
@@ -1466,61 +1547,9 @@ def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
         return
     print(f"  → 上交易日涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
 
-    # ── 反转评分 (0-100，基于14日回测数据驱动) ──
-    scores = pd.Series(0.0, index=pullback.index)
+    # ── 反转评分 (P2.1 抽到 _score_reversal) ──
+    pullback = _score_reversal(pullback, today_str=today_str)
 
-    # 1. 换手率 (0-40): 回测显示高换手=高反转率(>25%换手→12.9%反转)
-    for idx in pullback.index:
-        t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
-        if t > 25:             s = 40   # 巨量换手=充分洗盘(反转率12.9%)
-        elif 15 <= t <= 25:    s = 32   # 高换手(反转率7.6%)
-        elif 8 <= t < 15:      s = 20   # 中换手(反转率4.3%)
-        elif 5 <= t < 8:       s = 14   # 温和换手(反转率5.7%)
-        elif 3 <= t < 5:       s = 8
-        elif 1 <= t < 3:       s = 4
-        else:                  s = 0    # <1%无量=不可能反转
-        scores[idx] = s
-
-    # 2. 连板位置 (0-35): 回测显示二板16%/三板21%反转率 >> 首板3.6%
-    for idx in pullback.index:
-        raw = str(pullback.loc[idx, seal_stat_col]) if seal_stat_col else ''
-        consecutive = 0
-        if '/' in raw:
-            try: consecutive = int(raw.split('/')[1])
-            except: pass
-        if consecutive == 3:       s = 35   # 三板回调反转率最高21%
-        elif consecutive == 2:     s = 28   # 二板回调反转率16%
-        elif consecutive >= 4:     s = 15   # 四板+回调反转率6%(连板太高反而弱)
-        elif consecutive == 1:     s = 10   # 首板回调反转率仅3.6%
-        else:                      s = 8
-        scores[idx] += s
-
-    # 3. 回调深度 (0-15): 各深度反转率差异不大(~5-7%), 浅跌略优
-    for idx in pullback.index:
-        chg = pullback.loc[idx, '今日涨幅']
-        if -3 <= chg <= 0.5:   s = 15    # 浅跌~平(反转率6.8%)
-        elif -5 <= chg < -3:   s = 12    # 中跌(反转率5.8%)
-        else:                  s = 8     # 深跌<-5%或微涨>0.5%
-        scores[idx] += s
-
-    # 4. 板块支撑 (0-10): 同板块今日有涨停=板块还活着
-    try:
-        lt_today = ak.stock_zt_pool_em(date=today_str)
-        if lt_today is not None and not lt_today.empty and ind_col:
-            lt_ind_col = '所属行业' if '所属行业' in lt_today.columns else (lt_today.columns[15] if len(lt_today.columns) > 15 else None)
-            if lt_ind_col:
-                hot_inds = set(lt_today[lt_ind_col].value_counts().head(10).index)
-                for idx in pullback.index:
-                    ind = str(pullback.loc[idx, ind_col]) if pd.notna(pullback.loc[idx, ind_col]) else ''
-                    scores[idx] += 20 if ind in hot_inds else 8
-            else:
-                scores += pd.Series(12.0, index=pullback.index)
-        else:
-            scores += pd.Series(12.0, index=pullback.index)
-    except Exception:
-        scores += pd.Series(12.0, index=pullback.index)
-
-    pullback['反转评分'] = scores.round(0)
     pullback = pullback.sort_values('反转评分', ascending=False).head(n)
 
     # ── 输出 ──
@@ -1652,6 +1681,95 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
 #  模式3: 趋势动量股扫描 (--trend)
 # ═══════════════════════════════════════════
 
+def _score_trend(df: pd.DataFrame) -> pd.DataFrame:
+    """P2.2 抽出的纯函数: 趋势动量评分
+
+    5 因子 (0-100):
+    - 涨幅分 (0-40): 3-8% 甜蜜区
+    - 换手活跃分 (0-30): 8-15% 甜蜜区
+    - 成交额分 (0-30): 越大关注度越高
+    - 量比加分 (0-5): 强势池特有
+    - 新高加分 (0-3)
+
+    输入: 已过滤 (涨幅 2.5-8.5% + 非 ST + 市值<MAX_MARKET_CAP) 的 DataFrame
+    输出: 加 '动量评分' 列的 DataFrame
+    """
+    if df is None or df.empty:
+        return df
+
+    # 列识别 (强势池列名规范,做防御)
+    change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
+    turnover_col = '换手率' if '换手率' in df.columns else df.columns[9]
+    vol_ratio_col = '量比' if '量比' in df.columns else None
+    volume_col = '成交额' if '成交额' in df.columns else df.columns[6]
+    new_high_col = '是否新高' if '是否新高' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+
+    scores = pd.Series(0.0, index=df.index)
+
+    # 1. 涨幅分 (0-40)
+    changes = df[change_col].astype(float)
+    for idx in df.index:
+        chg = float(changes[idx])
+        if 6 <= chg <= 8:
+            scores[idx] += 40
+        elif 5 <= chg < 6:
+            scores[idx] += 35
+        elif 4 <= chg < 5:
+            scores[idx] += 30
+        elif 3 <= chg < 4:
+            scores[idx] += 25
+        elif 8 <= chg < 9.5:
+            scores[idx] += 20
+        else:
+            scores[idx] += 15
+
+    # 2. 换手活跃分 (0-30)
+    turnovers = df[turnover_col].astype(float)
+    for idx in df.index:
+        t = float(turnovers[idx])
+        if 8 <= t <= 15:
+            scores[idx] += 30
+        elif 5 <= t < 8:
+            scores[idx] += 25
+        elif 15 < t <= 20:
+            scores[idx] += 20
+        elif 3 <= t < 5:
+            scores[idx] += 15
+        elif 20 < t <= 25:
+            scores[idx] += 10
+        else:
+            scores[idx] += 5
+
+    # 3. 成交额分 (0-30)
+    volumes = df[volume_col].astype(float)
+    max_v = volumes.max()
+    if max_v > 0:
+        scores += (volumes / max_v) * 30
+    else:
+        scores += 15
+
+    # 4. 量比加分 (0-5)
+    if vol_ratio_col and vol_ratio_col in df.columns:
+        vol_ratios = df[vol_ratio_col].astype(float)
+        for idx in df.index:
+            vr = float(vol_ratios[idx])
+            if vr > 3:
+                scores[idx] += 5
+            elif vr > 2:
+                scores[idx] += 3
+            elif vr > 1.2:
+                scores[idx] += 1
+
+    # 5. 新高加分 (0-3)
+    if new_high_col and new_high_col in df.columns:
+        for idx in df.index:
+            if str(df.loc[idx, new_high_col]) == '是':
+                scores[idx] += 3
+
+    df['动量评分'] = scores.round(1)
+    return df
+
+
 def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
     """
     趋势动量股扫描。
@@ -1704,72 +1822,8 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
         print(f"  -> 过滤后 {after}/{before} 只（涨幅2.5-8.5% + 非ST/科创/北交 + 市值<{MAX_MARKET_CAP}亿）", file=sys.stderr)
 
         if not df.empty:
-            # ── 动量评分（100分制）──
-            scores = pd.Series(0.0, index=df.index)
-
-            # 1. 涨幅分 (0-40): 3-8%甜蜜区
-            for idx in df.index:
-                chg = float(changes[idx])
-                if 6 <= chg <= 8:
-                    scores[idx] += 40  # 强势但未涨停，最佳追涨区
-                elif 5 <= chg < 6:
-                    scores[idx] += 35
-                elif 4 <= chg < 5:
-                    scores[idx] += 30
-                elif 3 <= chg < 4:
-                    scores[idx] += 25
-                elif 8 <= chg < 9.5:
-                    scores[idx] += 20  # 接近涨停，风险偏高
-                else:
-                    scores[idx] += 15
-
-            # 2. 换手活跃分 (0-30)
-            turnovers = df[turnover_col].astype(float)
-            for idx in df.index:
-                t = turnovers[idx]
-                if 8 <= t <= 15:
-                    scores[idx] += 30  # 换手甜蜜区
-                elif 5 <= t < 8:
-                    scores[idx] += 25
-                elif 15 < t <= 20:
-                    scores[idx] += 20
-                elif 3 <= t < 5:
-                    scores[idx] += 15
-                elif 20 < t <= 25:
-                    scores[idx] += 10
-                else:
-                    scores[idx] += 5
-
-            # 3. 成交额分 (0-30): 越大关注度越高
-            volumes = df[volume_col].astype(float)
-            max_v = volumes.max()
-            if max_v > 0:
-                scores += (volumes / max_v) * 30
-            else:
-                scores += 15
-
-            # 4. 量比加分（强势池特有指标, 0-10额外分）
-            if vol_ratio_col and vol_ratio_col in df.columns:
-                vol_ratios = df[vol_ratio_col].astype(float)
-                for idx in df.index:
-                    vr = vol_ratios[idx]
-                    if vr > 3:
-                        scores[idx] += 5   # 巨量异动
-                    elif vr > 2:
-                        scores[idx] += 3
-                    elif vr > 1.2:
-                        scores[idx] += 1
-
-            # 5. 新高加分
-            new_high_col = '是否新高' if '是否新高' in df.columns else None
-            if new_high_col is None and len(df.columns) > 11:
-                new_high_col = df.columns[11]
-            if new_high_col and new_high_col in df.columns:
-                for idx in df.index:
-                    if str(df.loc[idx, new_high_col]) == '是':
-                        scores[idx] += 3
-
-            df['动量评分'] = scores.round(1)
+            # ── 动量评分 (P2.2 抽到 _score_trend) ──
+            df = _score_trend(df)
             df = df.sort_values('动量评分', ascending=False).head(n)
 
             # ── 输出 ──
@@ -1952,6 +2006,98 @@ def score_sector_data(limit_df: pd.DataFrame, zhaban_df: pd.DataFrame,
         })
     stats.sort(key=lambda x: x['link_strength'], reverse=True)
     return stats[:top_n]
+
+
+# ─── P2.3: 板块个股反向查询 ───
+
+def _get_sector_stocks(industry: str, limit_df: pd.DataFrame, zhaban_df: pd.DataFrame,
+                       dieting_df: pd.DataFrame = None) -> list[dict]:
+    """给定板块名,返回该板块所有涨停+炸板个股的 code/name 列表
+
+    用于 P2.3 板块 tab 回测: 板块级 → 个股级映射
+    返回: [{'code': '000001', 'name': '平安银行', 'source': 'limit'}, ...]
+    """
+    stocks = []
+    seen = set()
+    ind_col = None
+
+    for source_name, df in [('limit', limit_df), ('zhaban', zhaban_df), ('dieting', dieting_df)]:
+        if df is None or df.empty:
+            continue
+        if ind_col is None or ind_col not in df.columns:
+            ind_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+        if ind_col is None or ind_col not in df.columns:
+            continue
+        for _, row in df.iterrows():
+            if str(row.get(ind_col, '')) != industry:
+                continue
+            code = str(row.get('代码', '') or row.iloc[1]).strip().zfill(6)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            stocks.append({
+                'code': code,
+                'name': str(row.get('名称', '') or row.iloc[2]),
+                'source': source_name,
+            })
+    return stocks
+
+
+def _score_sector(date_str: str, top_n: int = TOP_N) -> pd.DataFrame:
+    """P2.3 板块 tab 回测评分: 板块级 → 个股级映射
+
+    流程:
+    1. 拉当日涨停+炸板+跌停池
+    2. score_sector_data 算板块联动强度
+    3. 每个板块的 TOP 个股按板块强度打"板块强度分"
+    4. 输出: 个股级 DataFrame,含 '板块强度' 列
+
+    注: 板块级回测策略 = 板块 TOP1 的所有涨停个股等权买 → D+1 算收益
+    """
+    # 拉数据
+    try:
+        limit_df = ak.stock_zt_pool_em(date=date_str)
+    except Exception:
+        limit_df = pd.DataFrame()
+    try:
+        zhaban_df = ak.stock_zt_pool_zbgc_em(date=date_str)
+    except Exception:
+        zhaban_df = pd.DataFrame()
+    try:
+        dieting_df = ak.stock_zt_pool_dtgc_em(date=date_str)
+    except Exception:
+        dieting_df = pd.DataFrame()
+
+    # 板块评分
+    sectors = score_sector_data(limit_df, zhaban_df, dieting_df, top_n=top_n)
+    if not sectors:
+        return pd.DataFrame()
+
+    # 板块 → 个股
+    rows = []
+    for sector in sectors:
+        industry = sector['industry']
+        link = sector['link_strength']
+        stocks = _get_sector_stocks(industry, limit_df, zhaban_df, dieting_df)
+        # 按 link_strength 排序后分配: 板块强度分 = link_strength * 10 (clip 0-100)
+        sector_score = max(0, min(100, int(link * 10 + 50)))
+        for stock in stocks:
+            rows.append({
+                '代码': stock['code'],
+                '名称': stock['name'],
+                '所属行业': industry,
+                '板块强度': sector_score,
+                'link_strength': link,
+                '_source': stock['source'],
+                'limit_cnt': sector['limit_cnt'],
+                'zhaban_cnt': sector['zhaban_cnt'],
+                'dieting_cnt': sector['dieting_cnt'],
+                'profit_effect': sector['profit_effect'],
+                'seal_rate': sector['seal_rate'],
+            })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
 
 
 # ═══════════════════════════════════════════
@@ -2461,6 +2607,11 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     优先从 Plan 归档 (daily_data/) 读取昨日评分 → 对比今日实际涨跌幅 → 计算因子相关性。
     归档不存在时回退到 backtest_score_prev 重评分 (冷启动兼容)。
     plan_name: 'A' 或 'B', 用于独立调权
+
+    P5 调权隔离决策 (V1):
+    - 本函数只覆盖 plan_a / plan_b 的涨停 tab 调权 (6 因子)
+    - 炸板/翘板/趋势/反转/板块的回测只输出统计,不调权
+    - V2 可扩展: 为每个 tab 建独立 weight_manager.PLAN_X_WEIGHTS
     返回: (输出文本, adjusted_weights) 或 None
     """
     import weight_manager
@@ -2587,9 +2738,10 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
     return "\n".join(lines), adjusted_weights
 
 
-def run_backtest():
-    """回测主入口"""
+def run_backtest(tab: str = 'limit-up', N: int = 20):
+    """回测主入口 (P4: 支持多 tab 滚动回测)"""
     from datetime import datetime, timedelta
+    from backtest_engine import run_tab_backtest, TAB_NAMES_CN
 
     # 周末检测
     wd = date.today().weekday()
@@ -2597,13 +2749,30 @@ def run_backtest():
         print("  [回测跳过] 周末不开盘")
         return
 
-    # 获取过去 N 个交易日
-    N = 20
-    from datetime import timedelta
+    # ── P4: 多 tab 滚动回测 (走 backtest_engine) ──
+    if tab != 'limit-up':
+        print(f"运行 {tab} ({TAB_NAMES_CN.get(tab, tab)}) {N} 天滚动回测 (T+1 真实)...")
+        res = run_tab_backtest(tab=tab, max_days=N, top_n=3, capital=30000, use_cache=False)
+        if 'error' in res and not res.get('trades'):
+            print(f"  错误: {res['error']}")
+            return
+        s = res['summary']
+        print(f"  笔数: {s.get('trade_count', 0)}")
+        print(f"  胜率: {s.get('win_rate', 0)}%")
+        print(f"  累计收益: {s.get('cumulative_ret', 0):+.2f}%")
+        print(f"  总盈亏: ¥{s.get('total_pnl', 0):+,.0f}")
+        print(f"  盈亏比: {s.get('plr', 0)}")
+        print(f"  最大回撤: {s.get('max_dd', 0):.2f}%")
+        print(f"  期望值: {s.get('ev', 0):+.2f}%")
+        cmp = res.get('comparison', {})
+        print(f"  一字板跳过: {cmp.get('unbuyable_count', 0)} 笔")
+        return
+
+    # ── 兼容旧版: limit-up 走 backtest_score_prev (输出因子相关性) ──
+    print(f"运行 {N} 天滚动回测 (limit-up, 含因子相关性)...")
     results = []
     errors = 0
 
-    print(f"运行 {N} 天滚动回测...")
     for i in range(N):
         d = date.today() - timedelta(days=i)
         if d.weekday() >= 5:
@@ -2679,6 +2848,10 @@ def main():
     parser = argparse.ArgumentParser(description='超短线选股扫描器')
     parser.add_argument('--table', action='store_true', help='以表格格式输出（默认详细文本）')
     parser.add_argument('--backtest', action='store_true', help='运行回测系统（验证评分有效性）')
+    parser.add_argument('--tab', type=str, default='limit-up',
+                        choices=['limit-up', 'trend', 'zhaban', 'dtqiaoban', 'reversal', 'sector'],
+                        help='回测 tab (与 --backtest 一起用,默认 limit-up)')
+    parser.add_argument('--days', type=int, default=20, help='回测天数 (默认 20,limit-up 可 30)')
     parser.add_argument('--zhaban', action='store_true', help='炸板股反包潜力扫描')
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
@@ -2694,7 +2867,7 @@ def main():
         TOP_N = args.top
 
     if args.backtest:
-        run_backtest()
+        run_backtest(tab=args.tab, N=args.days)
         return
     table_mode = args.table
 
