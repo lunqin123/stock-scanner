@@ -13,8 +13,10 @@ const _dom = {
     modulePage: () => document.querySelector('.module-page'),
 };
 
-// P6: 当前选中的回测 tab
+// P6: 当前选中的回测 tab + 调权参数
 let _btTab = 'limit-up';
+let _btTopN = 3;
+let _btCapital = 90000;  // 3只 × 3万/只
 
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
@@ -31,17 +33,37 @@ async function switchBacktestTab(tab, days) {
             btn.style.color = isActive ? '#fff' : 'var(--text)';
         });
     }
+    await _fetchBacktest(tab, days, _btTopN, _btCapital, contentEl);
+}
+
+// 共用: 拉取回测数据并渲染
+async function _fetchBacktest(tab, days, topN, capital, contentEl) {
     try {
-        // P1.2.1: 加 60s 超时
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 60000);
-        const resp = await fetch('/api/bt/' + tab + '?days=' + days + '&top_n=3&capital=30000', { signal: ctrl.signal });
+        const url = '/api/bt/' + tab + '?days=' + days + '&top_n=' + topN + '&capital=' + capital;
+        const resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
         const data = await resp.json();
         contentEl.innerHTML = renderT1BacktestPanel(data);
     } catch (e) {
         const msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
+    }
+}
+
+// TOP-N / 本金 切换
+function onBacktestParamChange() {
+    const topSel = document.getElementById('btTopN');
+    const capInput = document.getElementById('btCapital');
+    if (topSel) _btTopN = parseInt(topSel.value) || 3;
+    if (capInput) _btCapital = parseInt(capInput.value) || 90000;
+    // 重新拉取当前 tab
+    const days = 5;  // 默认
+    const contentEl = document.getElementById('btTabContent');
+    if (contentEl) {
+        contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
+        _fetchBacktest(_btTab, days, _btTopN, _btCapital, contentEl);
     }
 }
 const _navItems = () => document.querySelectorAll('.nav-item');
@@ -565,13 +587,21 @@ async function loadCardView(output, pageKey, apiUrl) {
                     const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
                     html += '<button class="btn" style="font-size:12px;padding:6px 12px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + '</button>';
                 });
+                // TOP-N 调权 + 本金输入
+                html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px">'
+                    + '<span style="color:var(--text-muted)">买</span>'
+                    + '<select id="btTopN" onchange="onBacktestParamChange()" style="padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)">'
+                    + [1,2,3,5,10].map(n => '<option value="' + n + '"' + (n === _btTopN ? ' selected' : '') + '>TOP' + n + '</option>').join('')
+                    + '</select>'
+                    + '<input id="btCapital" type="number" value="' + _btCapital + '" onchange="onBacktestParamChange()" style="width:80px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5000" min="10000">'
+                    + '<span style="color:var(--text-muted)">元</span>'
+                    + '<span style="color:var(--text-muted);margin-left:4px">(单只本金)</span>'
+                    + '</div>';
                 html += '</div><div id="btTabContent">';
                 try {
-                    // P1.2.1: 加 60s 超时避免无限等
                     const ctrl = new AbortController();
                     const tid = setTimeout(() => ctrl.abort(), 60000);
-                    const daysParam = 5;
-                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=' + daysParam + '&top_n=3&capital=30000', { signal: ctrl.signal });
+                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=5&top_n=' + _btTopN + '&capital=' + _btCapital, { signal: ctrl.signal });
                     clearTimeout(tid);
                     const t1Data = await t1Resp.json();
                     html += renderT1BacktestPanel(t1Data);
