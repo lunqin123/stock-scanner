@@ -13,14 +13,21 @@ const _dom = {
     modulePage: () => document.querySelector('.module-page'),
 };
 
-// P6: 当前选中的回测 tab + 调权参数
-let _btTab = 'limit-up';
-let _btTopN = 3;
-let _btCapital = 90000;  // 3只 × 3万/只
+// P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
+let _btTab = localStorage.getItem('btTab') || 'limit-up';
+let _btTopN = parseInt(localStorage.getItem('btTopN')) || 3;
+let _btCapital = parseInt(localStorage.getItem('btCapital')) || 90000;
+
+function _saveBacktestParams() {
+    localStorage.setItem('btTab', _btTab);
+    localStorage.setItem('btTopN', _btTopN);
+    localStorage.setItem('btCapital', _btCapital);
+}
 
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
     _btTab = tab;
+    _saveBacktestParams();
     const contentEl = document.getElementById('btTabContent');
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
@@ -58,6 +65,7 @@ function onBacktestParamChange() {
     const capInput = document.getElementById('btCapital');
     if (topSel) _btTopN = parseInt(topSel.value) || 3;
     if (capInput) _btCapital = parseInt(capInput.value) || 90000;
+    _saveBacktestParams();
     // 重新拉取当前 tab
     const days = 5;  // 默认
     const contentEl = document.getElementById('btTabContent');
