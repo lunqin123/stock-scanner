@@ -179,11 +179,14 @@ def _get_ohlcv_batch(code, dates):
                 d = str(row.get('日期', '')).replace('-', '')
                 if d not in missing:
                     continue
+                # 腾讯源列: date/open/close/high/low/amount (无volume/turnover/change)
+                # 使用 .get() 容错缺失列
                 o = {'open': float(row['open']), 'close': float(row['close']),
                      'high': float(row['high']), 'low': float(row['low']),
-                     'volume': int(row['volume']), 'amount': float(row.get('amount', 0)),
-                     'turnover': float(row.get('turnover', 0)),
-                     'change_pct': float(row.get('change', row.get('涨跌幅', 0)))}
+                     'volume': int(row.get('volume', 0) or 0),
+                     'amount': float(row.get('amount', 0) or 0),
+                     'turnover': float(row.get('turnover', 0) or 0),
+                     'change_pct': float(row.get('change', row.get('涨跌幅', 0)) or 0)}
             else:
                 d = str(row['日期']).replace('-', '')
                 if d not in missing:
@@ -195,22 +198,7 @@ def _get_ohlcv_batch(code, dates):
             _cache_put(f"t1_ohlcv_{code}_{d}", o)
             result[d] = o
 
-    # 东方财富：一次拉取 start~end 区间
-    for attempt in range(2):
-        try:
-            df = ak.stock_zh_a_hist(symbol=code, period='daily',
-                                     start_date=start, end_date=end, adjust='')
-            if df is not None and not df.empty:
-                _ohlcv_cache_df(df)
-                for d in missing:
-                    if d not in result:
-                        _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
-                return result
-            break
-        except Exception:
-            time.sleep(1)
-
-    # 腾讯降级
+    # 腾讯源优先 (服务器东方财富被封, 腾讯正常)
     prefix = 'sh' if code.startswith('6') else 'sz'
     fmt_s = f'{start[:4]}-{start[4:6]}-{start[6:8]}'
     fmt_e = f'{end[:4]}-{end[4:6]}-{end[6:8]}'
@@ -227,7 +215,22 @@ def _get_ohlcv_batch(code, dates):
                 return result
             break
         except Exception:
-            time.sleep(1)
+            time.sleep(0.5)
+
+    # 东方财富降级 (本地/国内环境更快)
+    for attempt in range(1):  # 只试1次, 不在服务器上反复重试
+        try:
+            df = ak.stock_zh_a_hist(symbol=code, period='daily',
+                                     start_date=start, end_date=end, adjust='')
+            if df is not None and not df.empty:
+                _ohlcv_cache_df(df)
+                for d in missing:
+                    if d not in result:
+                        _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
+                return result
+            break
+        except Exception:
+            pass
 
     for d in missing:
         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
