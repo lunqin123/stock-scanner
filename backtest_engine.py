@@ -35,7 +35,6 @@ from t1_real_backtest import (
 )
 
 from scanner import (
-    backtest_score_prev,
     filter_non_main_board,
     score_zhaban_data, score_dtqiaoban_data,
     _score_reversal as scanner_score_reversal,
@@ -133,18 +132,26 @@ def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.Dat
     return None
 
 def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
-    """涨停池: 上交易日涨停(带今日涨跌幅列)"""
-    key = f"t1_prev_pool_{date_str}"
+    """涨停池: 当日涨停 (stock_zt_pool_em, 含封板时间/封板资金等 plan_a 所需列)
+
+    P3.1: 改用 stock_zt_pool_em 替代 stock_zt_pool_previous_em,
+    这样 plan_a 9因子评分能拿到封板/资金等完整数据, 与前端排名一致。
+    """
+    key = f"engine_limit_up_{date_str}"
     cached = _cached_pool_get(key)
     if cached is not None:
         return cached
-    df = ak.stock_zt_pool_previous_em(date=date_str)
+    try:
+        df = ak.stock_zt_pool_em(date=date_str)
+    except Exception:
+        df = None
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        # P1.3: akshare ~7天窗口限制 → fallback 读本地 pickle
-        df = _try_local_fallback(date_str, 'prev_pool', key)
-    if df is not None and not df.empty:
+        df = _try_local_fallback(date_str, 'limit_up', key)
+    if df is not None and hasattr(df, 'empty') and not df.empty:
         _cache_put(key, df)
-    return df
+        return df
+    _cache_put(key, '__NONE__')
+    return None
 
 
 def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
@@ -260,11 +267,59 @@ SIGNAL_POOL_FETCHERS = {
 # ═══════════════════════════════════════════
 
 def _score_limit_up(df: pd.DataFrame, date_str: str):
-    """涨停评分: 用 scanner.backtest_score_prev"""
+    """涨停评分: plan_a 9因子 (与前端排名一致)
+
+    P3.1: 替代 backtest_score_prev (6因子简化版),
+    直接调用 plan_a 完整评分管道, 回测胜率与实盘推荐对齐。
+    fund_df/history_scores/lhb_bonus 等实时数据用降级模式(全零/默认值)。
+    """
     if df is None or df.empty:
         return None
-    df_res, _ = backtest_score_prev(df, date_str=date_str)
-    return df_res  # 含 '回测评分' 列
+
+    # plan_a 内部 auto_verify_backtest 需要 YYYYMMDD 格式
+    today_fmt = date_str
+
+    # 1. 过滤 (保留全池做 scoring_base, 与 scan pipeline 对齐归一化)
+    from scanner import filter_non_main_board
+    scoring_base = filter_non_main_board(df.copy())
+    if scoring_base.empty:
+        return None
+
+    cap_col = '流通市值' if '流通市值' in scoring_base.columns else None
+    if cap_col and cap_col in scoring_base.columns:
+        scoring_base = scoring_base[scoring_base[cap_col].astype(float) <= 200 * 1e8]
+    price_col = '最新价' if '最新价' in scoring_base.columns else (scoring_base.columns[4] if len(scoring_base.columns) > 4 else None)
+    if price_col and price_col in scoring_base.columns:
+        scoring_base = scoring_base[scoring_base[price_col].astype(float) <= 200]
+    if scoring_base.empty:
+        return None
+
+    filtered = scoring_base.copy()  # 回测等权买入, 不做本金过滤
+
+    # 2. plan_a 因子计算 (在 scoring_base 上归一化, 与前端一致)
+    from plans.plan_a import compute_factors, apply_scores
+    principal = 30000
+
+    factors = compute_factors(scoring_base, fund_df=None, principal=principal)
+
+    sentiment_score = 3.0  # 中性
+    history_scores = pd.Series(2.5, index=filtered.index)
+    lhb_bonus = pd.Series(0.0, index=filtered.index)
+
+    total_scores, base_scores, danger_flags, weights = apply_scores(
+        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt)
+
+    # 3. 附加评分列到 DataFrame
+    filtered = filtered.copy()
+    filtered['plan_a总分'] = total_scores.round(1)
+    filtered['plan_a基础分'] = base_scores.round(1)
+    # 危险信号标记
+    filtered['_danger'] = ''
+    for idx, flags in danger_flags.items():
+        if flags and idx in filtered.index:
+            filtered.loc[idx, '_danger'] = ','.join(flags)
+
+    return filtered  # 含 'plan_a总分' 列
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
@@ -352,7 +407,7 @@ SCORE_FUNCS = {
 
 # 各 tab 的评分列名
 SCORE_COLUMNS = {
-    TAB_LIMIT_UP: '回测评分',
+    TAB_LIMIT_UP: 'plan_a总分',  # P3.1: 改用 plan_a 9因子, 与前端一致
     TAB_REVERSAL: '反转评分',
     TAB_ZHABAN: '总分',         # score_zhaban_data 输出
     TAB_DTQIAOBAN: '翘板评分',
