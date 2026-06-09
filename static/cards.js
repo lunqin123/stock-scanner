@@ -1022,9 +1022,9 @@ function renderT1BacktestPanel(data) {
 
     function _wrBlock(label, sum, isPrimary) {
         var wr = sum.win_rate || 0;
-        var wrColor = wr >= 60 ? '#22c55e' : wr >= 45 ? '#f59e0b' : '#ef4444';
+        var wrColor = wr >= 60 ? '#ef4444' : wr >= 45 ? '#f59e0b' : '#22c55e';
         var grade = wr >= 70 ? 'S' : wr >= 55 ? 'A' : wr >= 40 ? 'B' : wr >= 25 ? 'C' : 'D';
-        var gradeColor = wr >= 70 ? '#ffd700' : wr >= 55 ? '#22c55e' : wr >= 40 ? '#f59e0b' : '#ef4444';
+        var gradeColor = wr >= 70 ? '#ffd700' : wr >= 55 ? '#ef4444' : wr >= 40 ? '#f59e0b' : '#22c55e';
         var barPct = Math.min(100, Math.max(0, wr));
         var size = isPrimary ? '48px' : '36px';
         var opacity = isPrimary ? '1' : '0.85';
@@ -1050,8 +1050,8 @@ function renderT1BacktestPanel(data) {
     html += '</div>';
     // 底部统计
     html += '<div style="font-size:12px;color:var(--text-muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">';
-    html += '累计收益 <span style="color:' + (s.cumulative_ret >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret || 0).toFixed(2) + '%</span>';
-    html += ' | 总盈亏 <span style="color:' + (s.total_pnl >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">' + (s.total_pnl >= 0 ? '+' : '') + (s.total_pnl || 0).toFixed(0) + ' 元</span>';
+    html += '累计收益 <span style="color:' + (s.cumulative_ret >= 0 ? '#ef4444' : '#22c55e') + ';font-weight:600">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret || 0).toFixed(2) + '%</span>';
+    html += ' | 总盈亏 <span style="color:' + (s.total_pnl >= 0 ? '#ef4444' : '#22c55e') + ';font-weight:600">' + (s.total_pnl >= 0 ? '+' : '') + (s.total_pnl || 0).toFixed(0) + ' 元</span>';
     if (unbuyable > 0) { html += ' | 涨停开盘无法买入 ' + unbuyable + ' 笔'; }
     html += '</div></div>';
 
@@ -1065,13 +1065,13 @@ function renderT1BacktestPanel(data) {
     }
     html += '<div class="card" style="flex:0 0 100%"><h3 style="margin:0 0 12px">核心指标</h3>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:10px">';
-    var evColor = s.ev > 0 ? '#22c55e' : '#ef4444';
+    var evColor = s.ev > 0 ? '#ef4444' : '#22c55e';
     html += metric('笔数', s.trade_count || 0, '#3b82f6', '跳过: ' + skipped.length);
-    html += metric('平均收益', (s.avg_ret || 0).toFixed(2) + '%', s.avg_ret >= 0 ? '#22c55e' : '#ef4444');
-    html += metric('总盈亏', (s.total_pnl || 0).toFixed(0) + ' 元', s.total_pnl >= 0 ? '#22c55e' : '#ef4444', '本金' + (cfg.capital || 30000) + '×' + s.trade_count + '笔');
-    html += metric('盈亏比', (s.plr || 0).toFixed(2), s.plr >= 1.5 ? '#22c55e' : 'var(--text)');
-    html += metric('最大回撤', (s.max_dd || 0).toFixed(2) + '%', '#ef4444');
-    html += metric('期望值 EV', (s.ev || 0).toFixed(2) + '%', evColor, evColor === '#22c55e' ? '长期盈利' : '长期亏损');
+    html += metric('平均收益', (s.avg_ret || 0).toFixed(2) + '%', s.avg_ret >= 0 ? '#ef4444' : '#22c55e');
+    html += metric('总盈亏', (s.total_pnl || 0).toFixed(0) + ' 元', s.total_pnl >= 0 ? '#ef4444' : '#22c55e', '本金' + (cfg.capital || 30000) + '×' + s.trade_count + '笔');
+    html += metric('盈亏比', (s.plr || 0).toFixed(2), s.plr >= 1.5 ? '#ef4444' : 'var(--text)');
+    html += metric('最大回撤', (s.max_dd || 0).toFixed(2) + '%', '#22c55e');
+    html += metric('期望值 EV', (s.ev || 0).toFixed(2) + '%', evColor, evColor === '#ef4444' ? '长期盈利' : '长期亏损');
     html += '</div></div>';
 
     // 2. TOP 5 + BOTTOM 5
@@ -1094,10 +1094,10 @@ function renderT1BacktestPanel(data) {
         return h;
     }
     if (top5.length > 0) {
-        html += tradeTable('🏆 TOP 5 (最赚)', top5, '#22c55e');
+        html += tradeTable('🏆 TOP 5 (最赚)', top5, '#ef4444');
     }
     if (bot5.length > 0) {
-        html += tradeTable('💀 BOTTOM 5 (最亏)', bot5, '#ef4444');
+        html += tradeTable('💀 BOTTOM 5 (最亏)', bot5, '#22c55e');
     }
 
     // 3.5 双策略对比
@@ -1109,7 +1109,7 @@ function renderT1BacktestPanel(data) {
         html += '<div style="display:flex;flex-wrap:wrap;gap:10px">';
         function _cmpCard(label, sum, color) {
             if (!sum) return '';
-            var wc = sum.win_rate >= 60 ? '#22c55e' : sum.win_rate >= 45 ? '#f59e0b' : '#ef4444';
+            var wc = sum.win_rate >= 60 ? '#ef4444' : sum.win_rate >= 45 ? '#f59e0b' : '#22c55e';
             return '<div style="flex:1;min-width:250px;padding:14px;border:1px solid ' + color + '44;border-radius:8px;background:var(--card-bg)">'
                 + '<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:' + color + '">' + label + '</div>'
                 + '<div style="display:flex;justify-content:space-between;font-size:12px;line-height:1.8">'
@@ -1117,12 +1117,12 @@ function renderT1BacktestPanel(data) {
                 + '<span>笔数 <b>' + (sum.trade_count||0) + '</b></span>'
                 + '</div>'
                 + '<div style="display:flex;justify-content:space-between;font-size:12px;line-height:1.8">'
-                + '<span>累计 <b style="color:' + ((sum.cumulative_ret||0) >=0?'#22c55e':'#ef4444') + '">' + ((sum.cumulative_ret||0) >=0?'+':'') + (sum.cumulative_ret||0).toFixed(2) + '%</b></span>'
+                + '<span>累计 <b style="color:' + ((sum.cumulative_ret||0) >=0?'#ef4444':'#22c55e') + '">' + ((sum.cumulative_ret||0) >=0?'+':'') + (sum.cumulative_ret||0).toFixed(2) + '%</b></span>'
                 + '<span>平均 <b>' + ((sum.avg_ret||0) >=0?'+':'') + (sum.avg_ret||0).toFixed(2) + '%</b></span>'
                 + '</div>'
                 + '<div style="display:flex;justify-content:space-between;font-size:12px;line-height:1.8">'
                 + '<span>盈亏比 <b>' + (sum.plr||0).toFixed(2) + '</b></span>'
-                + '<span>EV <b style="color:' + ((sum.ev||0) >0?'#22c55e':'#ef4444') + '">' + ((sum.ev||0) >=0?'+':'') + (sum.ev||0).toFixed(2) + '%</b></span>'
+                + '<span>EV <b style="color:' + ((sum.ev||0) >0?'#ef4444':'#22c55e') + '">' + ((sum.ev||0) >=0?'+':'') + (sum.ev||0).toFixed(2) + '%</b></span>'
                 + '</div>'
                 + (cmp.unbuyable_count ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">因浬停开盘无法买入: ' + cmp.unbuyable_count + ' 笔</div>' : '')
                 + '</div>';
@@ -1139,9 +1139,9 @@ function renderT1BacktestPanel(data) {
     html += '<b>评分</b>: backtest_score_prev (回测专用, 6 因子) — plan_a 实盘评分可能更准<br>';
     html += '<b>胜率含义</b>: 接近 50% 表示赢 1 亏 1, 心理压力大; 期望值 EV > 0 表示长期数学上盈利<br>';
     if (s.ev > 0) {
-        html += '<b style="color:#22c55e">✅ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% > 0, 长期能赚 — 但胜率 ' + (s.win_rate || 0).toFixed(1) + '% 偏低, 需要仓位控制</b><br>';
+        html += '<b style="color:#ef4444">✅ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% > 0, 长期能赚 — 但胜率 ' + (s.win_rate || 0).toFixed(1) + '% 偏低, 需要仓位控制</b><br>';
     } else {
-        html += '<b style="color:#ef4444">⚠️ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% < 0, 长期亏损, 不建议直接用</b><br>';
+        html += '<b style="color:#22c55e">⚠️ 当前期望值 ' + (s.ev || 0).toFixed(2) + '% < 0, 长期亏损, 不建议直接用</b><br>';
     }
     html += '<b>实盘建议</b>: 单只仓位 ≤ 1/3 总仓位; 3 连亏日主动减仓 50%; 至少 30 天数据再下结论<br>';
     html += '<b>回撤 -' + Math.abs(s.max_dd || 0).toFixed(0) + '%</b> 是 3w 本金最大浮亏 = <b>' + (30000 * Math.abs(s.max_dd || 0) / 100).toFixed(0) + ' 元</b>';
