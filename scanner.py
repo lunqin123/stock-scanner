@@ -129,10 +129,11 @@ def filter_non_main_board(df: pd.DataFrame,
     """统一板块过滤：排除 ST、科创板、北交所、创业板。
     所有扫描模式/端点必须调用此函数，不重复发明过滤逻辑。"""
     df = df.copy()
-    # ST / *ST
+    # ST / *ST / 退市
     for nc in [name_col, '股票名称']:
         if nc in df.columns:
-            st_mask = df[nc].astype(str).str.startswith(('ST', '*ST'), na=False)
+            names = df[nc].astype(str)
+            st_mask = names.str.startswith(('ST', '*ST', '退', '退市'), na=False)
             df = df[~st_mask]
             break
     # 非主板代码
