@@ -793,8 +793,9 @@ body {
     display: none;
 }
 
-/* 移动端断点 */
+/* ── 平板/手机断点 ── */
 @media (max-width: 768px) {
+    /* ── 顶部导航栏 ── */
     .mobile-header {
         display: flex;
         align-items: center;
@@ -810,11 +811,16 @@ body {
         background: none;
         border: 1px solid var(--border);
         color: var(--text-primary);
-        font-size: 20px;
-        padding: 4px 10px;
-        border-radius: 6px;
+        font-size: 22px;
+        padding: 8px 12px;
+        border-radius: 8px;
         cursor: pointer;
         line-height: 1;
+        min-width: 44px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
     .hamburger:active { background: var(--bg-hover); }
     .mobile-title {
@@ -823,17 +829,26 @@ body {
         color: var(--accent);
     }
 
+    /* ── 侧边栏 (overlay 模式) ── */
     .sidebar {
         display: none;
         position: fixed;
         left: 0;
         top: 0;
-        width: 240px;
+        width: 260px;
         height: 100vh;
+        height: 100dvh;
         z-index: 200;
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
     .sidebar.open { display: flex; }
+    .sidebar .nav-item {
+        padding: 14px 20px;
+        font-size: 15px;
+        min-height: 48px;
+    }
     .sidebar-overlay {
         display: none;
         position: fixed;
@@ -849,27 +864,76 @@ body {
         max-height: none;
         overflow-y: visible;
     }
-    .module-page { border-radius: 0; border-left: none; border-right: none; padding: 12px; }
-    .main-header { margin-bottom: 12px; }
+    .module-page {
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        padding: 10px;
+        margin-bottom: 12px;
+    }
+    .main-header { margin-bottom: 10px; }
     .main-header h1 { font-size: 17px; }
 
+    /* ── 工具栏 (堆叠 + 大触控区) ── */
+    .global-toolbar {
+        gap: 6px !important;
+        padding: 8px 10px !important;
+        margin-bottom: 8px !important;
+    }
+    .global-toolbar .btn {
+        padding: 10px 16px !important;
+        font-size: 14px !important;
+        min-height: 44px;
+    }
+    .global-toolbar .principal-group {
+        margin-left: 0 !important;
+        width: 100%;
+        justify-content: space-between;
+    }
+    .principal-input {
+        width: 100px;
+        padding: 8px 10px;
+        font-size: 14px;
+        min-height: 44px;
+    }
+    #plan-select {
+        min-width: 100px;
+        padding: 8px 10px;
+    }
+    #cache-status {
+        margin-left: 0 !important;
+        width: 100%;
+        text-align: left;
+        padding: 4px 0;
+    }
+
+    /* ── Dashboard 卡片 ── */
     .dashboard-bar {
         grid-template-columns: 1fr 1fr;
         gap: 6px;
-        padding: 0 12px;
-        margin-bottom: 12px;
+        padding: 0 8px;
+        margin-bottom: 10px;
     }
     .dash-stat-card {
         padding: 10px 12px;
         gap: 8px;
         min-width: 0;
+        cursor: pointer;
+        min-height: 60px;
     }
     .dash-stat-value { font-size: 18px; }
     .dash-stat-sub { font-size: 10px; }
     .dash-stat-card.sectors-card { grid-column: 1 / -1; }
     .dash-sectors-wrap { gap: 4px; }
-    .sector-tag { font-size: 11px; padding: 2px 8px; }
+    .sector-tag {
+        font-size: 12px;
+        padding: 3px 10px;
+        min-height: 32px;
+        display: inline-flex;
+        align-items: center;
+    }
 
+    /* ── 卡片通用 ── */
     .card { padding: 12px; }
     .card-header-bar { flex-wrap: wrap; }
     .card-body { flex-direction: column; }
@@ -881,9 +945,10 @@ body {
         width: 100%;
     }
     .output-area {
-        padding: 12px;
+        padding: 10px;
         font-size: 12px;
         max-height: none;
+        -webkit-overflow-scrolling: touch;
     }
     .stock-card { padding: 10px 12px; }
     .card-name { font-size: 15px; }
@@ -892,17 +957,68 @@ body {
     .bar-val { width: 26px; font-size: 11px; }
     .bar-track { min-width: 40px; }
 
+    /* ── 回测面板 ── */
+    #btTabBar {
+        gap: 4px !important;
+    }
+    #btTabBar .btn {
+        padding: 8px 10px !important;
+        font-size: 11px !important;
+        min-height: 36px;
+    }
+    /* 回测 TOP-N 控件行 */
+    #btTabBar + div {
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+    }
+    #btTabBar + div select,
+    #btTabBar + div input {
+        min-height: 36px;
+        font-size: 13px;
+    }
+    /* 回测胜率双栏 → 堆叠 */
+    .dashboard-grid[style*="flex"] {
+        flex-direction: column !important;
+        gap: 8px !important;
+    }
+    .dashboard-grid .card[style*="flex:0 0 100%"] {
+        padding: 12px !important;
+    }
+    .dashboard-grid .card[style*="flex:1"] {
+        min-width: 100% !important;
+    }
+    /* 核心指标卡片 → 2列 */
+    .card[style*="flex:0 0 100%"] + div[style*="flex-wrap"] {
+        gap: 6px !important;
+    }
+
+    /* ── 表格 (横向滚动提示) ── */
+    .table-wrap {
+        -webkit-overflow-scrolling: touch;
+        margin: 4px -8px;
+        padding: 0 8px;
+    }
+    .data-table { font-size: 11px; }
+    .data-table thead th,
+    .data-table tbody td { padding: 6px 8px; white-space: nowrap; }
+
+    /* ── 通用 ── */
     .sentiment-banner { font-size: 12px; padding: 8px 12px; }
     .card-hint span { display: none; }
     .quick-actions { gap: 6px; }
-    .btn { padding: 6px 14px; font-size: 13px; }
+    .btn {
+        padding: 8px 16px;
+        font-size: 13px;
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+    }
+    .btn-sm { min-height: 32px; padding: 5px 12px; }
 
     .text-report { font-size: 12px; }
-    .data-table { font-size: 11px; }
-    .data-table thead th,
-    .data-table tbody td { padding: 4px 6px; }
 }
 
+/* ── 小屏手机 (< 480px) ── */
 @media (max-width: 480px) {
     .dashboard-bar { grid-template-columns: 1fr; }
     .dash-stat-card.sectors-card { grid-column: 1; }
@@ -911,6 +1027,30 @@ body {
     .sr-wrap { width: 32px; height: 32px; }
     .sr-ring { width: 32px; height: 32px; }
     .sr-inner { width: 24px; height: 24px; font-size: 9px; }
+
+    .global-toolbar {
+        padding: 6px 8px !important;
+        gap: 4px !important;
+    }
+    .global-toolbar .btn {
+        padding: 8px 12px !important;
+        font-size: 13px !important;
+        min-height: 40px;
+    }
+
+    .module-page { padding: 8px; }
+    .main-header h1 { font-size: 16px; }
+
+    /* 回测 tab 按钮更紧凑 */
+    #btTabBar .btn {
+        padding: 6px 8px !important;
+        font-size: 10px !important;
+        min-height: 32px;
+    }
+    /* 指标卡片单列 */
+    .card[style*="flex:0 0 100%"] + div[style*="flex-wrap"] > div {
+        min-width: 100% !important;
+    }
 }
 /* ─── 板块成分股标签 ─── */
 .sector-stock-label {
