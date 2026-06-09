@@ -39,6 +39,7 @@ const PAGES = {
     'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
     'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测追踪',   api: '/api/backtest/dashboard', textApi: '/api/backtest' },
+    'tracker':      { title: '📊 各Tab胜率',  api: '/api/tracker/stats' },
 };
 
 function showProgress(text, pct) {
@@ -423,6 +424,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderStockCards(items, data);
             } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
+            } else if (pageKey === 'tracker') {
+                html += renderTrackerPanel(data);
             } else if (pageKey === 'backtest') {
                 html += renderBacktestDashboard(data);
                 // T+1 真实回测面板 (异步加载, 不阻塞调权数据展示)
@@ -642,7 +645,7 @@ function exportOutput() {
     }
 }
 async function runAll() {
-    const pages = ['scan-trend','scan-limit','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest'];
+    const pages = ['scan-trend','scan-limit','scan-sector','scan-zhaban','scan-dtqiaoban','indicators','community','sentiment','backtest','tracker'];
     for (const key of pages) {
         location.hash = key;
         await new Promise(r => setTimeout(r, 500));

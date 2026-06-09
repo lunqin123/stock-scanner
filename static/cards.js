@@ -1136,3 +1136,30 @@ function renderT1BacktestPanel(data) {
     return html;
 }
 window.renderT1BacktestPanel = renderT1BacktestPanel;
+
+// ─── 推荐追踪面板 — 各 tab 胜率 ───
+function renderTrackerPanel(data) {
+    if (!data || !data.ok || !data.tabs || data.tabs.length === 0) {
+        return '<div class="card" style="padding:16px;margin:16px;text-align:center;color:var(--text-muted)">暂无追踪数据 — 各 tab 推荐后次日自动产生</div>';
+    }
+    var html = '<div class="card" style="margin:16px"><h3 style="margin:0 0 12px">各 Tab 推荐胜率追踪</h3>';
+    html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">每个 tab 推荐过的票，统计次日涨跌幅。数据累积越多越可靠。</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    for (var i = 0; i < data.tabs.length; i++) {
+        var t = data.tabs[i];
+        var wr = t.win_rate || 0;
+        var barW = Math.min(100, Math.max(0, wr));
+        var color = wr >= 60 ? '#22c55e' : wr >= 45 ? '#f59e0b' : '#ef4444';
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#1a1f2e)">';
+        html += '<div style="width:80px;font-weight:600;font-size:13px">' + (t.label || t.tab) + '</div>';
+        html += '<div style="flex:1;height:24px;background:var(--border,#333);border-radius:12px;overflow:hidden;position:relative">';
+        html += '<div style="height:100%;width:' + barW + '%;background:linear-gradient(90deg,' + color + ',' + color + '88);border-radius:12px;transition:width 0.5s"></div>';
+        html += '<div style="position:absolute;top:0;left:0;right:0;height:24px;line-height:24px;text-align:center;font-size:12px;font-weight:700;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5)">' + wr.toFixed(1) + '%</div>';
+        html += '</div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);min-width:100px;text-align:right">' + t.wins + '/' + t.count + ' 胜 | ' + (t.win_open_rate || 0).toFixed(0) + '%开盘涨</div>';
+        html += '</div>';
+    }
+    html += '</div></div>';
+    return html;
+}
+window.renderTrackerPanel = renderTrackerPanel;

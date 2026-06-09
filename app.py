@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from cache import daily_get, daily_set, daily_get_pkl, daily_set_pkl, make_key
+from recommendation_tracker import save_recommendations, get_per_tab_stats as _get_tracker_stats
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
 _CST = timezone(timedelta(hours=8))
@@ -1415,6 +1416,11 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
         fet = _fetched_at()
         data = result_holder["data"]
         if data:
+            # 保存推荐到追踪系统
+            try:
+                save_recommendations('limit-up', data.get('stocks', []), data.get('date', _today_trading()))
+            except Exception:
+                pass
             yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date']})}\n\n"
         elif result_holder["error"]:
             yield f"data: {json.dumps({'type':'error','text':result_holder['error']})}\n\n"
@@ -1828,6 +1834,10 @@ def _mode_stream_endpoint(run_fn, complete_fn, cache_key, refresh: bool):
                 items, extra = run_fn()
                 result['items'] = items
                 result.update(extra or {})
+                # 自动保存推荐到追踪系统
+                try:
+                    tab_name = cache_key.replace('_stream', '').replace('_cards', '')
+                    save_recommendations(tab_name, items, _today_trading())
             except Exception as e:
                 result['error'] = str(e)
             finally:
@@ -2253,6 +2263,17 @@ def api_backtest_t1(
         'ok': 'error' not in result,
         'data': result,
     }
+
+
+# ═══════════════════════════════════════════
+#  推荐追踪系统 - 各 tab 胜率
+# ═══════════════════════════════════════════
+
+@app.get("/api/tracker/stats")
+def api_tracker_stats():
+    """各 tab 推荐次日的胜率统计"""
+    stats = _get_tracker_stats()
+    return {'ok': True, 'tabs': stats}
 
 
 @app.get("/api/backtest/t1/top")
