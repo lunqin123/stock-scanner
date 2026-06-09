@@ -23,12 +23,15 @@ import os
 import sys
 import json
 import time
+import pickle
 from datetime import datetime, timedelta, timezone
 
 from cache import _is_trading_day, _last_trading_date  # 交易日历工具
+from config import CACHE_DIR as _CONFIG_CACHE_DIR
 
 _CST = timezone(timedelta(hours=8))
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive.db")
+_ARCHIVE_POOL_DIR = os.path.join(_CONFIG_CACHE_DIR, 'archive_pools')
 
 
 def get_db():
@@ -123,6 +126,83 @@ def _log(conn, trade_date, stage, records, status, error=None):
 
 
 # ═══════════════════════════════════════════
+#  池数据 pickle 归档 (供回测引擎 fallback)
+# ═══════════════════════════════════════════
+
+def _ensure_archive_dir():
+    """确保归档目录存在"""
+    os.makedirs(_ARCHIVE_POOL_DIR, exist_ok=True)
+    return _ARCHIVE_POOL_DIR
+
+
+def _save_pool_pickle(trade_date: str, pool_type: str, df):
+    """保存池原始 DataFrame 为 pickle，供回测引擎 akshare 不可用时 fallback
+
+    Args:
+        trade_date: YYYYMMDD
+        pool_type: 'limit_up' | 'zhaban' | 'dtqiaoban' | 'strong' | 'prev_pool'
+        df: akshare 返回的原始 DataFrame (含完整列结构)
+    """
+    if df is None:
+        return
+    try:
+        if hasattr(df, 'empty') and df.empty:
+            return
+    except (ValueError, TypeError):
+        pass
+    _ensure_archive_dir()
+    path = os.path.join(_ARCHIVE_POOL_DIR, f'{pool_type}_{trade_date}.pkl')
+    try:
+        with open(path, 'wb') as f:
+            pickle.dump(df, f)
+    except Exception as e:
+        print(f"  [归档 pickle] {pool_type}_{trade_date} 保存失败: {e}", file=sys.stderr)
+
+
+def _load_pool_pickle(trade_date: str, pool_type: str):
+    """加载归档的池 DataFrame
+
+    Returns:
+        DataFrame or None (文件不存在/损坏时)
+    """
+    path = os.path.join(_ARCHIVE_POOL_DIR, f'{pool_type}_{trade_date}.pkl')
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'rb') as f:
+            df = pickle.load(f)
+        if df is not None and hasattr(df, 'empty') and not df.empty:
+            return df
+        return None
+    except Exception:
+        return None
+
+
+def list_archive_dates(pool_type: str = None):
+    """列出已归档的交易日
+
+    Args:
+        pool_type: 池类型过滤，None 返回所有类型
+    Returns:
+        list of (date_str, pool_type) or list of date_str
+    """
+    if not os.path.exists(_ARCHIVE_POOL_DIR):
+        return []
+    result = []
+    for fname in os.listdir(_ARCHIVE_POOL_DIR):
+        if not fname.endswith('.pkl'):
+            continue
+        parts = fname.replace('.pkl', '').rsplit('_', 1)
+        if len(parts) != 2:
+            continue
+        pt, dt = parts
+        if pool_type and pt != pool_type:
+            continue
+        result.append((dt, pt) if pool_type is None else dt)
+    return sorted(result, reverse=True)
+
+
+# ═══════════════════════════════════════════
 #  Day T 阶段: 拉取当日数据
 # ═══════════════════════════════════════════
 
@@ -150,6 +230,7 @@ def archive_day_t(trade_date: str = None):
                 from scanner import filter_non_main_board
                 pool = filter_non_main_board(pool)
                 count = _save_limit_up_pool(conn, trade_date, pool)
+                _save_pool_pickle(trade_date, 'limit_up', pool)  # 归档原始 DF
                 _log(conn, trade_date, 'day_t_limit_up', count, 'success')
                 total += count
                 print(f"    涨停池: {count} 只")
@@ -165,6 +246,7 @@ def archive_day_t(trade_date: str = None):
         try:
             prev = ak.stock_zt_pool_previous_em(date=trade_date)
             if prev is not None and not prev.empty:
+                _save_pool_pickle(trade_date, 'prev_pool', prev)  # 归档原始 DF
                 from scanner import filter_non_main_board
                 prev = filter_non_main_board(prev)
                 # 涨幅2-9%为趋势候选
@@ -330,7 +412,7 @@ def _save_trend_stocks(conn, trade_date, df):
 
 
 def _save_market_snapshot(conn, trade_date):
-    """保存市场快照"""
+    """保存市场快照 + 各池原始 DataFrame pickle 归档"""
     import akshare as ak
     import pandas as _pd
 
@@ -345,19 +427,35 @@ def _save_market_snapshot(conn, trade_date):
     except Exception as e:
         print(f"  [archiver L312] failed: {e}", file=sys.stderr)
 
+    # 炸板池 — 保存原始 DF 供回测引擎 fallback
+    zb = None
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=trade_date)
         if zb is not None and not zb.empty:
             zhaban_count = len(zb)
+            _save_pool_pickle(trade_date, 'zhaban', zb)
     except Exception as e:
         print(f"  [archiver L319] failed: {e}", file=sys.stderr)
 
+    # 跌停/翘板池 — 保存原始 DF 供回测引擎 fallback
+    dt = None
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=trade_date)
         if dt is not None and not dt.empty:
             dieting_count = len(dt)
+            _save_pool_pickle(trade_date, 'dtqiaoban', dt)
     except Exception as e:
         print(f"  [archiver L326] failed: {e}", file=sys.stderr)
+
+    # 强势池 (趋势 tab 信号源) — 保存原始 DF 供回测引擎 fallback
+    strong_count = 0
+    try:
+        strong_df = ak.stock_zt_pool_strong_em(date=trade_date)
+        if strong_df is not None and not strong_df.empty:
+            strong_count = len(strong_df)
+            _save_pool_pickle(trade_date, 'strong', strong_df)
+    except Exception as e:
+        print(f"  [archiver strong] {trade_date} failed: {e}", file=sys.stderr)
 
     # 全市场涨跌比（采样方式）
     up_count, down_count = 0, 0

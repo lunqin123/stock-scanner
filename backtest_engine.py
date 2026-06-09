@@ -44,6 +44,15 @@ from scanner import (
 )
 from data_manager import save_backtest_result as _save_backtest_result
 
+# 本地归档 fallback (P1.3: 回测引擎从本地 pickle 读取历史池数据)
+try:
+    from archiver import _load_pool_pickle
+except ImportError:
+    _load_pool_pickle = None  # archiver 未安装时降级
+
+# 是否启用本地归档 fallback (默认启用, 服务器无 akshare 历史数据时从本地读)
+_LOCAL_FALLBACK_ENABLED = True
+
 # ═══════════════════════════════════════════
 #  Tab 常量
 # ═══════════════════════════════════════════
@@ -76,9 +85,10 @@ _SELF_FETCHING_TABS = {TAB_SECTOR}
 # 本地高性能环境可在导入后手动设 backtest_engine._SPOT_DISABLED = False 启用
 _SPOT_DISABLED = True
 
-# P1.2.1: 各 tab 的实际可用历史天数上限 (P1.2.1.1 修正: 经验值,aksahre 各 API 实际只返回最近 ~7 天数据)
-# 实测 20260530(7天前) 即返回 0 行,akshare 涨停/炸板/翘板/强势池都有"近期"窗口限制
-# 真实可用窗口建议: 5 天 (回测需要 D+2,所以 max_days=5 时实际有 ~3 天可交易)
+# P1.2.1: 各 tab 的实际可用历史天数上限
+# akshare API 窗口: ~7 天 (实测 20260530 即返回 0 行)
+# P1.3: 当本地 pickle 归档积累 >7 天数据后, 可上调此值
+# 临时值 7,等 archiver 积累 30 天后再改为 30
 TAB_MAX_HISTORY_DAYS = {
     TAB_LIMIT_UP: 7,
     TAB_REVERSAL: 7,
@@ -95,15 +105,43 @@ TAB_MAX_HISTORY_DAYS = {
 
 # ═══════════════════════════════════════════
 #  信号池获取函数 (P1.1 骨架: limit-up 和 reversal 可用,其他 TBD 待 P2)
+#  P1.3: 所有 fetcher 在 akshare 返回空时 fallback 读本地 pickle 归档
 # ═══════════════════════════════════════════
+
+def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.DataFrame:
+    """尝试从本地 pickle 归档加载池数据
+
+    当 akshare API 返回空(窗口限制/网络错误)时调用此函数,
+    从 archiver 每日保存的本地 pickle 中读取历史数据。
+
+    Args:
+        date_str: YYYYMMDD 信号日期
+        pool_type: 'prev_pool' | 'zhaban' | 'dtqiaoban' | 'strong'
+        cache_key: 2h 缓存键,命中后写入缓存避免重复读盘
+    Returns:
+        DataFrame or None
+    """
+    if not _LOCAL_FALLBACK_ENABLED or _load_pool_pickle is None:
+        return None
+    try:
+        df = _load_pool_pickle(date_str, pool_type)
+        if df is not None:
+            _cache_put(cache_key, df)  # 写入 2h 缓存,后续请求秒回
+            return df
+    except Exception:
+        pass
+    return None
 
 def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
     """涨停池: 上交易日涨停(带今日涨跌幅列)"""
     key = f"t1_prev_pool_{date_str}"
-    cached = _cache_get(key)
+    cached = _cached_pool_get(key)
     if cached is not None:
         return cached
     df = ak.stock_zt_pool_previous_em(date=date_str)
+    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
+        # P1.3: akshare ~7天窗口限制 → fallback 读本地 pickle
+        df = _try_local_fallback(date_str, 'prev_pool', key)
     if df is not None and not df.empty:
         _cache_put(key, df)
     return df
@@ -144,7 +182,7 @@ def _cached_pool_get(key: str):
 
 
 def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
-    """炸板池: 当日炸板"""
+    """炸板池: 当日炸板 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
     key = f"engine_zhaban_{date_str}"
     cached = _cached_pool_get(key)
     if cached is not None:
@@ -153,6 +191,8 @@ def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
         df = ak.stock_zt_pool_zbgc_em(date=date_str)
     except Exception:
         df = None
+    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
+        df = _try_local_fallback(date_str, 'zhaban', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
         _cache_put(key, df)
         return df
@@ -161,7 +201,7 @@ def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
 
 
 def _fetch_dtqiaoban_pool(date_str: str) -> pd.DataFrame:
-    """跌停/翘板池: 当日跌停"""
+    """跌停/翘板池: 当日跌停 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
     key = f"engine_dtqiaoban_{date_str}"
     cached = _cached_pool_get(key)
     if cached is not None:
@@ -170,6 +210,8 @@ def _fetch_dtqiaoban_pool(date_str: str) -> pd.DataFrame:
         df = ak.stock_zt_pool_dtgc_em(date=date_str)
     except Exception:
         df = None
+    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
+        df = _try_local_fallback(date_str, 'dtqiaoban', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
         _cache_put(key, df)
         return df
@@ -178,7 +220,7 @@ def _fetch_dtqiaoban_pool(date_str: str) -> pd.DataFrame:
 
 
 def _fetch_trend_pool(date_str: str) -> pd.DataFrame:
-    """强势/趋势池: 当日强势股"""
+    """强势/趋势池: 当日强势股 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
     key = f"engine_trend_{date_str}"
     cached = _cached_pool_get(key)
     if cached is not None:
@@ -187,6 +229,8 @@ def _fetch_trend_pool(date_str: str) -> pd.DataFrame:
         df = ak.stock_zt_pool_strong_em(date=date_str)
     except Exception:
         df = None
+    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
+        df = _try_local_fallback(date_str, 'strong', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
         _cache_put(key, df)
         return df
