@@ -36,6 +36,30 @@ def put(name, data):
         print(f"  [cache put] 写入失败 ({name}): {e}", file=sys.stderr)
 
 
+# ─── 持久化缓存 (无 TTL, 用于历史 OHLCV 等不变数据) ───
+
+def persistent_get(name):
+    """读取持久化缓存 (无 TTL 限制, 文件存在即有效)"""
+    path = os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl")
+    try:
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                return _pickle.load(f)
+    except Exception as e:
+        print(f"  [cache persistent_get] 读取失败 ({name}): {e}", file=sys.stderr)
+    return None
+
+
+def persistent_put(name, data):
+    """写入持久化缓存 (无 TTL)"""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl"), 'wb') as f:
+            _pickle.dump(data, f)
+    except Exception as e:
+        print(f"  [cache persistent_put] 写入失败 ({name}): {e}", file=sys.stderr)
+
+
 # ─── 每日缓存（日内持久化，避免重复扫描；按日期自动隔离） ───
 
 _CST = timezone(timedelta(hours=8))

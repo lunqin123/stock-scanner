@@ -17,7 +17,13 @@ import numpy as np
 import akshare as ak
 from datetime import datetime, timedelta
 from scanner import backtest_score_prev
-from cache import _last_trading_date, _is_trading_day, get as _cache_get, put as _cache_put, daily_get as _daily_get, daily_set as _daily_set, make_key
+from cache import (
+    _last_trading_date, _is_trading_day,
+    get as _cache_get, put as _cache_put,
+    persistent_get as _persistent_get, persistent_put as _persistent_put,
+    daily_get as _daily_get, daily_set as _daily_set, make_key,
+)
+from datetime import date as _date
 from data_manager import save_backtest_result as _save_backtest_result
 
 CAPITAL_DEFAULT = 30000
@@ -158,11 +164,18 @@ def _get_ohlcv_batch(code, dates):
     缓存 key 兼容 _get_daily_ohlcv，新旧混用无冲突。
     返回 {date_str: ohlcv_dict}，缺失日期不在结果中。
     """
+    today_str = _date.today().strftime('%Y%m%d')
     result = {}
     missing = []
     for d in dates:
         key = f"t1_ohlcv_{code}_{d}"
-        cached = _cache_get(key)
+        # 历史日期优先读持久化缓存 (无 TTL), 今天走 2h TTL
+        if d != today_str:
+            cached = _persistent_get(key)
+            if cached is None:
+                cached = _cache_get(key)  # fallback 2h 缓存
+        else:
+            cached = _cache_get(key)
         if cached is not None:
             if cached != '__NONE__':
                 result[d] = cached
@@ -179,8 +192,6 @@ def _get_ohlcv_batch(code, dates):
                 d = str(row.get('日期', '')).replace('-', '')
                 if d not in missing:
                     continue
-                # 腾讯源列: date/open/close/high/low/amount (无volume/turnover/change)
-                # 使用 .get() 容错缺失列
                 o = {'open': float(row['open']), 'close': float(row['close']),
                      'high': float(row['high']), 'low': float(row['low']),
                      'volume': int(row.get('volume', 0) or 0),
@@ -196,6 +207,8 @@ def _get_ohlcv_batch(code, dates):
                      'volume': int(row['成交量']), 'amount': float(row['成交额']),
                      'turnover': float(row['换手率']), 'change_pct': float(row['涨跌幅'])}
             _cache_put(f"t1_ohlcv_{code}_{d}", o)
+            if d != today_str:
+                _persistent_put(f"t1_ohlcv_{code}_{d}", o)
             result[d] = o
 
     # 腾讯源优先 (服务器东方财富被封, 腾讯正常)
@@ -212,6 +225,8 @@ def _get_ohlcv_batch(code, dates):
                 for d in missing:
                     if d not in result:
                         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
+                        if d != today_str:
+                            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
                 return result
             break
         except Exception:
@@ -227,6 +242,8 @@ def _get_ohlcv_batch(code, dates):
                 for d in missing:
                     if d not in result:
                         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
+                        if d != today_str:
+                            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
                 return result
             break
         except Exception:
@@ -234,6 +251,8 @@ def _get_ohlcv_batch(code, dates):
 
     for d in missing:
         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
+        if d != today_str:
+            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
     return result
 
 
