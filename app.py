@@ -764,7 +764,11 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
             'signals': signals, 'advice': advice, 'auction_check': auction_check, 'risk_score': risk_score,
         })
 
-    items = [x for x in items if x['risk_score'] >= 25]  # 过滤低分(权重调后总分缩水)
+    # 动态门槛: 只显示最高分60%以上的 (权重调整后自动适配)
+    if items:
+        top_score = max(x['risk_score'] for x in items)
+        threshold = max(10, top_score * 0.6)
+        items = [x for x in items if x['risk_score'] >= threshold]
     items.sort(key=lambda x: -x['risk_score'])
     return items[:10]
 
