@@ -765,10 +765,15 @@ def run_tab_backtest(
                     continue
 
                 signal_close = signal_ohlcv['close']
-                buyable = not _is_limit_open(buy_ohlcv, signal_close)
                 gap_pct = round((buy_ohlcv['open'] / signal_close - 1) * 100, 1)
+                # 买入过滤: 一字板排除; 跳空>5%高开出货陷阱
+                limit_open = _is_limit_open(buy_ohlcv, signal_close)
+                gap_trap = gap_pct > 5.0
+                buyable = not limit_open and not gap_trap
                 if not buyable:
                     unbuyable_count += 1
+                    if gap_trap:
+                        skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>5%高开陷阱'})
 
                 intraday = {
                     'buy_high': round(buy_ohlcv['high'], 2),
