@@ -407,6 +407,16 @@ def archive_day_t(trade_date: str = None):
     finally:
         conn.close()
 
+    # ── 自动调权: 收盘后归档完 → 跑全tab回测 → 更新权重 ──
+    if _is_after_close():
+        print("  [自动调权] 收盘后更新策略权重...")
+        try:
+            from weight_manager import compute_tab_weights
+            compute_tab_weights()
+            print("  [自动调权] 完成")
+        except Exception as e:
+            print(f"  [自动调权] 失败: {e}")
+
     print(f"[归档 Day T] 完成，共保存 {total} 条记录")
 
 
