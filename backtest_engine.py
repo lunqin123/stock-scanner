@@ -84,18 +84,37 @@ _SELF_FETCHING_TABS = {TAB_SECTOR}
 # 本地高性能环境可在导入后手动设 backtest_engine._SPOT_DISABLED = False 启用
 _SPOT_DISABLED = True
 
-# P1.2.1: 各 tab 的实际可用历史天数上限
-# akshare API 窗口: ~7 天 (实测 20260530 即返回 0 行)
-# P1.3: 当本地 pickle 归档积累 >7 天数据后, 可上调此值
-# 临时值 7,等 archiver 积累 30 天后再改为 30
-TAB_MAX_HISTORY_DAYS = {
-    TAB_LIMIT_UP: 7,
-    TAB_REVERSAL: 7,
-    TAB_TREND: 7,
-    TAB_ZHABAN: 7,
-    TAB_DTQIAOBAN: 7,
-    TAB_SECTOR: 7,
+# P1.3: 自动检测本地归档可用天数 (不再硬编码 7)
+# 每个 tab 的 pool_type 对应 archive_pools/ 中的 pickle 文件名前缀
+_TAB_POOL_TYPE = {
+    TAB_LIMIT_UP: 'limit_up',
+    TAB_REVERSAL: 'prev_pool',
+    TAB_TREND: 'strong',
+    TAB_ZHABAN: 'zhaban',
+    TAB_DTQIAOBAN: 'dtqiaoban',
+    TAB_SECTOR: 'limit_up',
 }
+
+
+def _detect_available_days(tab: str) -> int:
+    """扫描本地归档目录, 返回该 tab 实际可用的历史天数。
+
+    优先用本地 pickle 数量 (自动增长),
+    无归档时回退到 akshare 保守值 5。
+    """
+    try:
+        import os as _os
+        from archiver import _ARCHIVE_POOL_DIR
+        pool_type = _TAB_POOL_TYPE.get(tab, 'limit_up')
+        if not _os.path.exists(_ARCHIVE_POOL_DIR):
+            return 5
+        # 统计该 pool_type 的 pickle 文件数
+        prefix = f'{pool_type}_'
+        count = sum(1 for f in _os.listdir(_ARCHIVE_POOL_DIR)
+                    if f.startswith(prefix) and f.endswith('.pkl'))
+        return max(5, min(count, 60))  # 至少5天, 最多60天
+    except Exception:
+        return 5
 # P1.2.1.2: 重要发现 (2026-06-09 23:15 调试得出):
 # akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天), stock_zt_pool_zbgc_em/dtgc_em (~7-10天)
 # 实测 7 天前的 date 参数返回 0 行,不是抛异常而是"静默返回空"
@@ -622,10 +641,9 @@ def run_tab_backtest(
         }
 
     # ── 默认日期 ──
-    # P1.2.1: 按 tab 限制 max_days,避免触发 akshare 30 天边界错误
-    tab_max = TAB_MAX_HISTORY_DAYS.get(tab, 30)
+    # 自动检测本地归档可用天数 (超7天时无需手动改配置)
+    tab_max = _detect_available_days(tab)
     if max_days > tab_max:
-        print(f"  [警告] tab={tab} max_days {max_days} 超出实际可用 {tab_max},自动截断", file=sys.stderr)
         max_days = tab_max
 
     if end_date is None:
