@@ -337,9 +337,13 @@ def compute_tab_weights(force_refresh: bool = False):
     except Exception:
         all_data = {}
 
+    # tab → (中文名, 推荐TOP-N)
     tabs_cn = {
-        'limit-up': '涨停', 'trend': '趋势', 'zhaban': '炸板',
-        'dtqiaoban': '翘板', 'reversal': '反转',
+        'limit-up': ('涨停', 3),
+        'trend': ('趋势', 1),
+        'zhaban': ('炸板', 3),
+        'dtqiaoban': ('翘板', 1),
+        'reversal': ('反转', 1),
     }
 
     # 检查哪些 tab 数据不足, 需要拟合
@@ -359,7 +363,8 @@ def compute_tab_weights(force_refresh: bool = False):
             # 只对有缓存的日期跑一次(30天回测结果会被 daily cache 缓存)
             for tab in need_bootstrap:
                 try:
-                    r = run_tab_backtest(tab, max_days=30, top_n=3, use_cache=False)
+                    top_n = tabs_cn[tab][1]  # 各 tab 的最优 TOP-N
+                    r = run_tab_backtest(tab, max_days=30, top_n=top_n, use_cache=False)
                     s = r.get('summary', {})
                     if s.get('trade_count', 0) > 0:
                         save_tab_performance(tab, s)
@@ -375,7 +380,7 @@ def compute_tab_weights(force_refresh: bool = False):
             print(f"  [tab权重] 拟合失败: {e}", file=sys.stderr)
 
     result = []
-    for tab, cn_name in tabs_cn.items():
+    for tab, (cn_name, _) in tabs_cn.items():
         perf_list = all_data.get(tab, [])
         # 取最近5条记录, 按交易笔数加权平均 (每笔记录可能是多天回测的汇总)
         recent = perf_list[-_TAB_PERF_WINDOW:] if perf_list else []
