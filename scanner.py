@@ -1700,7 +1700,7 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
         return df
 
     # 默认权重 (可被 weights 参数覆盖)
-    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3}
+    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -1771,14 +1771,107 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
 
     # 写入因子列 (供回测相关性分析)
     df = df.copy()
+    # 6. MA回归因子 (0-10): 偏离均线越远越容易回调
+    f_ma = pd.Series(5.0, index=df.index)
+    if w.get('ma_rev', 0) > 0:  # 权重>0才拉取MA数据(避免无谓API调用)
+        code_col_ma = '代码' if '代码' in df.columns else df.columns[1]
+        try:
+            f_ma = _calc_ma_regression(df, code_col=code_col_ma)
+        except Exception:
+            pass
+
+    total = (f_chg * w['chg'] + f_turnover * w['turnover'] +
+             f_amount * w['amount'] + f_vr * w['vol_ratio'] +
+             f_nh * w['new_high'] + f_ma * w.get('ma_rev', 0))
+
+    df = df.copy()
     df['动量评分'] = total.round(1)
     df['trend_chg'] = (f_chg * w['chg']).round(1)
     df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
     df['trend_amount'] = (f_amount * w['amount']).round(1)
     df['trend_vr'] = (f_vr * w['vol_ratio']).round(1)
     df['trend_nh'] = (f_nh * w['new_high']).round(1)
+    df['trend_ma'] = (f_ma * w.get('ma_rev', 0)).round(1)
 
     return df
+
+
+def _calc_ma_regression(df: pd.DataFrame, code_col: str = None) -> pd.Series:
+    """计算MA回归因子: 当前价 vs 5日/10日均线的偏离度
+
+    偏离越小(贴近均线) → 分数越高 (趋势健康)
+    偏离越大(远离均线) → 分数越低 (超买回调风险)
+
+    返回 0-10 的 Series
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import akshare as ak
+    from datetime import datetime, timedelta
+
+    if df is None or df.empty:
+        return pd.Series(0.0, index=df.index)
+
+    code_col = code_col or ('代码' if '代码' in df.columns else df.columns[1])
+    codes = []
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip().zfill(6)
+        if len(code) == 6:
+            codes.append(code)
+
+    if not codes:
+        return pd.Series(0.0, index=df.index)
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    start = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+    prices = {}
+
+    def _fetch(code):
+        prefix = 'sh' if code.startswith('6') else 'sz'
+        try:
+            hist = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}',
+                                         start_date=start, end_date=today)
+            if hist is not None and not hist.empty and len(hist) >= 5:
+                closes = hist['close'].astype(float).values
+                return code, closes
+        except Exception:
+            pass
+        return code, None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_fetch, c): c for c in codes}
+        for f in as_completed(futures):
+            code, closes = f.result()
+            if closes is not None and len(closes) >= 5:
+                prices[code] = closes
+
+    scores = pd.Series(0.0, index=df.index)
+    for idx in df.index:
+        code = str(df.loc[idx, code_col]).strip().zfill(6)
+        closes = prices.get(code)
+        if closes is None or len(closes) < 5:
+            scores[idx] = 5.0  # 无数据给中性分
+            continue
+
+        current = closes[-1]
+        ma5 = closes[-5:].mean()
+        ma10 = closes[-10:].mean() if len(closes) >= 10 else ma5
+
+        # 偏离度: (当前价/MA - 1) * 100
+        dev5 = (current / ma5 - 1) * 100
+        dev10 = (current / ma10 - 1) * 100
+        dev = max(dev5, dev10)  # 取最大偏离
+
+        # 评分: 偏离<2%→满分; 2-5%→递减; 5-8%→低分; >8%→0
+        if dev <= 2:
+            scores[idx] = 10.0
+        elif dev <= 5:
+            scores[idx] = 10 - (dev - 2) * 2     # 2%→10, 5%→4
+        elif dev <= 8:
+            scores[idx] = max(0, 4 - (dev - 5))   # 5%→4, 8%→1
+        else:
+            scores[idx] = 0
+
+    return scores.round(1)
 
 
 def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):

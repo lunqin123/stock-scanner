@@ -438,11 +438,12 @@ TREND_DEFAULT_WEIGHTS = {
     'amount': 30,    # 成交额分
     'vol_ratio': 5,  # 量比加分
     'new_high': 3,   # 新高加分
+    'ma_rev': 0,     # MA回归分 (IC无效, 暂关闭)
 }
 
 TREND_FACTOR_NAMES = {
     'chg': '涨幅', 'turnover': '换手', 'amount': '成交额',
-    'vol_ratio': '量比', 'new_high': '新高',
+    'vol_ratio': '量比', 'new_high': '新高', 'ma_rev': '均线',
 }
 
 
