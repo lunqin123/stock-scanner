@@ -1125,7 +1125,7 @@ function renderT1BacktestPanel(data) {
                 + '<span>盈亏比 <b>' + (sum.plr||0).toFixed(2) + '</b></span>'
                 + '<span>EV <b style="color:' + ((sum.ev||0) >0?'#ef4444':'#22c55e') + '">' + ((sum.ev||0) >=0?'+':'') + (sum.ev||0).toFixed(2) + '%</b></span>'
                 + '</div>'
-                + (cmp.unbuyable_count ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">因浬停开盘无法买入: ' + cmp.unbuyable_count + ' 笔</div>' : '')
+                + (cmp.unbuyable_count ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">涨停开盘无法买入: ' + cmp.unbuyable_count + ' 笔</div>' : '')
                 + '</div>';
         }
         html += _cmpCard('开盘买 (D+1 开盘 -> D+2 开盘)', ob, '#3b82f6');
