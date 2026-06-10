@@ -316,87 +316,103 @@ def save_tab_performance(tab: str, summary: dict):
         print(f"  [tab_perf] 保存失败: {e}", file=sys.stderr)
 
 
-def compute_tab_weights():
-    """基于各 tab 滚动胜率+EV 计算推荐仓位权重
+def compute_tab_weights(force_refresh: bool = False):
+    """基于全量历史回测胜率+EV 计算推荐仓位权重
+
+    优先使用已保存的 tab 表现数据(累积30天);
+    数据不足时自动触发全量历史回测(30天)来拟合权重。
 
     规则:
-    - 滚动5日胜率>=50% 且 EV>0 → 权重+1档
-    - 胜率>=40% 且 EV>0 → 权重中性
-    - EV<0 或 胜率<40% → 权重-1档
-    - 无数据 → 默认权重
+    - 胜率>=50% 且 EV>0 → 推荐重仓
+    - 胜率>=40% 且 EV>0 → 中性仓位
+    - EV>0 但胜率<40% → 轻仓试探
+    - EV<0 → 建议观望
 
     Returns: [{tab, name_cn, weight, win_rate, ev, trades, label, color}]
     """
+    # 读取已保存的 tab 表现
     try:
         with open(_TAB_PERF_FILE, 'r', encoding='utf-8') as f:
             all_data = json.load(f)
     except Exception:
         all_data = {}
 
-    # 板块是行业级策略(非个股), 不参与个股仓位权重
     tabs_cn = {
         'limit-up': '涨停', 'trend': '趋势', 'zhaban': '炸板',
         'dtqiaoban': '翘板', 'reversal': '反转',
     }
 
+    # 检查哪些 tab 数据不足, 需要拟合
+    need_bootstrap = []
+    for tab in tabs_cn:
+        perf_list = all_data.get(tab, [])
+        total_trades = sum(p.get('trades', 0) for p in perf_list[-_TAB_PERF_WINDOW:])
+        if total_trades < 3 and force_refresh is False:
+            need_bootstrap.append(tab)
+
+    # 数据不足 → 跑全量历史回测拟合
+    if need_bootstrap:
+        print(f"  [tab权重] {len(need_bootstrap)}个tab数据不足, 跑30天回测拟合: {need_bootstrap}",
+              file=sys.stderr)
+        try:
+            from backtest_engine import run_tab_backtest
+            # 只对有缓存的日期跑一次(30天回测结果会被 daily cache 缓存)
+            for tab in need_bootstrap:
+                try:
+                    r = run_tab_backtest(tab, max_days=30, top_n=3, use_cache=False)
+                    s = r.get('summary', {})
+                    if s.get('trade_count', 0) > 0:
+                        save_tab_performance(tab, s)
+                except Exception as e:
+                    print(f"    {tab} 回测失败: {e}", file=sys.stderr)
+            # 重新加载
+            try:
+                with open(_TAB_PERF_FILE, 'r', encoding='utf-8') as f:
+                    all_data = json.load(f)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"  [tab权重] 拟合失败: {e}", file=sys.stderr)
+
     result = []
     for tab, cn_name in tabs_cn.items():
         perf_list = all_data.get(tab, [])
+        # 取最近5条记录, 按交易笔数加权平均 (每笔记录可能是多天回测的汇总)
         recent = perf_list[-_TAB_PERF_WINDOW:] if perf_list else []
-
-        if len(recent) >= 3:
-            avg_wr = sum(p['win_rate'] for p in recent) / len(recent)
-            avg_ev = sum(p['ev'] for p in recent) / len(recent)
-            total_trades = sum(p['trades'] for p in recent)
-        elif recent:
-            avg_wr = recent[-1]['win_rate']
-            avg_ev = recent[-1]['ev']
-            total_trades = recent[-1]['trades']
+        if recent:
+            total_trades = sum(p.get('trades', 0) for p in recent)
+            if total_trades > 0:
+                avg_wr = sum(p['win_rate'] * p.get('trades', 0) for p in recent) / total_trades
+                avg_ev = sum(p['ev'] * p.get('trades', 0) for p in recent) / total_trades
+            else:
+                avg_wr = 0; avg_ev = 0
         else:
-            avg_wr = 0
-            avg_ev = 0
-            total_trades = 0
+            avg_wr = 0; avg_ev = 0; total_trades = 0
 
-        # 权重分档
         if total_trades == 0:
-            weight = 0.5
-            label = '数据不足'
-            color = '#94a3b8'
+            weight = 0.5; label = '无交易'; color = '#94a3b8'
         elif avg_wr >= 50 and avg_ev > 0:
-            weight = 1.2
-            label = '推荐重仓'
-            color = '#ef4444'
+            weight = 1.2; label = '推荐重仓'; color = '#ef4444'
         elif avg_wr >= 40 and avg_ev > 0:
-            weight = 1.0
-            label = '中性仓位'
-            color = '#f59e0b'
+            weight = 1.0; label = '中性仓位'; color = '#f59e0b'
         elif avg_ev > 0:
-            weight = 0.8
-            label = '轻仓试探'
-            color = '#fbbf24'
+            weight = 0.8; label = '轻仓试探'; color = '#fbbf24'
         else:
-            weight = 0.5
-            label = '建议观望'
-            color = '#22c55e'
+            weight = 0.5; label = '建议观望'; color = '#22c55e'
 
         result.append({
-            'tab': tab,
-            'name_cn': cn_name,
+            'tab': tab, 'name_cn': cn_name,
             'weight': round(weight, 1),
-            'win_rate': round(avg_wr, 1),
-            'ev': round(avg_ev, 2),
-            'trades': total_trades,
-            'days': len(recent),
-            'label': label,
-            'color': color,
+            'win_rate': round(avg_wr, 1), 'ev': round(avg_ev, 2),
+            'trades': total_trades, 'days': len(recent), 'total_trades': total_trades,
+            'label': label, 'color': color,
         })
 
-    # 归一化：所有权重加总=6(每个tab基准1.0), 超出部分从高权重tab扣除
+    # 归一化分配比例
     total = sum(r['weight'] for r in result)
     if total > 0:
-        target = len(result)
-        scale = target / total
+        scale = len(result) / total
         for r in result:
-            r['allocation_pct'] = round(r['weight'] * scale / target * 100, 0)
+            r['allocation_pct'] = round(r['weight'] * scale / len(result) * 100, 0)
 
     return result
