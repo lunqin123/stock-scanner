@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from cache import (
     _is_trading_day,
     get as _cache_get, put as _cache_put,
-    daily_get as _daily_get, daily_set as _daily_set,
+    persistent_get as _daily_get, persistent_put as _daily_set,
     make_key,
 )
 from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT
