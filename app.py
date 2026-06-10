@@ -846,51 +846,38 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
     except Exception as e:
         print(f"  [zhaban] 今日涨停行业拉取失败: {e}", file=sys.stderr)
 
+    # 用回测引擎评分 (与回测31.2%胜率一致)
+    from scanner import _score_reversal as backtest_score_reversal
+    scored = backtest_score_reversal(pullback, today_str=today)
+    if scored is None or scored.empty:
+        return {"ok": True, "items": []}
+    pullback = scored
+
     items = []
     for _, row in pullback.iterrows():
-        code = str(row[code_col]).strip().zfill(6)
-        name = str(row[name_col])
-        chg = round(float(row['今日涨幅']), 1)
-        price = float(row[price_col])
-        to = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
-        ind = str(row[ind_col]) if ind_col and pd.notna(row[ind_col]) else ''
-        raw = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
-        lb = int(raw.split('/')[1]) if '/' in raw else 0
-
-        # 评分（数据驱动：高换手+多连板=反转主力）
-        s = 0
-        if to > 25: s += 40
-        elif 15 <= to <= 25: s += 32
-        elif 8 <= to < 15: s += 20
-        elif 5 <= to < 8: s += 14
-        elif 3 <= to < 5: s += 8
-        elif 1 <= to < 3: s += 4
-        else: s += 0
+        code = str(row.get('代码', row[code_col])).strip().zfill(6)
+        name = str(row.get('名称', row[name_col]))
+        chg = round(float(row.get('今日涨幅', row[chg_col])), 1)
+        price = float(row.get('最新价', row[price_col]))
+        to = float(row.get('换手率', row[turnover_col])) if pd.notna(row.get('换手率', row.get(turnover_col, 0))) else 0
+        ind = str(row.get('所属行业', row.get(ind_col, ''))) if ind_col else ''
+        lb = 0  # _score_reversal 不输出连板数, 用0占位
+        s = float(row.get('反转评分', 0))
 
         if lb == 3: s += 35
         elif lb == 2: s += 28
         elif lb >= 4: s += 15
-        elif lb == 1: s += 10
-        else: s += 8
-
-        if -3 <= chg <= 0.5: s += 15
-        elif -5 <= chg < -3: s += 12
-        else: s += 8
-
-        s += 10 if ind in hot_inds else 5
-
-        if s >= 85: adv = '⭐ 高换手+多连板，反包潜力大'
+        # 建议 (基于回测评分)
+        if s >= 80: adv = '⭐ 高换手+多连板，反包潜力大'
         elif s >= 65: adv = '加入自选，竞价确认方向'
         elif s >= 45: adv = '观望，等放量信号'
         else: adv = '暂不参与'
 
-        # ── 竞价条件（具体到数字） ──
+        # 竞价条件
         auction_parts = []
-        # 1) 高开要求（按反转分）
         if s >= 85: auction_parts.append('高开3-5%')
         elif s >= 65: auction_parts.append('高开1-3%')
         else: auction_parts.append('平开或高开1%内')
-        # 2) 竞价量要求（按换手）
         if to > 25: auction_parts.append('竞价量>上交易日5%')
         elif to > 15: auction_parts.append('竞价量>上交易日3%')
         elif to > 5: auction_parts.append('竞价量>上交易日2%')
@@ -916,6 +903,7 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
             'code': code, 'name': name, 'url': f'https://stockpage.10jqka.com.cn/{code}/',
             'change_pct': chg, 'price': price, 'turnover': round(to, 1),
             'consecutive': lb, 'industry': ind,
+            'score': s, 'composite_score': s, 'total_score': s,
             'signals': tags, 'advice': adv, 'auction_check': '；'.join(auction_parts),
             'risk_score': s,
         })
