@@ -107,9 +107,6 @@ const PAGES = {
     'scan-zhaban':  { title: '💥 炸板分析',   api: '/api/scan/zhaban/cards',  textApi: '/api/scan/zhaban' },
     'scan-reversal':{title:'🔄 反转扫描',   api: '/api/scan/reversal/cards',textApi: '/api/scan/reversal' },
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
-    'indicators':   { title: '🏆 龙虎榜分析', api: '/api/indicators/cards', textApi: '/api/indicators', streamApi: '/api/indicators/stream' },
-    'community':    { title: '💬 舆情监测',   api: '/api/community/cards', textApi: '/api/community', streamApi: '/api/community/stream' },
-    'sentiment':    { title: '🌡️ 市场情绪',   api: '/api/sentiment/cards', textApi: '/api/sentiment' },
     'backtest':     { title: '⏱️ 回测追踪',   api: '/api/backtest/dashboard', textApi: '/api/backtest' },
 };
 
@@ -547,7 +544,6 @@ async function loadCardView(output, pageKey, apiUrl) {
                     { key: 'zhaban', label: '炸板', days: 30 },
                     { key: 'dtqiaoban', label: '翘板', days: 30 },
                     { key: 'reversal', label: '反转', days: 30 },
-                    { key: 'sector', label: '板块', days: 30 },
                 ];
                 // 趋势66.7%胜率+正EV → 默认TOP1; 涨停/翘板TOP1更稳
                 var defaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
