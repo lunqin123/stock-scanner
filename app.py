@@ -596,36 +596,33 @@ def _fetch_trend_data(today, principal):
     _saved = _sys.stderr
     _sys.stderr = getattr(_sys, '__stderr__', _sys.stderr)
 
-    # 1. 拉取上交易日涨停数据
-    prev = pd.DataFrame()
-    for attempt in [today, None]:
-        try:
-            if attempt is None:
-                from cache import _last_trading_date
-                attempt = _last_trading_date()
-            prev = ak.stock_zt_pool_previous_em(date=attempt)
-            if not prev.empty: break
-        except: continue
-
-    if prev.empty:
+    # 1. 拉取当日强势池 (与回测引擎对齐: stock_zt_pool_strong_em, 66.7%胜率已验证)
+    strong = pd.DataFrame()
+    try:
+        strong = ak.stock_zt_pool_strong_em(date=today)
+    except:
+        pass
+    if strong.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
 
-    # 2. 列索引（名称匹配优先，硬编码 fallback 加长度保护）
+    # 2. 列索引
     cols = {
-        'code': '代码' if '代码' in prev.columns else (prev.columns[1] if len(prev.columns) > 1 else prev.columns[0]),
-        'name': '名称' if '名称' in prev.columns else (prev.columns[2] if len(prev.columns) > 2 else prev.columns[1]),
-        'chg': '涨跌幅' if '涨跌幅' in prev.columns else (prev.columns[3] if len(prev.columns) > 3 else prev.columns[0]),
-        'price': prev.columns[4] if len(prev.columns) > 4 else prev.columns[0],
-        'vol': prev.columns[6] if len(prev.columns) > 6 else prev.columns[0],
-        'turnover': '换手率' if '换手率' in prev.columns else (prev.columns[9] if len(prev.columns) > 9 else None),
-        'seal_stat': prev.columns[14] if len(prev.columns) > 14 else None,
-        'industry': prev.columns[15] if len(prev.columns) > 15 else None,
+        'code': '代码' if '代码' in strong.columns else (strong.columns[1] if len(strong.columns) > 1 else strong.columns[0]),
+        'name': '名称' if '名称' in strong.columns else (strong.columns[2] if len(strong.columns) > 2 else strong.columns[1]),
+        'chg': '涨跌幅' if '涨跌幅' in strong.columns else (strong.columns[3] if len(strong.columns) > 3 else strong.columns[0]),
+        'price': '最新价' if '最新价' in strong.columns else (strong.columns[4] if len(strong.columns) > 4 else strong.columns[0]),
+        'vol': strong.columns[6] if len(strong.columns) > 6 else strong.columns[0],
+        'turnover': '换手率' if '换手率' in strong.columns else (strong.columns[9] if len(strong.columns) > 9 else None),
+        'industry': '所属行业' if '所属行业' in strong.columns else (strong.columns[15] if len(strong.columns) > 15 else None),
     }
-    prev['涨幅'] = prev[cols['chg']].astype(float)
+    strong['涨幅'] = strong[cols['chg']].astype(float)
 
-    # 3. 过滤 ST/科创/北交/创业板 + 本金
-    prev = filter_non_main_board(prev)
-    prev = _principal_filter(prev, principal)
+    # 3. 用回测引擎的 _score_trend (含过滤+评分, 与66.7%胜率一致)
+    from backtest_engine import _score_trend as backtest_score_trend
+    strong = backtest_score_trend(strong, today)
+    if strong is None or strong.empty:
+        _sys.stderr = _saved; return None, None, set(), set(), {}, {}
+    prev = strong
 
     # 4. 风控数据：炸板池 + 今日热门板块（分开 try 防互相影响）
     zhaban_codes = set()
@@ -675,7 +672,6 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
     import pandas as pd
     code_col, name_col = cols['code'], cols['name']
     price_col, turnover_col = cols['price'], cols['turnover']
-    vol_col, seal_stat_col = cols['vol'], cols['seal_stat']
     industry_col = cols['industry']
     items = []
     for _, row in trend.iterrows():
@@ -683,49 +679,25 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
         chg = round(float(row['涨幅']), 1)
         price = float(row[price_col])
         turnover = float(row[turnover_col]) if pd.notna(row[turnover_col]) else 0
-        volume = float(row[vol_col]) if pd.notna(row[vol_col]) else 0
+        # 成交额(强势池有'成交额'列)
+        amount_col = '成交额' if '成交额' in trend.columns else None
+        volume = float(row.get(amount_col, 0) or 0) if amount_col else 0
         industry = str(row[industry_col]) if industry_col and pd.notna(row[industry_col]) else ''
-        seal_stat = str(row[seal_stat_col]) if seal_stat_col and pd.notna(row[seal_stat_col]) else ''
-        consecutive = 0
-        if '/' in seal_stat:
-            try: consecutive = int(seal_stat.split('/')[1])
-            except: pass
 
-        # 数据驱动评分：回测显示低涨幅(2-4%)+中换手(5-15%)次日表现最好
-        score = 25  # 基础分
+        # 使用回测引擎的 _score_trend 动量评分 (与66.7%胜率一致)
+        momentum_score = float(row.get('动量评分', 0))
+
         risk_tags = []
-
-        # 涨幅评分(0-25): 低涨幅=更好延续性
-        if 2 <= chg <= 4:       score += 25; signals_prefix = "温和延续"
-        elif 4 < chg <= 6:      score += 15; signals_prefix = "量价齐升"
-        else:                   score += 5;  signals_prefix = "强势续涨"
-
-        # 换手评分(0-25): 5-15%最佳博弈区间
-        if 5 <= turnover <= 15:       score += 25
-        elif 3 <= turnover < 5:       score += 15
-        elif 15 < turnover <= 20:     score += 15
-        elif 1 <= turnover < 3:       score += 8
-        else:                         score += 5
-
-        # 板块支撑(0-10)
-        if industry and hot_industries and industry in hot_industries: score += 10
-
-        # 风险扣分
         if code in zhaban_codes:
-            score -= 10; risk_tags.append("⚠️ 上交易日炸板")
-        if consecutive >= 3 and chg < 5:
-            score -= 8; risk_tags.append("⚠️ 高位缩量")
+            risk_tags.append("⚠️ 上交易日炸板")
         if turnover > 25:
-            score -= 6; risk_tags.append("⚠️ 换手过高")
-        if industry and hot_industries and industry not in hot_industries:
-            score -= 3; risk_tags.append("板块退潮")
+            risk_tags.append("⚠️ 换手过高")
 
-        risk_score = max(0, min(100, score))
-
+        risk_score = max(0, min(100, momentum_score))
+        signals_prefix = "动量趋势"
         signals = [signals_prefix]
         if turnover > 15: signals.append("高换手")
         elif turnover > 8: signals.append("放量健康")
-        if consecutive >= 2: signals.append(f"{consecutive}连涨")
 
         # ── 量比(近5日涨停日均量对比) ──
         if industry_col or 'code' in cols:
@@ -777,7 +749,6 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
         else:
             auction_parts.append('板块退潮谨慎')
         if code in zhaban_codes: auction_parts.append('上交易日炸板不破上交易日最低')
-        if consecutive >= 3 and chg < 5: auction_parts.append('高位谨慎不追')
         if turnover > 25: auction_parts.append('换手过高警惕分歧')
         if 2 <= chg <= 4: auction_parts.append('低涨幅延续')
         auction_check = '；'.join(auction_parts)
@@ -786,9 +757,10 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
             'code': code, 'name': str(row[name_col]),
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
             'change_pct': chg, 'price': price, 'turnover': round(turnover, 1),
-            'volume': round(volume / 1e8, 2) if volume > 1e8 else round(volume / 1e4, 0),
-            'volume_unit': '亿' if volume > 1e8 else '万',
-            'industry': industry, 'consecutive': consecutive,
+            'volume': round(volume / 1e8, 2) if volume > 1e8 else round(volume / 1e4, 0) if volume > 0 else 0,
+            'volume_unit': '亿' if volume > 1e8 else '万' if volume > 0 else '',
+            'industry': industry, 'consecutive': 0,
+            'composite_score': risk_score, 'total_score': risk_score,
             'signals': signals, 'advice': advice, 'auction_check': auction_check, 'risk_score': risk_score,
         })
 
