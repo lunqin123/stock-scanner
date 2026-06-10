@@ -505,6 +505,8 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.02):
         lines.append(f"  {arrow} {REV_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
 
     save_reversal_weights(new_weights)
+    for f, corr in corrs.items():
+        save_weight_history('reversal', f, current[f], new_weights[f], corr)
     return new_weights, '\n'.join(lines)
 
 
@@ -584,6 +586,8 @@ def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.02):
         lo = -defaults[f]; hi = defaults[f] * 2.0
         new_weights[f] = round(max(lo, min(hi, new_val)), 1)
     _save_tab_weights(tab, new_weights)
+    for f, corr in corrs.items():
+        save_weight_history(tab, f, current[f], new_weights[f], corr)
     return new_weights, ''
 
 
@@ -683,6 +687,8 @@ def adjust_trend_weights_from_backtest(records: list, lr: float = 0.02):
         lines.append(f"  {arrow} {TREND_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
 
     save_trend_weights(new_weights)
+    for f, corr in corrs.items():
+        save_weight_history('trend', f, current[f], new_weights[f], corr)
     return new_weights, '\n'.join(lines)
 
 
@@ -699,3 +705,127 @@ def get_trend_weight_summary() -> dict:
         ],
         'total': sum(weights.values()),
     }
+
+
+# ═══════════════════════════════════════════
+#  统一权重查询 + 调权历史 (P6: 回测UI重构)
+# ═══════════════════════════════════════════
+
+_WEIGHT_HISTORY_FILE = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "stock_scanner_cache", "weight_history.jsonl"
+)
+
+
+def save_weight_history(tab: str, factor: str, old_val: float, new_val: float, corr: float):
+    """每次调权记录一条 JSONL"""
+    try:
+        os.makedirs(os.path.dirname(_WEIGHT_HISTORY_FILE), exist_ok=True)
+        entry = {
+            'date': date.today().strftime('%Y-%m-%d'),
+            'tab': tab, 'factor': factor,
+            'old': round(old_val, 2), 'new': round(new_val, 2),
+            'delta': round(new_val - old_val, 2),
+            'corr': round(corr, 3),
+            'arrow': '↑' if new_val > old_val else ('↓' if new_val < old_val else '→'),
+        }
+        with open(_WEIGHT_HISTORY_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
+def get_weight_history(tab: str, days: int = 30) -> list:
+    """读取近 N 天该 tab 的调权历史"""
+    if not os.path.exists(_WEIGHT_HISTORY_FILE):
+        return []
+    cutoff = (date.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    out = []
+    try:
+        with open(_WEIGHT_HISTORY_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                    if e.get('tab') == tab and e.get('date', '') >= cutoff:
+                        out.append(e)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+def _plan_a_summary() -> dict:
+    """limit-up tab 因子权重摘要 (plan_a 9因子)"""
+    w = load_weights()
+    default = DEFAULT_WEIGHTS
+    factors = []
+    for k in ['seal', 'tech', 'sector_res', 'sector_mom', 'history', 'money',
+              'buyability', 'stock_sentiment', 'principal']:
+        factors.append({
+            'key': k,
+            'name': {'seal': '封板', 'tech': '技术', 'sector_res': '板块共振',
+                     'sector_mom': '板块动量', 'history': '历史', 'money': '资金',
+                     'buyability': '可买性', 'stock_sentiment': '情绪', 'principal': '本金'}.get(k, k),
+            'current': round(w.get(f'{k}_score' if k != 'sector_res' and k != 'sector_mom' else k, w.get(k, 0)), 1),
+            'default': round(default.get(f'{k}_score', default.get(k, 0)), 1),
+        })
+    df = {k: round(v, 1) for k, v in w.items()}
+    return {
+        'factors': factors,
+        'total': round(sum(w.values()), 1),
+        'defaults': default,
+    }
+
+
+def _tab_factor_summary(tab: str) -> dict:
+    """zhaban/dtqiaoban 的因子权重摘要"""
+    defaults = DEFAULTS_MAP.get(tab, {})
+    names = NAMES_MAP.get(tab, {})
+    current = _load_tab_weights(tab)
+    return {
+        'factors': [
+            {'key': k, 'name': names.get(k, k),
+             'current': round(current.get(k, defaults[k]), 1),
+             'default': round(defaults[k], 1),
+             'delta': round(current.get(k, defaults[k]) - defaults[k], 1)}
+            for k in defaults
+        ],
+        'total': round(sum(current.values()), 1),
+    }
+
+
+def _reversal_summary() -> dict:
+    """反转因子权重摘要"""
+    defaults = REV_DEFAULT_WEIGHTS
+    names = REV_FACTOR_NAMES
+    current = load_reversal_weights()
+    return {
+        'factors': [
+            {'key': k, 'name': names.get(k, k),
+             'current': round(current.get(k, defaults[k]), 1),
+             'default': round(defaults[k], 1),
+             'delta': round(current.get(k, defaults[k]) - defaults[k], 1)}
+            for k in defaults
+        ],
+        'total': round(sum(current.values()), 1),
+    }
+
+
+def get_tab_weight_summary(tab: str) -> dict:
+    """统一入口: 返回各tab的因子权重摘要 + 调权历史"""
+    if tab == 'trend':
+        s = get_trend_weight_summary()
+        s['factors'] = [{'key': f['key'], 'name': f['name'],
+                         'current': f['current'], 'default': f['default'],
+                         'delta': f['delta']} for f in s['factors']]
+    elif tab == 'reversal':
+        s = _reversal_summary()
+    elif tab in ('zhaban', 'dtqiaoban'):
+        s = _tab_factor_summary(tab)
+    elif tab == 'limit-up':
+        s = _plan_a_summary()
+    else:
+        return {'factors': [], 'total': 0, 'error': f'未知 tab: {tab}'}
+    s['history'] = get_weight_history(tab)
+    return s

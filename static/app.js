@@ -14,7 +14,7 @@ const _dom = {
 };
 
 // P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
-let _btTab = localStorage.getItem('btTab') || 'limit-up';
+let _btTab = localStorage.getItem('btTab') || 'trend';  // 默认趋势(52.2%胜率)
 // 各 tab 推荐 TOP-N: 趋势66.7%/翘板60% → TOP1; 涨停→TOP3
 const _tabDefaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 3;
@@ -26,31 +26,61 @@ function _saveBacktestParams() {
     localStorage.setItem('btCapital', _btCapital);
 }
 
+// P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存，切回秒显示
+var _btCache = {};
+
+function _btCacheKey(tab, days, topN, capital) {
+    return tab + '_' + days + '_' + topN + '_' + capital;
+}
+
+async function loadBacktestTab(tab, days, topN, capital) {
+    _btTab = tab; _btTopN = topN; _btCapital = capital;
+    _saveBacktestParams();
+    var contentEl = document.getElementById('btTabContent');
+    if (!contentEl) return;
+    contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
+
+    var key = _btCacheKey(tab, days, topN, capital);
+    if (_btCache[key]) {
+        contentEl.innerHTML = _btCache[key];
+        return;
+    }
+
+    try {
+        var ctrl = new AbortController();
+        var tid = setTimeout(function() { ctrl.abort(); }, 60000);
+        var resp = await fetch('/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital, { signal: ctrl.signal });
+        clearTimeout(tid);
+        var data = await resp.json();
+        var html = renderBacktestTabFull(data);
+        _btCache[key] = html;
+        contentEl.innerHTML = html;
+    } catch (e) {
+        var msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
+        contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
+    }
+}
+
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
     _btTab = tab;
-    // 切换 tab 时自动应用该 tab 的推荐 TOP-N
     var recTopN = _tabDefaultTopN[tab] || 3;
     if (_btTopN !== recTopN) { _btTopN = recTopN; _btCapital = _btTopN * 30000; }
     _saveBacktestParams();
-    // 更新 UI 控件
     var topSel = document.getElementById('btTopN');
     var capInput = document.getElementById('btCapital');
     if (topSel) topSel.value = _btTopN;
     if (capInput) capInput.value = _btCapital;
-    const contentEl = document.getElementById('btTabContent');
-    if (!contentEl) return;
-    contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
     // 更新 tab 按钮高亮
-    const bar = document.getElementById('btTabBar');
+    var bar = document.getElementById('btTabBar');
     if (bar) {
-        bar.querySelectorAll('button').forEach(btn => {
-            const isActive = btn.textContent.trim() === ({'limit-up':'涨停','trend':'趋势','zhaban':'炸板','dtqiaoban':'翘板','reversal':'反转','sector':'板块'})[tab];
+        bar.querySelectorAll('button').forEach(function(btn) {
+            var isActive = btn.textContent.trim() === ({'limit-up':'涨停','trend':'趋势','zhaban':'炸板','dtqiaoban':'翘板','reversal':'反转'})[tab];
             btn.style.background = isActive ? 'var(--accent)' : 'var(--bg-secondary)';
             btn.style.color = isActive ? '#fff' : 'var(--text)';
         });
     }
-    await _fetchBacktest(tab, days, _btTopN, _btCapital, contentEl);
+    await loadBacktestTab(tab, days, _btTopN, _btCapital);
 }
 
 // 共用: 拉取回测数据并渲染
@@ -71,18 +101,12 @@ async function _fetchBacktest(tab, days, topN, capital, contentEl) {
 
 // TOP-N / 本金 切换
 function onBacktestParamChange() {
-    const topSel = document.getElementById('btTopN');
-    const capInput = document.getElementById('btCapital');
+    var topSel = document.getElementById('btTopN');
+    var capInput = document.getElementById('btCapital');
     if (topSel) _btTopN = parseInt(topSel.value) || 3;
     if (capInput) _btCapital = parseInt(capInput.value) || 90000;
     _saveBacktestParams();
-    // 重新拉取当前 tab
-    const days = 7;  // 默认
-    const contentEl = document.getElementById('btTabContent');
-    if (contentEl) {
-        contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
-        _fetchBacktest(_btTab, days, _btTopN, _btCapital, contentEl);
-    }
+    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
 const _navItems = () => document.querySelectorAll('.nav-item');
 
@@ -547,7 +571,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                 ];
                 // 趋势66.7%胜率+正EV → 默认TOP1; 涨停/翘板TOP1更稳
                 var defaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
-                const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'limit-up';
+                const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'trend';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
                       + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">📊 多 Tab T+1 真实回测</div>'
@@ -566,23 +590,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<span style="color:var(--text-muted)">元</span>'
                     + '<span style="color:var(--text-muted);margin-left:4px">(单只本金)</span>'
                     + '</div>';
-                html += '</div><div id="btTabContent">';
-                try {
-                    const ctrl = new AbortController();
-                    const tid = setTimeout(() => ctrl.abort(), 60000);
-                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=30&top_n=' + _btTopN + '&capital=' + _btCapital, { signal: ctrl.signal });
-                    clearTimeout(tid);
-                    const t1Data = await t1Resp.json();
-                    html += renderT1BacktestPanel(t1Data);
-                } catch (t1Err) {
-                    const msg = t1Err.name === 'AbortError' ? '请求超时 (60s)' : t1Err.message;
-                    html += '<div class="error-text">❌ T+1 回测加载失败: ' + escapeHtml(msg) + '</div>';
-                }
+                html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
                 html += '</div></div>';
-                // 加刷新按钮
-                html += '<div class="card" style="margin:16px;padding:12px;text-align:center">'
-                    + '<button class="btn btn-orange" onclick="refreshT1Backtest()" style="font-size:14px;padding:8px 20px">🔄 刷新 T+1 回测 (强制重跑, 约 1-2 分钟)</button>'
-                    + '</div>';
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items); } else if (pageKey === 'scan-reversal') { html += renderReversalCards(items);
             } else {
                 html += renderSimpleCards(items, pageKey);
@@ -592,7 +601,7 @@ async function loadCardView(output, pageKey, apiUrl) {
             console.error('[Render Error]', pageKey, renderErr);
         }
         if (_pageToken === token) { output.innerHTML = html; _setCachedPage(pageKey, output.innerHTML); }
-        // 回测页面: 异步加载策略权重
+        // 回测页面: 异步加载策略权重 + 当前tab回测数据
         if (pageKey === 'backtest') {
             fetch('/api/backtest/tab-weights')
                 .then(r => r.json())
@@ -602,7 +611,9 @@ async function loadCardView(output, pageKey, apiUrl) {
                         if (wa) wa.innerHTML = renderTabWeights(d.weights);
                     }
                 })
-                .catch(() => {});
+                .catch(function() {});
+            // 加载当前tab的回测数据
+            setTimeout(function() { loadBacktestTab(_btTab, 30, _btTopN, _btCapital); }, 100);
         }
     } catch (err) {
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;

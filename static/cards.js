@@ -991,7 +991,163 @@ function renderBacktestDashboard(data) {
 window.renderBacktestDashboard = renderBacktestDashboard;
 
 // ═══════════════════════════════════════════
-//  T+1 真实回测面板 (A 股 T+1 规则)
+//  P6: 单 tab 完整回测面板 (新)
+// ═══════════════════════════════════════════
+
+function renderBacktestTabFull(data) {
+    if (!data || !data.ok) {
+        return '<div class="loading">回测加载失败 - ' + (data && data.error || '未知错误') + '</div>';
+    }
+    var bt = data.backtest || {};
+    var s = bt.summary || {};
+    var s30 = bt.summary_30d || {};
+    var cfg = bt.config || {};
+    var top5 = bt.top5 || [];
+    var bot5 = bt.bottom5 || [];
+    var skipped = bt.skipped || [];
+    var cmp = bt.comparison || {};
+    var ti = data.tab_info || {};
+    var wgt = data.weights || {};
+
+    var html = '<div class="dashboard-grid" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;margin-top:8px">';
+
+    // ── 0. Tab 状态条 ──
+    html += '<div class="card" style="flex:0 0 100%;padding:8px 16px">';
+    html += '<span style="font-size:12px;color:var(--text-muted)">数据窗口: ' + ti.days_available + '天 | ';
+    html += '仓位建议: <b style="color:' + (ti.position_weight >= 1 ? '#ef4444' : '#f59e0b') + '">' + (ti.position_label || '--') + '</b> | ';
+    html += 'TOP' + (cfg.top_n || 3) + ' | 本金' + (cfg.capital || 30000) + '元</span>';
+    html += '</div>';
+
+    // ── 1. 胜率横幅 (复用现有逻辑) ──
+    var s30d = s30;
+    var unbuyable = (cmp.unbuyable_count) || 0;
+
+    function _wrBlock(label, sum, isPrimary) {
+        var wr = sum.win_rate || 0;
+        var wrColor = wr >= 60 ? '#ef4444' : wr >= 45 ? '#f59e0b' : '#22c55e';
+        var grade = wr >= 70 ? 'S' : wr >= 55 ? 'A' : wr >= 40 ? 'B' : wr >= 25 ? 'C' : 'D';
+        var gradeColor = wr >= 70 ? '#ffd700' : wr >= 55 ? '#ef4444' : wr >= 40 ? '#f59e0b' : '#22c55e';
+        var barPct = Math.min(100, Math.max(0, wr));
+        var size = isPrimary ? '42px' : '30px';
+        var h = '<div style="flex:1;min-width:180px;padding:12px 8px;text-align:center">';
+        h += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">' + label + '</div>';
+        h += '<div style="display:inline-block;padding:1px 8px;border-radius:8px;background:' + gradeColor + ';color:#000;font-size:10px;font-weight:700;margin-bottom:4px">' + grade + '</div>';
+        h += '<div style="font-size:' + size + ';font-weight:800;line-height:1;color:' + wrColor + '">' + wr.toFixed(1) + '%</div>';
+        h += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px">' + (sum.win_count||0) + 'W/' + (sum.loss_count||0) + 'L | ' + (sum.trade_count||0) + '笔</div>';
+        h += '</div>';
+        return h;
+    }
+
+    html += '<div class="card" style="flex:0 0 100%;padding:16px">';
+    html += '<div style="display:flex;flex-wrap:wrap;justify-content:center">';
+    html += _wrBlock('近30天胜率', s30d, true);
+    html += '<div style="width:1px;background:var(--border);align-self:stretch;margin:4px 0"></div>';
+    html += _wrBlock('全部历史胜率', s, false);
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;text-align:center;border-top:1px solid var(--border);padding-top:6px">';
+    html += '累计收益 <b style="color:' + (s.cumulative_ret >= 0 ? '#ef4444' : '#22c55e') + '">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret||0).toFixed(2) + '%</b>';
+    html += ' | 总盈亏 <b style="color:' + (s.total_pnl >= 0 ? '#ef4444' : '#22c55e') + '">' + (s.total_pnl >= 0 ? '+' : '') + (s.total_pnl||0).toFixed(0) + '元</b>';
+    html += ' | EV <b>' + (s.ev >= 0 ? '+' : '') + (s.ev||0).toFixed(2) + '%</b>';
+    if (unbuyable > 0) html += ' | 一字板过滤: ' + unbuyable + '笔';
+    html += '</div></div>';
+
+    // ── 2. 核心指标 ──
+    function _metric(label, value, color, sub) {
+        return '<div style="flex:1;min-width:120px;padding:10px;background:var(--card-bg);border-radius:8px;border:1px solid var(--border)">'
+            + '<div style="font-size:10px;color:var(--text-muted);margin-bottom:3px">' + label + '</div>'
+            + '<div style="font-size:20px;font-weight:700;color:' + (color||'var(--text)') + '">' + value + '</div>'
+            + (sub ? '<div style="font-size:9px;color:var(--text-muted)">' + sub + '</div>' : '')
+            + '</div>';
+    }
+    html += '<div class="card" style="flex:0 0 100%"><div style="display:flex;flex-wrap:wrap;gap:6px">';
+    html += _metric('笔数', s.trade_count||0, '#3b82f6', '跳过' + skipped.length);
+    html += _metric('平均收益', (s.avg_ret||0).toFixed(2)+'%', s.avg_ret >= 0 ? '#ef4444' : '#22c55e');
+    html += _metric('盈亏比', (s.plr||0).toFixed(2), s.plr >= 1.5 ? '#ef4444' : 'var(--text)');
+    html += _metric('最大回撤', (s.max_dd||0).toFixed(2)+'%', '#22c55e');
+    html += _metric('期望值', (s.ev >= 0 ? '+' : '') + (s.ev||0).toFixed(2)+'%', s.ev > 0 ? '#ef4444' : '#22c55e');
+    html += '</div></div>';
+
+    // ── 3. 策略对比 ──
+    function _cmpCard(label, sum, color) {
+        if (!sum) return '';
+        var wc = sum.win_rate >= 60 ? '#ef4444' : sum.win_rate >= 45 ? '#f59e0b' : '#22c55e';
+        return '<div style="flex:1;min-width:200px;padding:10px;border:1px solid ' + color + '44;border-radius:8px;background:var(--card-bg)">'
+            + '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:' + color + '">' + label + '</div>'
+            + '<div style="font-size:11px;line-height:1.7">'
+            + '<span>胜率 <b style="color:' + wc + '">' + (sum.win_rate||0).toFixed(1) + '%</b></span> '
+            + '<span>EV <b>' + ((sum.ev||0)>=0?'+':'') + (sum.ev||0).toFixed(2) + '%</b></span> '
+            + '<span>' + (sum.trade_count||0) + '笔</span>'
+            + '</div></div>';
+    }
+    html += '<div class="card" style="flex:0 0 100%"><h4 style="margin:0 0 8px">策略对比</h4>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    html += _cmpCard('A 开盘买', (cmp.open_buy||{}).summary, '#3b82f6');
+    html += _cmpCard('B 尾盘买', (cmp.close_buy||{}).summary, '#a855f7');
+    html += _cmpCard('C 休盘+止损', (cmp.stop_loss||{}).summary, '#f59e0b');
+    html += '</div></div>';
+
+    // ── 4. 因子权重面板 ──
+    var factors = wgt.factors || [];
+    if (factors.length > 0) {
+        html += '<div class="card" style="flex:0 0 100%"><h4 style="margin:0 0 8px">因子权重</h4>';
+        html += '<div style="display:flex;flex-wrap:wrap;gap:4px">';
+        factors.forEach(function(f) {
+            var delta = f.delta || 0;
+            var arrow = delta > 0.5 ? '↑' : delta < -0.5 ? '↓' : '→';
+            var dColor = delta > 0 ? '#ef4444' : delta < 0 ? '#22c55e' : 'var(--text-muted)';
+            html += '<div style="flex:1;min-width:100px;padding:8px;text-align:center;background:var(--bg-card);border-radius:6px;border:1px solid var(--border)">';
+            html += '<div style="font-size:10px;color:var(--text-muted)">' + f.name + '</div>';
+            html += '<div style="font-size:16px;font-weight:700">' + (f.current||0).toFixed(1) + '</div>';
+            html += '<div style="font-size:10px;color:' + dColor + '">' + arrow + ' ' + (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' (默认' + (f.default||0).toFixed(0) + ')</div>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+    }
+
+    // ── 5. 调权历史 ──
+    var history = wgt.history || [];
+    if (history.length > 0) {
+        html += '<div class="card" style="flex:0 0 100%"><h4 style="margin:0 0 4px">调权历史 (近30天)</h4>';
+        html += '<div style="font-size:10px;max-height:120px;overflow-y:auto">';
+        history.slice(-15).forEach(function(h) {
+            var dCol = h.delta > 0 ? '#ef4444' : '#22c55e';
+            html += '<span style="margin-right:8px;white-space:nowrap">' + h.date + ' ' + h.factor + ': ' + h.old + '→' + h.new + ' <b style="color:' + dCol + '">' + h.arrow + (h.delta>=0?'+':'') + h.delta.toFixed(1) + '</b> (IC=' + (h.corr>=0?'+':'') + h.corr.toFixed(3) + ')</span><br>';
+        });
+        html += '</div></div>';
+    }
+
+    // ── 6. TOP5/BOTTOM5 ──
+    function _tradeTable(title, trades, color) {
+        if (!trades.length) return '';
+        var h = '<div class="card" style="flex:1;min-width:300px"><h4 style="margin:0 0 6px">' + title + '</h4>';
+        h += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+        h += '<tr style="border-bottom:1px solid var(--border)"><th>日期</th><th>票</th><th>买→卖</th><th>收益</th></tr>';
+        trades.slice(0, 5).forEach(function(t) {
+            h += '<tr style="border-bottom:1px solid var(--border)">';
+            h += '<td style="font-size:9px">' + t.signal_date + '</td>';
+            h += '<td style="font-weight:600">' + esc(t.name) + '</td>';
+            h += '<td>' + t.buy_price + '→' + t.sell_price + '</td>';
+            h += '<td style="color:' + color + ';font-weight:600">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
+            h += '</tr>';
+        });
+        h += '</table></div>';
+        return h;
+    }
+    if (top5.length || bot5.length) {
+        html += '<div style="flex:0 0 100%;display:flex;flex-wrap:wrap;gap:8px">';
+        html += _tradeTable('🏆 TOP5', top5, '#ef4444');
+        html += _tradeTable('💀 BOTTOM5', bot5, '#22c55e');
+        html += '</div>';
+    }
+
+    html += '</div>'; // dashboard-grid end
+    return html;
+}
+window.renderBacktestTabFull = renderBacktestTabFull;
+
+
+// ═══════════════════════════════════════════
+//  T+1 真实回测面板 (A 股 T+1 规则) — 旧版, 保留兼容
 // ═══════════════════════════════════════════
 
 function renderT1BacktestPanel(data) {

@@ -1217,6 +1217,66 @@ def api_backtest_tab_top(tab: str,
         return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
 
 
+@app.get("/api/bt/{tab}/full")
+def api_backtest_tab_full(tab: str,
+                           days: int = Query(30, description="回测天数"),
+                           top_n: int = Query(3, description="每日 TOP N"),
+                           capital: float = Query(30000, description="单笔本金")):
+    """P6: 单 tab 完整回测面板 — 一次返回回测+因子权重+调权历史"""
+    if tab not in ALL_TABS:
+        return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
+    try:
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, capital=capital)
+
+        # 因子权重 + 调权历史
+        try:
+            from weight_manager import get_tab_weight_summary
+            weights = get_tab_weight_summary(tab)
+        except Exception:
+            weights = {'factors': [], 'history': []}
+
+        # tab 仓位权重
+        try:
+            from weight_manager import compute_tab_weights
+            all_tw = compute_tab_weights()
+            pos_weight = next((w['weight'] for w in all_tw if w['tab'] == tab), 0.5)
+            pos_label = next((w['label'] for w in all_tw if w['tab'] == tab), '')
+        except Exception:
+            pos_weight = 0.5
+            pos_label = ''
+
+        # 可用天数
+        try:
+            from backtest_engine import _detect_available_days
+            days_avail = _detect_available_days(tab)
+        except Exception:
+            days_avail = 0
+
+        return {
+            "ok": True, "tab": tab,
+            "backtest": {
+                "summary": result.get("summary", {}),
+                "summary_30d": result.get("summary_30d", {}),
+                "trades": result.get("trades", []),
+                "top5": result.get("top5", []),
+                "bottom5": result.get("bottom5", []),
+                "comparison": result.get("comparison", {}),
+                "skipped": result.get("skipped", []),
+                "config": result.get("config", {}),
+            },
+            "weights": weights,
+            "tab_info": {
+                "days_available": days_avail,
+                "win_rate": result.get("summary", {}).get("win_rate", 0),
+                "ev": result.get("summary", {}).get("ev", 0),
+                "position_weight": pos_weight,
+                "position_label": pos_label,
+            },
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
+
+
 @app.get("/api/community")
 def api_community(top_n: int = Query(10, description="分析前N只股票")):
     """舆情监测 — 股吧/雪球/新闻情感分析"""
