@@ -1511,12 +1511,14 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     else:
         f_sector = pd.Series(0.6, index=pullback.index)
 
-    # 加权总分
+    # 加权总分 (归一化到0-100, 与其他tab可比)
     total = (f_to * w['turnover'] + f_lb * w['consecutive'] +
              f_chg * w['pullback'] + f_sector * w['sector'])
+    weight_sum = sum(w.values())
+    normalized = (total / weight_sum * 100) if weight_sum > 0 else total
 
     pullback = pullback.copy()
-    pullback['反转评分'] = total.clip(lower=0).round(1)
+    pullback['反转评分'] = normalized.clip(lower=0).round(1)
     pullback['rev_turnover'] = (f_to * w['turnover']).round(1)
     pullback['rev_consecutive'] = (f_lb * w['consecutive']).round(1)
     pullback['rev_pullback'] = (f_chg * w['pullback']).round(1)
@@ -1799,8 +1801,12 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
              f_amount * w['amount'] + f_vr * w['vol_ratio'] +
              f_nh * w['new_high'] + f_ma * w.get('ma_rev', 0))
 
+    # 归一化到0-100 (除以当前权重总和, 跨tab可比)
+    weight_sum = sum(w.values())
+    normalized = (total / weight_sum * 100) if weight_sum > 0 else total
+
     df = df.copy()
-    df['动量评分'] = total.clip(lower=0).round(1)  # 负权允许, 但总分不<0
+    df['动量评分'] = normalized.clip(lower=0).round(1)  # 负权允许, 但总分不<0
     df['trend_chg'] = (f_chg * w['chg']).round(1)
     df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
     df['trend_amount'] = (f_amount * w['amount']).round(1)
