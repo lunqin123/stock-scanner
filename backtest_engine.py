@@ -407,8 +407,13 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
 
 
 def _score_reversal(df: pd.DataFrame, date_str: str):
-    """反转评分: P2.1 已抽到 scanner._score_reversal"""
-    return scanner_score_reversal(df, today_str=date_str)
+    """反转评分: scanner._score_reversal + 可调权 (P5)"""
+    try:
+        from weight_manager import load_reversal_weights
+        w = load_reversal_weights()
+    except Exception:
+        w = None
+    return scanner_score_reversal(df, today_str=date_str, weights=w)
 
 
 def _score_trend(df: pd.DataFrame, date_str: str):
@@ -827,7 +832,8 @@ def run_tab_backtest(
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
                     }
                     # P4: 趋势因子分列(供调权)
-                    for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh']:
+                    for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
+                               'rev_turnover','rev_consecutive','rev_pullback','rev_sector']:
                         val = row.get(fk)
                         if val is not None:
                             rec[fk] = round(float(val), 1)
@@ -957,13 +963,21 @@ def run_tab_backtest(
     except Exception:
         pass
 
-    # 趋势: 因子级自动调权
+    # 趋势/反转: 因子级自动调权
     if tab == TAB_TREND and records_open:
         try:
             from weight_manager import adjust_trend_weights_from_backtest
             new_w, msg = adjust_trend_weights_from_backtest(records_open)
             if msg:
                 print(f"  [趋势调权] {msg}", file=sys.stderr)
+        except Exception:
+            pass
+    if tab == TAB_REVERSAL and records_open:
+        try:
+            from weight_manager import adjust_reversal_weights_from_backtest
+            new_w, msg = adjust_reversal_weights_from_backtest(records_open)
+            if msg:
+                print(f"  [反转调权] {msg}", file=sys.stderr)
         except Exception:
             pass
 

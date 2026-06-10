@@ -818,7 +818,13 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
 
     today = _today_trading()
     print("  [反转扫描] 开始...", file=sys.stderr)
-    raw_key = make_key("app", "reversal_raw", date=today)
+    try:
+        from weight_manager import load_reversal_weights
+        rw = load_reversal_weights()
+        rev_hash = hash(tuple(sorted(rw.items()))) % 10000
+    except Exception:
+        rev_hash = 0
+    raw_key = make_key("app", "reversal_raw", date=today, w=rev_hash)
     prev, from_cache, err = _cached_pool_loader(
         raw_key,
         lambda: ak.stock_zt_pool_previous_em(date=today),
@@ -857,9 +863,14 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
     except Exception as e:
         print(f"  [zhaban] 今日涨停行业拉取失败: {e}", file=sys.stderr)
 
-    # 用回测引擎评分 (与回测31.2%胜率一致)
+    # 用回测引擎评分 (P5: 可调权)
     from scanner import _score_reversal as backtest_score_reversal
-    scored = backtest_score_reversal(pullback, today_str=today)
+    try:
+        from weight_manager import load_reversal_weights
+        rev_w = load_reversal_weights()
+    except Exception:
+        rev_w = None
+    scored = backtest_score_reversal(pullback, today_str=today, weights=rev_w)
     if scored is None or scored.empty:
         return {"ok": True, "items": []}
     pullback = scored
@@ -872,12 +883,8 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
         price = float(row.get('最新价', row[price_col]))
         to = float(row.get('换手率', row[turnover_col])) if pd.notna(row.get('换手率', row.get(turnover_col, 0))) else 0
         ind = str(row.get('所属行业', row.get(ind_col, ''))) if ind_col else ''
-        lb = 0  # _score_reversal 不输出连板数, 用0占位
+        lb = 0
         s = float(row.get('反转评分', 0))
-
-        if lb == 3: s += 35
-        elif lb == 2: s += 28
-        elif lb >= 4: s += 15
         # 建议 (基于回测评分)
         if s >= 80: adv = '⭐ 高换手+多连板，反包潜力大'
         elif s >= 65: adv = '加入自选，竞价确认方向'

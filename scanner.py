@@ -1428,41 +1428,54 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
     return df.sort_values('总分', ascending=False).head(TOP_N)
 
 
-def _score_reversal(pullback: pd.DataFrame, today_str: str = None) -> pd.DataFrame:
+def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict = None) -> pd.DataFrame:
     """纯函数: 对"上交易日涨停今日下跌"的票做反转评分
 
-    P2.1 抽出: 避免回测引擎依赖 scan_reversal 的 print/IO。
-    返回带 '反转评分' 列的 DataFrame (已按评分降序)。
-    注: '板块支撑' 因子中 today_str 可选,不传则用默认值 (历史回测场景)。
+    P5: 4因子可调权, 输出因子分列供IC分析。
+
+    因子:
+    - 换手率 (0-40)
+    - 连板位置 (0-35)
+    - 回调深度 (0-15)
+    - 板块支撑 (0-10)
+
+    返回带因子分列 + '反转评分' 总分的 DataFrame。
     """
     if pullback is None or pullback.empty:
         return pullback
+
+    defaults = {'turnover': 40, 'consecutive': 35, 'pullback': 15, 'sector': 10}
+    w = dict(defaults)
+    if weights:
+        w.update({k: v for k, v in weights.items() if k in defaults})
 
     turnover_col = pullback.columns[9] if len(pullback.columns) > 9 else None
     seal_stat_col = pullback.columns[14] if len(pullback.columns) > 14 else None
     ind_col = pullback.columns[15] if len(pullback.columns) > 15 else None
 
     if '今日涨幅' not in pullback.columns:
-        # 容错: caller 没加今日涨幅列,尝试加
         chg_col = pullback.columns[3]
         pullback['今日涨幅'] = pullback[chg_col].astype(float)
 
-    scores = pd.Series(0.0, index=pullback.index)
+    # 因子原始分 (0-1 归一化)
+    f_to = pd.Series(0.0, index=pullback.index)
+    f_lb = pd.Series(0.0, index=pullback.index)
+    f_chg = pd.Series(0.0, index=pullback.index)
+    f_sector = pd.Series(0.0, index=pullback.index)
 
-    # 1. 换手率 (0-40)
+    # 1. 换手率
     if turnover_col:
         for idx in pullback.index:
             t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
-            if t > 25:             s = 40
-            elif 15 <= t <= 25:    s = 32
-            elif 8 <= t < 15:      s = 20
-            elif 5 <= t < 8:       s = 14
-            elif 3 <= t < 5:       s = 8
-            elif 1 <= t < 3:       s = 4
-            else:                  s = 0
-            scores[idx] = s
+            if t > 25:             f_to[idx] = 1.0
+            elif 15 <= t <= 25:    f_to[idx] = 0.8
+            elif 8 <= t < 15:      f_to[idx] = 0.5
+            elif 5 <= t < 8:       f_to[idx] = 0.35
+            elif 3 <= t < 5:       f_to[idx] = 0.2
+            elif 1 <= t < 3:       f_to[idx] = 0.1
+            else:                  f_to[idx] = 0.0
 
-    # 2. 连板位置 (0-35)
+    # 2. 连板位置
     if seal_stat_col:
         for idx in pullback.index:
             raw = str(pullback.loc[idx, seal_stat_col]) if pd.notna(pullback.loc[idx, seal_stat_col]) else ''
@@ -1470,22 +1483,20 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None) -> pd.DataFra
             if '/' in raw:
                 try: consecutive = int(raw.split('/')[1])
                 except: pass
-            if consecutive == 3:       s = 35
-            elif consecutive == 2:     s = 28
-            elif consecutive >= 4:     s = 15
-            elif consecutive == 1:     s = 10
-            else:                      s = 8
-            scores[idx] += s
+            if consecutive == 3:       f_lb[idx] = 1.0
+            elif consecutive == 2:     f_lb[idx] = 0.8
+            elif consecutive >= 4:     f_lb[idx] = 0.43
+            elif consecutive == 1:     f_lb[idx] = 0.29
+            else:                      f_lb[idx] = 0.23
 
-    # 3. 回调深度 (0-15)
+    # 3. 回调深度
     for idx in pullback.index:
-        chg = pullback.loc[idx, '今日涨幅']
-        if -3 <= chg <= 0.5:   s = 15
-        elif -5 <= chg < -3:   s = 12
-        else:                  s = 8
-        scores[idx] += s
+        chg_val = pullback.loc[idx, '今日涨幅']
+        if -3 <= chg_val <= 0.5:   f_chg[idx] = 1.0
+        elif -5 <= chg_val < -3:   f_chg[idx] = 0.8
+        else:                      f_chg[idx] = 0.53
 
-    # 4. 板块支撑 (0-10): 历史回测时 today_str 可为 None → 用默认值
+    # 4. 板块支撑
     if today_str:
         try:
             lt_today = ak.stock_zt_pool_em(date=today_str)
@@ -1495,17 +1506,26 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None) -> pd.DataFra
                     hot_inds = set(lt_today[lt_ind_col].value_counts().head(10).index)
                     for idx in pullback.index:
                         ind = str(pullback.loc[idx, ind_col]) if pd.notna(pullback.loc[idx, ind_col]) else ''
-                        scores[idx] += 20 if ind in hot_inds else 8
+                        f_sector[idx] = 1.0 if ind in hot_inds else 0.4
                 else:
-                    scores += pd.Series(12.0, index=pullback.index)
+                    f_sector = pd.Series(0.6, index=pullback.index)
             else:
-                scores += pd.Series(12.0, index=pullback.index)
+                f_sector = pd.Series(0.6, index=pullback.index)
         except Exception:
-            scores += pd.Series(12.0, index=pullback.index)
+            f_sector = pd.Series(0.6, index=pullback.index)
     else:
-        scores += pd.Series(12.0, index=pullback.index)
+        f_sector = pd.Series(0.6, index=pullback.index)
 
-    pullback['反转评分'] = scores.round(0)
+    # 加权总分
+    total = (f_to * w['turnover'] + f_lb * w['consecutive'] +
+             f_chg * w['pullback'] + f_sector * w['sector'])
+
+    pullback = pullback.copy()
+    pullback['反转评分'] = total.clip(lower=0).round(1)
+    pullback['rev_turnover'] = (f_to * w['turnover']).round(1)
+    pullback['rev_consecutive'] = (f_lb * w['consecutive']).round(1)
+    pullback['rev_pullback'] = (f_chg * w['pullback']).round(1)
+    pullback['rev_sector'] = (f_sector * w['sector']).round(1)
     return pullback
 
 

@@ -424,6 +424,91 @@ def compute_tab_weights(force_refresh: bool = False):
 
 
 # ═══════════════════════════════════════════
+#  反转因子可调权 (P5: 4因子, ICIR驱动)
+# ═══════════════════════════════════════════
+
+_REV_WEIGHTS_FILE = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "stock_scanner_cache", "reversal_weights.json"
+)
+
+REV_DEFAULT_WEIGHTS = {
+    'turnover': 40,     # 换手率
+    'consecutive': 35,  # 连板位置
+    'pullback': 15,     # 回调深度
+    'sector': 10,       # 板块支撑
+}
+
+REV_FACTOR_NAMES = {
+    'turnover': '换手', 'consecutive': '连板',
+    'pullback': '回调', 'sector': '板块',
+}
+
+
+def load_reversal_weights() -> dict:
+    try:
+        if os.path.exists(_REV_WEIGHTS_FILE):
+            with open(_REV_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            weights = dict(REV_DEFAULT_WEIGHTS)
+            weights.update({k: v for k, v in data.items() if k in weights})
+            return weights
+    except Exception:
+        pass
+    return dict(REV_DEFAULT_WEIGHTS)
+
+
+def save_reversal_weights(weights: dict):
+    try:
+        os.makedirs(os.path.dirname(_REV_WEIGHTS_FILE), exist_ok=True)
+        with open(_REV_WEIGHTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(weights, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  [rev_weights] 保存失败: {e}", file=sys.stderr)
+
+
+def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.02):
+    if len(records) < 5:
+        return load_reversal_weights(), "数据不足(需≥5笔)"
+
+    current = load_reversal_weights()
+    factors = list(REV_DEFAULT_WEIGHTS.keys())
+    factor_keys = [f'rev_{f}' for f in factors]
+
+    sample = records[0]
+    available = [fk for fk in factor_keys if fk in sample]
+    if len(available) < 2:
+        return current, "记录缺少因子分数"
+
+    corrs = {}
+    for fk in available:
+        factor_name = fk.replace('rev_', '')
+        scores = [r.get(fk, 0) for r in records]
+        rets = [r.get('net_ret_pct', 0) for r in records]
+        if len(set(scores)) <= 1:
+            continue
+        corr = pd.Series(scores).corr(pd.Series(rets))
+        corrs[factor_name] = corr if not pd.isna(corr) else 0
+
+    if not corrs:
+        return current, "无有效相关性数据"
+
+    new_weights = dict(current)
+    lines = []
+    for f, corr in corrs.items():
+        delta = corr * lr * REV_DEFAULT_WEIGHTS[f]
+        new_val = current[f] + delta
+        lo = -REV_DEFAULT_WEIGHTS[f]
+        hi = REV_DEFAULT_WEIGHTS[f] * 2.0
+        new_weights[f] = round(max(lo, min(hi, new_val)), 1)
+        arrow = '↑' if delta > 0 else '↓'
+        lines.append(f"  {arrow} {REV_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
+
+    save_reversal_weights(new_weights)
+    return new_weights, '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════
 #  趋势因子可调权 (P4: 5因子, ICIR驱动)
 # ═══════════════════════════════════════════
 
