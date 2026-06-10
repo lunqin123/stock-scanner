@@ -560,7 +560,6 @@ async function loadCardView(output, pageKey, apiUrl) {
             } else if (pageKey === 'indicators') { html += renderIndicatorsCards(items); } else if (pageKey === 'community') {
                 html += renderCommunityCards(items);
             } else if (pageKey === 'backtest') {
-                html += renderBacktestDashboard(data);
                 // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
                 const tabs = [
                     { key: 'limit-up', label: '涨停', days: 30 },
@@ -985,19 +984,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // T+1 真实回测刷新 (强制重跑, ~1-2 分钟)
 async function refreshT1Backtest() {
     if (!confirm('T+1 回测强制重跑约 1-2 分钟, 是否继续?')) return;
-    const output = document.getElementById('output');
-    output.innerHTML = '<span class="loading">⏳ T+1 回测重跑中 (约 1-2 分钟) ...</span>';
-    try {
-        const resp = await fetch('/api/backtest/t1?days=30&top_n=3&capital=30000&refresh=true');
-        const data = await resp.json();
-        let html = renderBacktestDashboard(data.ok ? (await (await fetch('/api/backtest/dashboard')).json()) : {ok: true});
-        html += renderT1BacktestPanel(data);
-        html += '<div class="card" style="margin:16px;padding:12px;text-align:center">'
-              + '<button class="btn btn-orange" onclick="refreshT1Backtest()" style="font-size:14px;padding:8px 20px">🔄 刷新 T+1 回测 (强制重跑, 约 1-2 分钟)</button>'
-              + '</div>';
-        output.innerHTML = html;
-    } catch (err) {
-        output.innerHTML = '<span class="error-text">❌ 刷新失败: ' + err.message + '</span>';
-    }
+    _btCache = {};  // 清缓存强制重拉
+    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
 window.refreshT1Backtest = refreshT1Backtest;
