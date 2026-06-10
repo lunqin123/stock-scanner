@@ -15,8 +15,10 @@ const _dom = {
 
 // P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
 let _btTab = localStorage.getItem('btTab') || 'limit-up';
-let _btTopN = parseInt(localStorage.getItem('btTopN')) || 3;
-let _btCapital = parseInt(localStorage.getItem('btCapital')) || 90000;
+// 各 tab 推荐 TOP-N: 趋势66.7%/翘板60% → TOP1; 涨停→TOP3
+const _tabDefaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
+let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 3;
+let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 
 function _saveBacktestParams() {
     localStorage.setItem('btTab', _btTab);
@@ -27,7 +29,15 @@ function _saveBacktestParams() {
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
     _btTab = tab;
+    // 切换 tab 时自动应用该 tab 的推荐 TOP-N
+    var recTopN = _tabDefaultTopN[tab] || 3;
+    if (_btTopN !== recTopN) { _btTopN = recTopN; _btCapital = _btTopN * 30000; }
     _saveBacktestParams();
+    // 更新 UI 控件
+    var topSel = document.getElementById('btTopN');
+    var capInput = document.getElementById('btCapital');
+    if (topSel) topSel.value = _btTopN;
+    if (capInput) capInput.value = _btCapital;
     const contentEl = document.getElementById('btTabContent');
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
@@ -539,6 +549,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                     { key: 'reversal', label: '反转', days: 5 },
                     { key: 'sector', label: '板块', days: 5 },
                 ];
+                // 趋势66.7%胜率+正EV → 默认TOP1; 涨停/翘板TOP1更稳
+                var defaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'limit-up';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
