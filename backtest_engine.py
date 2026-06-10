@@ -412,7 +412,7 @@ def _score_reversal(df: pd.DataFrame, date_str: str):
 
 
 def _score_trend(df: pd.DataFrame, date_str: str):
-    """趋势评分: P2.2 已抽到 scanner._score_trend
+    """趋势评分: scanner._score_trend + 可调权 (P4)
 
     df 来自 _fetch_trend_pool (stock_zt_pool_strong_em 当日强势池)
     _score_trend 内部已含板块/价格/市值过滤 + 评分
@@ -420,18 +420,17 @@ def _score_trend(df: pd.DataFrame, date_str: str):
     if df is None or df.empty:
         return None
 
-    # 列识别 (与 scan_trend 主函数一致)
     df = df.copy()
     code_col = '代码' if '代码' in df.columns else df.columns[1]
     df = filter_non_main_board(df, code_col=code_col)
 
     cap_col = '流通市值' if '流通市值' in df.columns else None
     if cap_col and cap_col in df.columns:
-        df = df[df[cap_col].astype(float) <= 200 * 1e8]  # MAX_MARKET_CAP
+        df = df[df[cap_col].astype(float) <= 200 * 1e8]
 
     price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
     if price_col and price_col in df.columns:
-        df = df[df[price_col].astype(float) <= 200]  # MAX_PRICE
+        df = df[df[price_col].astype(float) <= 200]
 
     change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
     changes = df[change_col].astype(float)
@@ -439,7 +438,14 @@ def _score_trend(df: pd.DataFrame, date_str: str):
 
     if df.empty:
         return None
-    return scanner_score_trend(df)
+
+    # P4: 用可调权评分
+    try:
+        from weight_manager import load_trend_weights
+        w = load_trend_weights()
+    except Exception:
+        w = None
+    return scanner_score_trend(df, weights=w)
 
 
 def _score_sector(df: pd.DataFrame, date_str: str):
@@ -813,13 +819,19 @@ def run_tab_backtest(
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
-                    records_open.append({
+                    rec = {
                         'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
                         'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
                         'buy_price': round(buy_px, 2), 'sell_price': round(sell_px, 2),
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
-                    })
+                    }
+                    # P4: 趋势因子分列(供调权)
+                    for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh']:
+                        val = row.get(fk)
+                        if val is not None:
+                            rec[fk] = round(float(val), 1)
+                    records_open.append(rec)
 
                 # ── 策略B: 尾盘买 ──
                 close_buy_px = buy_ohlcv['close']
@@ -944,6 +956,16 @@ def run_tab_backtest(
         save_tab_performance(tab, result.get('summary', {}))
     except Exception:
         pass
+
+    # 趋势: 因子级自动调权
+    if tab == TAB_TREND and records_open:
+        try:
+            from weight_manager import adjust_trend_weights_from_backtest
+            new_w, msg = adjust_trend_weights_from_backtest(records_open)
+            if msg:
+                print(f"  [趋势调权] {msg}", file=sys.stderr)
+        except Exception:
+            pass
 
     return result
 

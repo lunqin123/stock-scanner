@@ -1681,7 +1681,7 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
 #  模式3: 趋势动量股扫描 (--trend)
 # ═══════════════════════════════════════════
 
-def _score_trend(df: pd.DataFrame) -> pd.DataFrame:
+def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     """P2.2 抽出的纯函数: 趋势动量评分
 
     5 因子 (0-100):
@@ -1691,11 +1691,19 @@ def _score_trend(df: pd.DataFrame) -> pd.DataFrame:
     - 量比加分 (0-5): 强势池特有
     - 新高加分 (0-3)
 
+    P4: 支持可调权 — weights=None 用默认权重, 传 dict 则覆盖。
+
     输入: 已过滤 (涨幅 2.5-8.5% + 非 ST + 市值<MAX_MARKET_CAP) 的 DataFrame
-    输出: 加 '动量评分' 列的 DataFrame
+    输出: 加因子分列 + '动量评分' 总分的 DataFrame
     """
     if df is None or df.empty:
         return df
+
+    # 默认权重 (可被 weights 参数覆盖)
+    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3}
+    w = dict(defaults)
+    if weights:
+        w.update({k: v for k, v in weights.items() if k in defaults})
 
     # 列识别 (强势池列名规范,做防御)
     change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
@@ -1704,69 +1712,72 @@ def _score_trend(df: pd.DataFrame) -> pd.DataFrame:
     volume_col = '成交额' if '成交额' in df.columns else df.columns[6]
     new_high_col = '是否新高' if '是否新高' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
 
-    scores = pd.Series(0.0, index=df.index)
+    # 因子原始分 (0-1 归一化后再乘权重)
+    f_chg = pd.Series(0.0, index=df.index)
+    f_turnover = pd.Series(0.0, index=df.index)
+    f_amount = pd.Series(0.0, index=df.index)
+    f_vr = pd.Series(0.0, index=df.index)
+    f_nh = pd.Series(0.0, index=df.index)
 
-    # 1. 涨幅分 (0-40)
+    # 1. 涨幅分
     changes = df[change_col].astype(float)
     for idx in df.index:
         chg = float(changes[idx])
-        if 6 <= chg <= 8:
-            scores[idx] += 40
-        elif 5 <= chg < 6:
-            scores[idx] += 35
-        elif 4 <= chg < 5:
-            scores[idx] += 30
-        elif 3 <= chg < 4:
-            scores[idx] += 25
-        elif 8 <= chg < 9.5:
-            scores[idx] += 20
-        else:
-            scores[idx] += 15
+        if 6 <= chg <= 8:       f_chg[idx] = 1.0
+        elif 5 <= chg < 6:      f_chg[idx] = 0.875
+        elif 4 <= chg < 5:      f_chg[idx] = 0.75
+        elif 3 <= chg < 4:      f_chg[idx] = 0.625
+        elif 8 <= chg < 9.5:    f_chg[idx] = 0.5
+        else:                   f_chg[idx] = 0.375
 
-    # 2. 换手活跃分 (0-30)
+    # 2. 换手分
     turnovers = df[turnover_col].astype(float)
     for idx in df.index:
         t = float(turnovers[idx])
-        if 8 <= t <= 15:
-            scores[idx] += 30
-        elif 5 <= t < 8:
-            scores[idx] += 25
-        elif 15 < t <= 20:
-            scores[idx] += 20
-        elif 3 <= t < 5:
-            scores[idx] += 15
-        elif 20 < t <= 25:
-            scores[idx] += 10
-        else:
-            scores[idx] += 5
+        if 8 <= t <= 15:        f_turnover[idx] = 1.0
+        elif 5 <= t < 8:        f_turnover[idx] = 0.833
+        elif 15 < t <= 20:      f_turnover[idx] = 0.667
+        elif 3 <= t < 5:        f_turnover[idx] = 0.5
+        elif 20 < t <= 25:      f_turnover[idx] = 0.333
+        else:                   f_turnover[idx] = 0.167
 
-    # 3. 成交额分 (0-30)
+    # 3. 成交额分 (归一化)
     volumes = df[volume_col].astype(float)
     max_v = volumes.max()
     if max_v > 0:
-        scores += (volumes / max_v) * 30
+        f_amount = (volumes / max_v).clip(0, 1)
     else:
-        scores += 15
+        f_amount = pd.Series(0.5, index=df.index)
 
-    # 4. 量比加分 (0-5)
+    # 4. 量比加分
     if vol_ratio_col and vol_ratio_col in df.columns:
         vol_ratios = df[vol_ratio_col].astype(float)
         for idx in df.index:
             vr = float(vol_ratios[idx])
-            if vr > 3:
-                scores[idx] += 5
-            elif vr > 2:
-                scores[idx] += 3
-            elif vr > 1.2:
-                scores[idx] += 1
+            if vr > 3:          f_vr[idx] = 1.0
+            elif vr > 2:        f_vr[idx] = 0.6
+            elif vr > 1.2:      f_vr[idx] = 0.2
 
-    # 5. 新高加分 (0-3)
+    # 5. 新高加分
     if new_high_col and new_high_col in df.columns:
         for idx in df.index:
             if str(df.loc[idx, new_high_col]) == '是':
-                scores[idx] += 3
+                f_nh[idx] = 1.0
 
-    df['动量评分'] = scores.round(1)
+    # 加权总分
+    total = (f_chg * w['chg'] + f_turnover * w['turnover'] +
+             f_amount * w['amount'] + f_vr * w['vol_ratio'] +
+             f_nh * w['new_high'])
+
+    # 写入因子列 (供回测相关性分析)
+    df = df.copy()
+    df['动量评分'] = total.round(1)
+    df['trend_chg'] = (f_chg * w['chg']).round(1)
+    df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
+    df['trend_amount'] = (f_amount * w['amount']).round(1)
+    df['trend_vr'] = (f_vr * w['vol_ratio']).round(1)
+    df['trend_nh'] = (f_nh * w['new_high']).round(1)
+
     return df
 
 

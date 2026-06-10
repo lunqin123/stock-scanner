@@ -421,3 +421,116 @@ def compute_tab_weights(force_refresh: bool = False):
             r['allocation_pct'] = round(r['weight'] * scale / len(result) * 100, 0)
 
     return result
+
+
+# ═══════════════════════════════════════════
+#  趋势因子可调权 (P4: 5因子, ICIR驱动)
+# ═══════════════════════════════════════════
+
+_TREND_WEIGHTS_FILE = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "stock_scanner_cache", "trend_weights.json"
+)
+
+TREND_DEFAULT_WEIGHTS = {
+    'chg': 40,       # 涨幅分
+    'turnover': 30,  # 换手分
+    'amount': 30,    # 成交额分
+    'vol_ratio': 5,  # 量比加分
+    'new_high': 3,   # 新高加分
+}
+
+TREND_FACTOR_NAMES = {
+    'chg': '涨幅', 'turnover': '换手', 'amount': '成交额',
+    'vol_ratio': '量比', 'new_high': '新高',
+}
+
+
+def load_trend_weights() -> dict:
+    """加载趋势因子权重, 无文件返回默认值"""
+    try:
+        if os.path.exists(_TREND_WEIGHTS_FILE):
+            with open(_TREND_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            weights = dict(TREND_DEFAULT_WEIGHTS)
+            weights.update({k: v for k, v in data.items() if k in weights})
+            return weights
+    except Exception:
+        pass
+    return dict(TREND_DEFAULT_WEIGHTS)
+
+
+def save_trend_weights(weights: dict):
+    """持久化趋势因子权重"""
+    try:
+        os.makedirs(os.path.dirname(_TREND_WEIGHTS_FILE), exist_ok=True)
+        with open(_TREND_WEIGHTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(weights, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  [trend_weights] 保存失败: {e}", file=sys.stderr)
+
+
+def adjust_trend_weights_from_backtest(records: list, lr: float = 0.02):
+    """基于回测交易记录调整趋势因子权重
+
+    对每笔交易的因子分与收益做相关性分析, 正相关因子加权重, 负相关降权重。
+    records: [{code, net_ret_pct, trend_chg, trend_turnover, trend_amount, ...}]
+    lr: 学习率
+    """
+    if len(records) < 5:
+        return load_trend_weights(), "数据不足(需≥5笔)"
+
+    current = load_trend_weights()
+    factors = list(TREND_DEFAULT_WEIGHTS.keys())
+    factor_keys = [f'trend_{f}' for f in factors]
+
+    # 检查记录是否含因子分列
+    sample = records[0]
+    available = [fk for fk in factor_keys if fk in sample]
+    if len(available) < 3:
+        return current, "记录缺少因子分数, 保持默认权重"
+
+    # 计算每个因子与收益的相关性
+    corrs = {}
+    for fk in available:
+        factor_name = fk.replace('trend_', '')
+        scores = [r.get(fk, 0) for r in records]
+        rets = [r.get('net_ret_pct', 0) for r in records]
+        if len(set(scores)) <= 1:
+            continue
+        corr = pd.Series(scores).corr(pd.Series(rets))
+        corrs[factor_name] = corr if not pd.isna(corr) else 0
+
+    if not corrs:
+        return current, "无有效相关性数据"
+
+    # 调权: 相关性>0 → 加权重; <0 → 降权重
+    new_weights = dict(current)
+    lines = []
+    for f, corr in corrs.items():
+        delta = corr * lr * TREND_DEFAULT_WEIGHTS[f]
+        new_val = current[f] + delta
+        # 软钳制: 0.5x~1.5x 默认值
+        lo = TREND_DEFAULT_WEIGHTS[f] * 0.5
+        hi = TREND_DEFAULT_WEIGHTS[f] * 1.5
+        new_weights[f] = round(max(lo, min(hi, new_val)), 1)
+        arrow = '↑' if delta > 0 else '↓'
+        lines.append(f"  {arrow} {TREND_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
+
+    save_trend_weights(new_weights)
+    return new_weights, '\n'.join(lines)
+
+
+def get_trend_weight_summary() -> dict:
+    """返回趋势因子权重摘要(前端展示)"""
+    weights = load_trend_weights()
+    return {
+        'factors': [
+            {'key': k, 'name': TREND_FACTOR_NAMES.get(k, k),
+             'current': weights[k],
+             'default': TREND_DEFAULT_WEIGHTS[k],
+             'delta': round(weights[k] - TREND_DEFAULT_WEIGHTS[k], 1)}
+            for k in TREND_DEFAULT_WEIGHTS
+        ],
+        'total': sum(weights.values()),
+    }
