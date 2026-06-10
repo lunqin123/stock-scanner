@@ -663,7 +663,9 @@ def run_tab_backtest(
     fetcher = SIGNAL_POOL_FETCHERS[tab]
     score_fn = SCORE_FUNCS[tab]
     score_col = SCORE_COLUMNS[tab]
-    records_open, records_close, skipped, unbuyable_count = [], [], [], 0
+    records_open, records_close, records_stop, skipped, unbuyable_count = [], [], [], [], 0
+    # 休盘买策略仅适用于趋势/反转 (信号日非涨停, 可买入)
+    _close_buy_tabs = {TAB_TREND, TAB_REVERSAL}
 
     for d_signal in trade_dates:
         d_buy = _next_trading_date(d_signal)
@@ -671,7 +673,10 @@ def run_tab_backtest(
             skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
             continue
         d_sell = _next_trading_date(d_buy)
-        if d_sell is None or d_sell > trade_dates[-1]:
+        # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
+        if tab in _close_buy_tabs and (d_sell is None or d_sell > trade_dates[-1]):
+            d_sell = d_buy  # 策略A/B会被跳过, 仅策略C可用
+        elif d_sell is None or d_sell > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
             continue
 
@@ -799,6 +804,42 @@ def run_tab_backtest(
                     'pnl': round(capital * net_ret_c / 100, 0), **intraday,
                 })
 
+                # ── 策略C: 休盘买+止损 (趋势/反转专用) ──
+                # 信号日收盘买入 → 次日低开≥3%止损开盘卖, 否则收盘卖
+                if tab in _close_buy_tabs:
+                    stop_loss_pct = -3.0  # 止损线: 低开3%
+                    close_buy_price = signal_ohlcv['close']
+                    d1_open = buy_ohlcv['open']
+                    d1_close = buy_ohlcv['close']
+                    gap_from_buy = (d1_open / close_buy_price - 1) * 100
+
+                    if gap_from_buy <= stop_loss_pct:
+                        sell_price_c = d1_open
+                        exit_type = '止损'
+                    else:
+                        sell_price_c = d1_close
+                        exit_type = '收盘'
+
+                    raw_ret_s = (sell_price_c / close_buy_price - 1) * 100
+                    net_ret_s = raw_ret_s - _COMMISSION_PCT - _SLIPPAGE_PCT
+                    records_stop.append({
+                        'signal_date': d_signal, 'buy_date': d_signal, 'sell_date': d_buy,
+                        'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
+                        'buy_price': round(close_buy_price, 2),
+                        'sell_price': round(sell_price_c, 2),
+                        'raw_ret_pct': round(raw_ret_s, 2),
+                        'net_ret_pct': round(net_ret_s, 2),
+                        'pnl': round(capital * net_ret_s / 100, 0),
+                        'exit_type': exit_type,
+                        'gap_from_buy': round(gap_from_buy, 1),
+                        'buy_high': round(buy_ohlcv['high'], 2),
+                        'buy_low': round(buy_ohlcv['low'], 2),
+                        'buy_close': round(d1_close, 2),
+                        'signal_close': round(close_buy_price, 2),
+                        'gap_open_pct': round(gap_from_buy, 1),
+                        'buyable': True,
+                    })
+
         except Exception as e:
             skipped.append({'signal': d_signal, 'reason': f'错误: {str(e)[:80]}'})
         time.sleep(0.5)
@@ -806,15 +847,18 @@ def run_tab_backtest(
     # ── 聚合 ──
     sum_open = _aggregate(records_open, '开盘买')
     sum_close = _aggregate(records_close, '尾盘买')
+    sum_stop = _aggregate(records_stop, '休盘买+止损')
 
     # ── 近30天聚合 ──
     cutoff_30d = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
     records_open_30d = [r for r in records_open if r['signal_date'] >= cutoff_30d]
     records_close_30d = [r for r in records_close if r['signal_date'] >= cutoff_30d]
+    records_stop_30d = [r for r in records_stop if r['signal_date'] >= cutoff_30d]
     sum_open_30d = _aggregate(records_open_30d, '开盘买(近30天)')
     sum_close_30d = _aggregate(records_close_30d, '尾盘买(近30天)')
+    sum_stop_30d = _aggregate(records_stop_30d, '休盘买+止损(近30天)')
 
-    if sum_open is None and sum_close is None:
+    if sum_open is None and sum_close is None and sum_stop is None:
         empty_summary = {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0,
                     'total_pnl': 0, 'plr': 0, 'max_dd': 0, 'best': 0,
                     'worst': 0, 'ev': 0, 'cumulative_ret': 0}
@@ -850,6 +894,7 @@ def run_tab_backtest(
         'comparison': {
             'open_buy': {'summary': sum_open, 'trades': records_open},
             'close_buy': {'summary': sum_close, 'trades': records_close},
+            'stop_loss': {'summary': sum_stop, 'trades': records_stop},
             'unbuyable_count': unbuyable_count,
         },
     }

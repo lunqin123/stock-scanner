@@ -1129,6 +1129,8 @@ function renderT1BacktestPanel(data) {
         }
         html += _cmpCard('开盘买 (D+1 开盘 -> D+2 开盘)', ob, '#3b82f6');
         html += _cmpCard('尾盘买 (D+1 收盘 -> D+2 开盘)', cb, '#a855f7');
+        var st = cmp.stop_loss && cmp.stop_loss.summary;
+        html += _cmpCard('休盘买+止损 (当日收盘 -> 次日止损/收盘)', st, '#f59e0b');
         html += '</div></div>';
     }
 
