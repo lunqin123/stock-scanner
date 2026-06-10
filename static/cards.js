@@ -1048,6 +1048,7 @@ function renderT1BacktestPanel(data) {
     html += '<div style="width:1px;background:var(--border);align-self:stretch;margin:8px 0"></div>';
     html += _wrBlock('全部历史胜率', s, false);
     html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:8px">📌 笔数 = <b>实际可成交</b>笔数（已过滤一字板 / 停牌 / 涨停开盘无法买入等无效信号），与上方调权卡的 TOP-N 推荐总数口径不同</div>';
     // 底部统计
     html += '<div style="font-size:12px;color:var(--text-muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">';
     html += '累计收益 <span style="color:' + (s.cumulative_ret >= 0 ? '#ef4444' : '#22c55e') + ';font-weight:600">' + (s.cumulative_ret >= 0 ? '+' : '') + (s.cumulative_ret || 0).toFixed(2) + '%</span>';
@@ -1157,7 +1158,12 @@ window.renderT1BacktestPanel = renderT1BacktestPanel;
 // ─── 全 Tab 策略权重面板 ───
 function renderTabWeights(weights) {
     if (!weights || !weights.length) return '';
-    var html = '<div class="card" style="margin:16px"><h3 style="margin:0 0 10px">📊 策略权重分配 (基于滚动胜率+EV)</h3>';
+    var html = '<div class="card" style="margin:16px"><h3 style="margin:0 0 6px">📊 策略权重分配 (基于滚动胜率+EV)</h3>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.6">'
+    + '💡 <b>调权算法专用指标</b>：各 tab 近30 天 <b>推荐过</b> 的 TOP-N 笔数 +模拟收益，用于动态调整仓位权重。<br>'
+    + '⚠️ <b>与下方"近30 天回测"笔数口径不同</b>：本卡统计的是"该 tab 每天跑出的 TOP-N 推荐总数"，包含一字板 / 无效信号；下方回测是"实际可成交笔数"。<br>'
+    + '👉 例：涨停 TOP3 ×30 天 ≈90 笔，但下方回测可能只算入60 笔左右（被一字板 / 无成交过滤掉）。'
+    + '</div>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
     weights.forEach(function(w) {
         var bg = w.color + '18';
