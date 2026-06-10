@@ -511,9 +511,9 @@ def adjust_trend_weights_from_backtest(records: list, lr: float = 0.02):
     for f, corr in corrs.items():
         delta = corr * lr * TREND_DEFAULT_WEIGHTS[f]
         new_val = current[f] + delta
-        # 软钳制: 0.5x~1.5x 默认值
-        lo = TREND_DEFAULT_WEIGHTS[f] * 0.5
-        hi = TREND_DEFAULT_WEIGHTS[f] * 1.5
+        # 钳制: -1.0x~2.0x 默认值 (允许负权,反向指标)
+        lo = -TREND_DEFAULT_WEIGHTS[f]
+        hi = TREND_DEFAULT_WEIGHTS[f] * 2.0
         new_weights[f] = round(max(lo, min(hi, new_val)), 1)
         arrow = '↑' if delta > 0 else '↓'
         lines.append(f"  {arrow} {TREND_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")

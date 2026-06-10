@@ -1785,7 +1785,7 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
              f_nh * w['new_high'] + f_ma * w.get('ma_rev', 0))
 
     df = df.copy()
-    df['动量评分'] = total.round(1)
+    df['动量评分'] = total.clip(lower=0).round(1)  # 负权允许, 但总分不<0
     df['trend_chg'] = (f_chg * w['chg']).round(1)
     df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
     df['trend_amount'] = (f_amount * w['amount']).round(1)
