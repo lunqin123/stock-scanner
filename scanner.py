@@ -816,7 +816,7 @@ def score_buyability(df: pd.DataFrame) -> pd.Series:
 # ─── 第七步: 总评分 + 输出 ───
 
 def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
-                        sector_scores: pd.Series, seal_scores: pd.Series,
+                        sector_raw: pd.Series, seal_scores: pd.Series,
                         tech_scores: pd.Series,
                         raw_money: pd.Series = None,
                         sentiment_score: float = 5.0,
@@ -834,7 +834,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    s_sector = (s_res + sector_scores) / 2.0
+    s_sector = (s_res + sector_raw) / 2.0
     base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_sector, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
@@ -842,7 +842,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
     df['总分'] = total_scores.round(1)
     df['封板质量'] = seal_scores.round(1)
     df['资金面'] = money_scores.round(1)
-    df['板块热度'] = sector_scores.round(1)
+    df['板块热度'] = sector_raw.round(1)
     df['技术形态'] = tech_scores.round(1)
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
@@ -894,7 +894,7 @@ def format_table_output(df: pd.DataFrame, money_scores: pd.Series,
 
 
 def format_output(df: pd.DataFrame, money_scores: pd.Series,
-                  sector_scores: pd.Series, seal_scores: pd.Series,
+                  sector_raw: pd.Series, seal_scores: pd.Series,
                   tech_scores: pd.Series,
                   raw_money: pd.Series = None,
                   sentiment_score: float = 5.0,
@@ -912,7 +912,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     s_res = sector_res_scores if sector_res_scores is not None else pd.Series(4.0, index=df.index)
     s_ss = stock_sentiment_scores if stock_sentiment_scores is not None else pd.Series(5.0, index=df.index)
 
-    s_sector = (s_res + sector_scores) / 2.0
+    s_sector = (s_res + sector_raw) / 2.0
     base_totals = weight_manager.apply_weights(seal_scores, money_scores, s_sector, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=df.index), stock_sentiment_scores=s_ss, weights=w)
     total_scores = base_totals
     df = df.copy()
@@ -920,7 +920,7 @@ def format_output(df: pd.DataFrame, money_scores: pd.Series,
     df['总分'] = total_scores.round(1)
     df['封板质量'] = seal_scores.round(1)
     df['资金面'] = money_scores.round(1)
-    df['板块热度'] = sector_scores.round(1)
+    df['板块热度'] = sector_raw.round(1)
     df['技术形态'] = tech_scores.round(1)
     df['市场情绪'] = pd.Series(sentiment_score, index=df.index).round(1)
     df['历史股性'] = s_history.round(1)
@@ -1339,90 +1339,85 @@ def score_stock_history(df: pd.DataFrame, today_str: str, prev_df: pd.DataFrame 
 
 # ─── 炸板股反包潜力扫描 ───
 
-def score_zhaban_data(df: pd.DataFrame, today_str: str) -> pd.DataFrame:
-    """炸板反包纯评分函数（无print/格式化）。Web card端点和CLI共享。
-    返回带评分列的DataFrame（已排序、取TOP_N）。"""
+def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None) -> pd.DataFrame:
+    """炸板反包评分 (P5: 5因子可调权)。"""
     df = df.copy()
 
-    # ── 列识别（优先名称匹配，fallback 硬编码加长度保护） ──
+    defaults = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+    w = dict(defaults)
+    if weights:
+        w.update({k: v for k, v in weights.items() if k in defaults})
+    max_raw = sum(defaults.values())
+
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
     seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
     zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else (df.columns[12] if len(df.columns) > 12 else None)
     turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
     industry_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
 
-    # 1. 封板质量 (0-25): 封板时间早 + 封板资金大
+    # 1. 封板质量 (0-20)
     seal_scores = pd.Series(0.0, index=df.index)
     seal_scores += df[seal_time_col].apply(seal_time_score)
-
     fund_vals = df[seal_fund_col].fillna(0).astype(float)
     max_fund = fund_vals.max()
-    if max_fund > 0:
-        seal_scores += (fund_vals / max_fund) * 5  # 回测显示封板资金与次日负相关，降权
-    else:
-        seal_scores += 3
-
+    if max_fund > 0: seal_scores += (fund_vals / max_fund) * 5
+    else: seal_scores += 3
     zb_times = df[zhaban_count_col].fillna(0).astype(float)
     seal_scores += np.clip(1.0 - zb_times / 8.0, 0, 1) * 5
-    seal_scores = seal_scores.clip(upper=25)
+    f_seal = (seal_scores / 20).clip(0, 1)
 
     # 2. 资金承接 (0-20)
     fund_df_zb, _ = fetch_fund_flow_data()
-    money_scores = pd.Series(0.0, index=df.index)
     raw_money = pd.Series(0.0, index=df.index)
     if fund_df_zb is not None:
         money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df_zb)
     else:
         money_scores = np.clip(fund_vals / (fund_vals.max() + 1), 0, 1) * 10
         raw_money = fund_vals
+    f_money = (money_scores / 20).clip(0, 1)
 
-    # 3. 炸板特征分 (0-15) - 向量化
-    zhaban_feature = pd.Series(7.5, index=df.index)
+    # 3. 炸板特征 (0-15)
     turnover_vals = df[turnover_col].fillna(0).astype(float)
-    zhaban_feature = zhaban_feature + \
-        ((turnover_vals >= 10) & (turnover_vals <= 25)).astype(float) * 5 + \
-        (((turnover_vals >= 5) & (turnover_vals <= 30)) & ~((turnover_vals >= 10) & (turnover_vals <= 25))).astype(float) * 2 - \
-        (turnover_vals > 40).astype(float) * 3
-    zhaban_feature = zhaban_feature.clip(0, 15)
+    feature = pd.Series(7.5, index=df.index)
+    feature = feature + ((turnover_vals >= 10) & (turnover_vals <= 25)) * 5 + \
+        (((turnover_vals >= 5) & (turnover_vals <= 30)) & ~((turnover_vals >= 10) & (turnover_vals <= 25))) * 2 - \
+        (turnover_vals > 40) * 3
+    f_feature = (feature.clip(0, 15) / 15)
 
-    # 4. 换手率评分 (0-10) - 向量化
+    # 4. 换手率 (0-10)
     turn_scores = pd.Series(5.0, index=df.index)
-    turn_scores = np.where(
-        (turnover_vals >= 8) & (turnover_vals <= 20), 10.0,
-        np.where(
-            (turnover_vals >= 5) & (turnover_vals <= 30), 7.0,
-            np.where(turnover_vals <= 3, 3.0,
-            np.where(turnover_vals > 40, 2.0, 5.0))
-        )
-    )
+    turn_scores = np.where((turnover_vals >= 8) & (turnover_vals <= 20), 10.0,
+        np.where((turnover_vals >= 5) & (turnover_vals <= 30), 7.0,
+        np.where(turnover_vals <= 3, 3.0, np.where(turnover_vals > 40, 2.0, 5.0))))
+    f_turn = (turn_scores / 10).clip(0, 1)
 
-    # 5. 板块热度 (0-12) - 向量化
+    # 5. 板块热度 (0-12)
     try:
         limit_pool = ak.stock_zt_pool_em(date=today_str)
         if not limit_pool.empty:
-            ind_col = '所属行业' if '所属行业' in limit_pool.columns else limit_pool.columns[15]
-            counts = limit_pool[ind_col].value_counts()
-            # 向量化: 一次性算每个 idx 的 industry 计分
-            if industry_col in df.columns:
-                industries = df[industry_col]
-            else:
-                industries = df.iloc[:, 15]
+            ind_col_l = '所属行业' if '所属行业' in limit_pool.columns else limit_pool.columns[15]
+            counts = limit_pool[ind_col_l].value_counts()
+            industries = df[industry_col] if industry_col in df.columns else df.iloc[:, 15]
             industry_counts = industries.map(counts).fillna(0)
-            sector_scores = (4 + industry_counts * 2).clip(upper=12)
+            sector_raw = (4 + industry_counts * 2).clip(upper=12)
         else:
-            sector_scores = get_sector_heat_scores(df, money_series=raw_money)
+            sector_raw = get_sector_heat_scores(df, money_series=raw_money)
     except Exception:
-        sector_scores = get_sector_heat_scores(df, money_series=raw_money)
+        sector_raw = get_sector_heat_scores(df, money_series=raw_money)
+    f_sector = (sector_raw / 12).clip(0, 1)
 
-    # ── 总分 + 列 ──
-    raw_total = seal_scores + money_scores + zhaban_feature + turn_scores + sector_scores
-    max_raw = 20 + 20 + 15 + 10 + 12  # seal从25降到20(封板资金降权)
-    df['总分'] = (raw_total / max_raw * 100).round(1)
-    df['封板质量'] = seal_scores.round(1)
+    total = (f_seal * w['seal'] + f_money * w['money'] + f_feature * w['feature'] +
+             f_turn * w['turnover'] + f_sector * w['sector'])
+    df['总分'] = (total / max_raw * 100).clip(lower=0).round(1)
+    df['zb_seal'] = (f_seal * w['seal']).round(1)
+    df['zb_money'] = (f_money * w['money']).round(1)
+    df['zb_feature'] = (f_feature * w['feature']).round(1)
+    df['zb_turnover'] = (f_turn * w['turnover']).round(1)
+    df['zb_sector'] = (f_sector * w['sector']).round(1)
     df['资金承接'] = money_scores.round(1)
-    df['炸板特征'] = zhaban_feature.round(1)
+    df['炸板特征'] = feature.round(1)
     df['换手评分'] = turn_scores.round(1)
-    df['板块热度'] = sector_scores.round(1)
+    df['板块热度'] = sector_raw.round(1)
     df['净流入'] = raw_money
 
     return df.sort_values('总分', ascending=False).head(TOP_N)
@@ -2316,10 +2311,13 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
 #  模式5: 跌停翘板信号 (--dtqiaoban)
 # ─── 跌停翘板纯评分函数 ───
 
-def score_dtqiaoban_data(df: pd.DataFrame) -> pd.DataFrame:
-    """跌停翘板纯评分函数（无print/格式化）。Web card端点和CLI共享。
-    返回带'翘板评分'列的DataFrame（已排序、取TOP_N）。"""
+def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
+    """翘板反抽评分 (P5: 5因子可调权)。"""
     df = df.copy()
+    defaults = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+    w = dict(defaults)
+    if weights:
+        w.update({k: v for k, v in weights.items() if k in defaults})
     # 列识别
     deal_col = df.columns[12] if len(df.columns) > 12 else None
     seal_fund_col = df.columns[10] if len(df.columns) > 10 else None
@@ -2327,62 +2325,51 @@ def score_dtqiaoban_data(df: pd.DataFrame) -> pd.DataFrame:
     turnover_col = df.columns[9] if len(df.columns) > 9 else None
     seal_time_col = df.columns[11] if len(df.columns) > 11 else None
 
-    scores = pd.Series(0.0, index=df.index)
-    raw_details = {}
-
+    f_deal = pd.Series(0.2, index=df.index)
+    f_seal = pd.Series(0.5, index=df.index)
+    f_cont = pd.Series(0.2, index=df.index)
+    f_turn = pd.Series(0.1, index=df.index)
+    f_time = pd.Series(0.3, index=df.index)
     for idx in df.index:
-        total = 0
-        details = []
-        # 1. 放量信号 (0-25)
-        deal_val = 0
         if deal_col is not None:
-            try:    deal_val = float(df.loc[idx, deal_col]) if pd.notna(df.loc[idx, deal_col]) else 0
-            except: pass
-        if deal_val > 5000e4:       total += 25; details.append("巨量翘板")
-        elif deal_val > 1000e4:     total += 20; details.append("放量翘板")
-        elif deal_val > 100e4:      total += 12; details.append("微量翘板")
-        else:                       total += 5;  details.append("无量跌停")
-        # 2. 封单变化 (0-25)
-        seal_fund_val = 0
+            dv = float(df.loc[idx, deal_col]) if pd.notna(df.loc[idx, deal_col]) else 0
+            if dv > 5000e4: f_deal[idx] = 1.0
+            elif dv > 1000e4: f_deal[idx] = 0.8
+            elif dv > 100e4: f_deal[idx] = 0.48
+            else: f_deal[idx] = 0.2
         if seal_fund_col is not None:
-            try:    seal_fund_val = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
-            except: pass
-        if seal_fund_val < 100e4:        total += 25; details.append("封单极小")
-        elif seal_fund_val < 1000e4:     total += 20; details.append("封单偏小")
-        elif seal_fund_val < 5000e4:     total += 10; details.append("封单适中")
-        else:                            total += 3;  details.append("封单巨大")
-        # 3. 连续跌停 (0-25)
-        cont_val = 0
+            sv = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
+            if sv < 100e4: f_seal[idx] = 1.0
+            elif sv < 1000e4: f_seal[idx] = 0.8
+            elif sv < 5000e4: f_seal[idx] = 0.4
+            else: f_seal[idx] = 0.12
         if cont_dieting_col is not None:
-            try:    cont_val = int(float(df.loc[idx, cont_dieting_col])) if pd.notna(df.loc[idx, cont_dieting_col]) else 0
-            except: pass
-        if cont_val >= 3:       total += 25; details.append(f"N{cont_val}板超跌")
-        elif cont_val == 2:     total += 18; details.append(f"连跌{cont_val}板")
-        elif cont_val == 1:     total += 10; details.append("首板跌停")
-        else:                   total += 5
-        # 4. 换手率 (0-15)
-        turnover_val = 0
+            cv = int(float(df.loc[idx, cont_dieting_col])) if pd.notna(df.loc[idx, cont_dieting_col]) else 0
+            if cv >= 3: f_cont[idx] = 1.0
+            elif cv == 2: f_cont[idx] = 0.72
+            elif cv == 1: f_cont[idx] = 0.4
+            else: f_cont[idx] = 0.2
         if turnover_col is not None:
-            try:    turnover_val = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 0
-            except: pass
-        if turnover_val > 10:       total += 15; details.append("高换手承接")
-        elif turnover_val > 5:      total += 10; details.append("有换手")
-        elif turnover_val > 1:      total += 5;  details.append("少量换手")
-        else:                       total += 2
-        # 5. 跌停时间 (0-10)
+            tv = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 0
+            if tv > 10: f_turn[idx] = 1.0
+            elif tv > 5: f_turn[idx] = 0.67
+            elif tv > 1: f_turn[idx] = 0.33
+            else: f_turn[idx] = 0.13
         if seal_time_col is not None:
-            try:
-                t = str(df.loc[idx, seal_time_col]).strip()
-                if len(t) >= 4:
-                    minutes = int(t[:2]) * 60 + int(t[2:4])
-                    if minutes >= 840:          total += 10; details.append("尾盘跌停")
-                    elif minutes >= 750:        total += 5;  details.append("午后跌停")
-                    else:                       total += 2;  details.append("早盘跌停")
-            except: total += 3
-        scores[idx] = min(total, 100)
-        raw_details[idx] = details
-
-    df['翘板评分'] = scores.round(1)
+            t = str(df.loc[idx, seal_time_col]).strip()
+            if len(t) >= 4:
+                minutes = int(t[:2]) * 60 + int(t[2:4])
+                if minutes >= 840: f_time[idx] = 1.0
+                elif minutes >= 750: f_time[idx] = 0.5
+                else: f_time[idx] = 0.2
+    total = (f_deal*w['deal'] + f_seal*w['seal'] + f_cont*w['cont'] + f_turn*w['turnover'] + f_time*w['time'])
+    max_raw = sum(defaults.values())
+    df['翘板评分'] = (total / max_raw * 100).clip(lower=0).round(1)
+    df['dt_deal'] = (f_deal*w['deal']).round(1)
+    df['dt_seal'] = (f_seal*w['seal']).round(1)
+    df['dt_cont'] = (f_cont*w['cont']).round(1)
+    df['dt_turnover'] = (f_turn*w['turnover']).round(1)
+    df['dt_time'] = (f_time*w['time']).round(1)
     return df.sort_values('翘板评分', ascending=False).head(TOP_N)
 
 
@@ -3054,12 +3041,12 @@ def main():
         # 资金流不可用，降级输出
         print("  ! 同花顺数据不可用，降级为仅涨停强度+板块+量价评分", file=sys.stderr)
         money_scores = pd.Series(0.0, index=filtered.index)
-        sector_scores = get_sector_heat_scores(filtered)
+        sector_raw = get_sector_heat_scores(filtered)
         tech_scores = score_tech_form(filtered)
         buyability_scores = score_buyability(filtered)
         sector_res_scores = get_sector_resonance(filtered)
         fmt = format_table_output if table_mode else format_output
-        output = fmt(filtered, money_scores, sector_scores, score_seal_strength(filtered), tech_scores,
+        output = fmt(filtered, money_scores, sector_raw, score_seal_strength(filtered), tech_scores,
                       buyability_scores=buyability_scores,
                       sector_res_scores=sector_res_scores)
         print(output)
@@ -3075,7 +3062,7 @@ def main():
     print("[3/5] 评分: 涨停强度 + 资金面 + 板块热度 + 量价关系...", file=sys.stderr)
     seal_scores = score_seal_strength(filtered)
     money_scores, raw_money = get_money_flow_scores(filtered, fund_df=fund_df)
-    sector_scores = get_sector_heat_scores(filtered, money_series=raw_money)
+    sector_raw = get_sector_heat_scores(filtered, money_series=raw_money)
     tech_scores = score_tech_form(filtered)
     buyability_scores = score_buyability(filtered)
     sector_res_scores = get_sector_resonance(filtered)
@@ -3123,7 +3110,7 @@ def main():
     import weight_manager
     weights = weight_manager.load_weights()
     fmt = format_table_output if table_mode else format_output
-    output = fmt(filtered, money_scores, sector_scores, seal_scores, tech_scores,
+    output = fmt(filtered, money_scores, sector_raw, seal_scores, tech_scores,
                   raw_money=raw_money,
                   sentiment_score=sentiment_score,
                   sentiment_level=sentiment_level,
@@ -3146,7 +3133,7 @@ def main():
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
     s_principal = score_by_principal(filtered, 20000)
-    sector_merged_cli = (sector_res_scores + sector_scores) / 2.0
+    sector_merged_cli = (sector_res_scores + sector_raw) / 2.0
     base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_merged_cli, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
@@ -3190,7 +3177,7 @@ def main():
                 'total_score': round(float(total_scores.get(idx, 0)), 1),
                 'seal_score': round(float(seal_scores.get(idx, 0)), 1),
                 'money_score': round(float(money_scores.get(idx, 0)), 1),
-                'sector_score': round(float(sector_scores.get(idx, 0)), 1),
+                'sector_score': round(float(sector_raw.get(idx, 0)), 1),
                 'tech_score': round(float(tech_scores.get(idx, 0)), 1),
                 'community_score': round(float(community_scores.get(idx, 0)), 1) if community_scores is not None else 3.5,
                 'industry': row.get('所属行业', ''),

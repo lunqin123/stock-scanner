@@ -382,28 +382,37 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
-    """炸板评分: score_zhaban_data"""
+    """炸板评分: score_zhaban_data + 可调权 (P5)"""
     if df is None or df.empty:
         return None
     df = filter_non_main_board(df)
     if df.empty:
         return None
-    # price filter
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
-    df = df[df[price_col].astype(float) <= 200]  # MAX_PRICE
+    df = df[df[price_col].astype(float) <= 200]
     if df.empty:
         return None
-    return score_zhaban_data(df, date_str)
+    try:
+        from weight_manager import _load_tab_weights
+        w = _load_tab_weights('zhaban')
+    except Exception:
+        w = None
+    return score_zhaban_data(df, date_str, weights=w)
 
 
 def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
-    """跌停翘板评分: score_dtqiaoban_data"""
+    """跌停翘板评分: score_dtqiaoban_data + 可调权 (P5)"""
     if df is None or df.empty:
         return None
     df = filter_non_main_board(df)
     if df.empty:
         return None
-    return score_dtqiaoban_data(df)
+    try:
+        from weight_manager import _load_tab_weights
+        w = _load_tab_weights('dtqiaoban')
+    except Exception:
+        w = None
+    return score_dtqiaoban_data(df, weights=w)
 
 
 def _score_reversal(df: pd.DataFrame, date_str: str):
@@ -833,7 +842,9 @@ def run_tab_backtest(
                     }
                     # P4: 趋势因子分列(供调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
-                               'rev_turnover','rev_consecutive','rev_pullback','rev_sector']:
+                               'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
+                               'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector',
+                               'dt_deal','dt_seal','dt_cont','dt_turnover','dt_time']:
                         val = row.get(fk)
                         if val is not None:
                             rec[fk] = round(float(val), 1)
@@ -978,6 +989,14 @@ def run_tab_backtest(
             new_w, msg = adjust_reversal_weights_from_backtest(records_open)
             if msg:
                 print(f"  [反转调权] {msg}", file=sys.stderr)
+        except Exception:
+            pass
+    if tab in (TAB_ZHABAN, TAB_DTQIAOBAN) and records_open:
+        try:
+            from weight_manager import adjust_tab_weights_from_backtest
+            new_w, msg = adjust_tab_weights_from_backtest(tab, records_open)
+            if msg:
+                print(f"  [{tab}调权] {msg}", file=sys.stderr)
         except Exception:
             pass
 

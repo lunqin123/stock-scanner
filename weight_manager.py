@@ -509,6 +509,85 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.02):
 
 
 # ═══════════════════════════════════════════
+#  炸板 + 翘板 因子权重 (P5)
+# ═══════════════════════════════════════════
+
+ZB_DEFAULT_WEIGHTS = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
+
+DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
+
+_WEIGHTS_FILES = {
+    'zhaban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "zhaban_weights.json"),
+    'dtqiaoban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "dtqiaoban_weights.json"),
+}
+
+DEFAULTS_MAP = {'zhaban': ZB_DEFAULT_WEIGHTS, 'dtqiaoban': DT_DEFAULT_WEIGHTS}
+NAMES_MAP = {'zhaban': ZB_FACTOR_NAMES, 'dtqiaoban': DT_FACTOR_NAMES}
+PREFIX_MAP = {'zhaban': 'zb', 'dtqiaoban': 'dt'}
+
+
+def _load_tab_weights(tab: str) -> dict:
+    path = _WEIGHTS_FILES.get(tab)
+    defaults = DEFAULTS_MAP.get(tab, {})
+    if not path: return dict(defaults)
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            weights = dict(defaults)
+            weights.update({k: v for k, v in data.items() if k in weights})
+            return weights
+    except Exception: pass
+    return dict(defaults)
+
+
+def _save_tab_weights(tab: str, weights: dict):
+    path = _WEIGHTS_FILES.get(tab)
+    if not path: return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(weights, f, ensure_ascii=False, indent=2)
+    except Exception: pass
+
+
+def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.02):
+    if len(records) < 5:
+        return _load_tab_weights(tab), "数据不足"
+    current = _load_tab_weights(tab)
+    defaults = DEFAULTS_MAP.get(tab, {})
+    prefix = PREFIX_MAP.get(tab, '')
+    names = NAMES_MAP.get(tab, {})
+    factors = list(defaults.keys())
+    factor_keys = [f'{prefix}_{f}' for f in factors]
+
+    sample = records[0]
+    available = [fk for fk in factor_keys if fk in sample]
+    if len(available) < 2: return current, "缺因子列"
+
+    corrs = {}
+    for fk in available:
+        fn = fk.replace(f'{prefix}_', '')
+        scores = [r.get(fk, 0) for r in records]
+        rets = [r.get('net_ret_pct', 0) for r in records]
+        if len(set(scores)) <= 1: continue
+        corr = pd.Series(scores).corr(pd.Series(rets))
+        corrs[fn] = corr if not pd.isna(corr) else 0
+
+    if not corrs: return current, "无有效IC"
+    new_weights = dict(current)
+    for f, corr in corrs.items():
+        delta = corr * lr * defaults[f]
+        new_val = current[f] + delta
+        lo = -defaults[f]; hi = defaults[f] * 2.0
+        new_weights[f] = round(max(lo, min(hi, new_val)), 1)
+    _save_tab_weights(tab, new_weights)
+    return new_weights, ''
+
+
+# ═══════════════════════════════════════════
 #  趋势因子可调权 (P4: 5因子, ICIR驱动)
 # ═══════════════════════════════════════════
 
