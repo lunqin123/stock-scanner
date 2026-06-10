@@ -542,12 +542,12 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += renderBacktestDashboard(data);
                 // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
                 const tabs = [
-                    { key: 'limit-up', label: '涨停', days: 7 },
-                    { key: 'trend', label: '趋势', days: 7 },
-                    { key: 'zhaban', label: '炸板', days: 7 },
-                    { key: 'dtqiaoban', label: '翘板', days: 7 },
-                    { key: 'reversal', label: '反转', days: 7 },
-                    { key: 'sector', label: '板块', days: 7 },
+                    { key: 'limit-up', label: '涨停', days: 30 },
+                    { key: 'trend', label: '趋势', days: 30 },
+                    { key: 'zhaban', label: '炸板', days: 30 },
+                    { key: 'dtqiaoban', label: '翘板', days: 30 },
+                    { key: 'reversal', label: '反转', days: 30 },
+                    { key: 'sector', label: '板块', days: 30 },
                 ];
                 // 趋势66.7%胜率+正EV → 默认TOP1; 涨停/翘板TOP1更稳
                 var defaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
@@ -574,7 +574,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                 try {
                     const ctrl = new AbortController();
                     const tid = setTimeout(() => ctrl.abort(), 60000);
-                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=7&top_n=' + _btTopN + '&capital=' + _btCapital, { signal: ctrl.signal });
+                    const t1Resp = await fetch('/api/bt/' + activeTab + '?days=30&top_n=' + _btTopN + '&capital=' + _btCapital, { signal: ctrl.signal });
                     clearTimeout(tid);
                     const t1Data = await t1Resp.json();
                     html += renderT1BacktestPanel(t1Data);
