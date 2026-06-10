@@ -764,7 +764,7 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
             'signals': signals, 'advice': advice, 'auction_check': auction_check, 'risk_score': risk_score,
         })
 
-    items = [x for x in items if x['risk_score'] >= 40]  # 过滤低分
+    items = [x for x in items if x['risk_score'] >= 25]  # 过滤低分(权重调后总分缩水)
     items.sort(key=lambda x: -x['risk_score'])
     return items[:10]
 
