@@ -333,9 +333,10 @@ def compute_tab_weights():
     except Exception:
         all_data = {}
 
+    # 板块是行业级策略(非个股), 不参与个股仓位权重
     tabs_cn = {
         'limit-up': '涨停', 'trend': '趋势', 'zhaban': '炸板',
-        'dtqiaoban': '翘板', 'reversal': '反转', 'sector': '板块',
+        'dtqiaoban': '翘板', 'reversal': '反转',
     }
 
     result = []
