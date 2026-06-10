@@ -276,3 +276,126 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
     if dropped:
         lines.append(f"  噪声剔除(|IC|<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
     return new_weights, '\n'.join(lines)
+
+
+# ═══════════════════════════════════════════
+#  全 Tab 策略级权重 (基于回测胜率+EV)
+# ═══════════════════════════════════════════
+
+_TAB_PERF_FILE = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "stock_scanner_cache", "tab_performance.json"
+)
+_TAB_PERF_WINDOW = 5  # 滚动天数
+
+
+def save_tab_performance(tab: str, summary: dict):
+    """保存单次回测的 tab 表现数据"""
+    try:
+        os.makedirs(os.path.dirname(_TAB_PERF_FILE), exist_ok=True)
+        data = {}
+        if os.path.exists(_TAB_PERF_FILE):
+            with open(_TAB_PERF_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        perf = data.setdefault(tab, [])
+        entry = {
+            'date': date.today().strftime('%Y%m%d'),
+            'win_rate': summary.get('win_rate', 0),
+            'ev': summary.get('ev', 0),
+            'trades': summary.get('trade_count', 0),
+            'cumulative_ret': summary.get('cumulative_ret', 0),
+        }
+        perf.append(entry)
+        # 只保留最近 30 条
+        if len(perf) > 30:
+            perf = perf[-30:]
+        data[tab] = perf
+        with open(_TAB_PERF_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  [tab_perf] 保存失败: {e}", file=sys.stderr)
+
+
+def compute_tab_weights():
+    """基于各 tab 滚动胜率+EV 计算推荐仓位权重
+
+    规则:
+    - 滚动5日胜率>=50% 且 EV>0 → 权重+1档
+    - 胜率>=40% 且 EV>0 → 权重中性
+    - EV<0 或 胜率<40% → 权重-1档
+    - 无数据 → 默认权重
+
+    Returns: [{tab, name_cn, weight, win_rate, ev, trades, label, color}]
+    """
+    try:
+        with open(_TAB_PERF_FILE, 'r', encoding='utf-8') as f:
+            all_data = json.load(f)
+    except Exception:
+        all_data = {}
+
+    tabs_cn = {
+        'limit-up': '涨停', 'trend': '趋势', 'zhaban': '炸板',
+        'dtqiaoban': '翘板', 'reversal': '反转', 'sector': '板块',
+    }
+
+    result = []
+    for tab, cn_name in tabs_cn.items():
+        perf_list = all_data.get(tab, [])
+        recent = perf_list[-_TAB_PERF_WINDOW:] if perf_list else []
+
+        if len(recent) >= 3:
+            avg_wr = sum(p['win_rate'] for p in recent) / len(recent)
+            avg_ev = sum(p['ev'] for p in recent) / len(recent)
+            total_trades = sum(p['trades'] for p in recent)
+        elif recent:
+            avg_wr = recent[-1]['win_rate']
+            avg_ev = recent[-1]['ev']
+            total_trades = recent[-1]['trades']
+        else:
+            avg_wr = 0
+            avg_ev = 0
+            total_trades = 0
+
+        # 权重分档
+        if total_trades == 0:
+            weight = 0.5
+            label = '数据不足'
+            color = '#94a3b8'
+        elif avg_wr >= 50 and avg_ev > 0:
+            weight = 1.2
+            label = '推荐重仓'
+            color = '#ef4444'
+        elif avg_wr >= 40 and avg_ev > 0:
+            weight = 1.0
+            label = '中性仓位'
+            color = '#f59e0b'
+        elif avg_ev > 0:
+            weight = 0.8
+            label = '轻仓试探'
+            color = '#fbbf24'
+        else:
+            weight = 0.5
+            label = '建议观望'
+            color = '#22c55e'
+
+        result.append({
+            'tab': tab,
+            'name_cn': cn_name,
+            'weight': round(weight, 1),
+            'win_rate': round(avg_wr, 1),
+            'ev': round(avg_ev, 2),
+            'trades': total_trades,
+            'days': len(recent),
+            'label': label,
+            'color': color,
+        })
+
+    # 归一化：所有权重加总=6(每个tab基准1.0), 超出部分从高权重tab扣除
+    total = sum(r['weight'] for r in result)
+    if total > 0:
+        target = len(result)
+        scale = target / total
+        for r in result:
+            r['allocation_pct'] = round(r['weight'] * scale / target * 100, 0)
+
+    return result

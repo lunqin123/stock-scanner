@@ -540,6 +540,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     { key: 'sector', label: '板块', days: 5 },
                 ];
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'limit-up';
+                html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
                       + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">📊 多 Tab T+1 真实回测</div>'
                       + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
@@ -583,6 +584,18 @@ async function loadCardView(output, pageKey, apiUrl) {
             console.error('[Render Error]', pageKey, renderErr);
         }
         if (_pageToken === token) { output.innerHTML = html; _setCachedPage(pageKey, output.innerHTML); }
+        // 回测页面: 异步加载策略权重
+        if (pageKey === 'backtest') {
+            fetch('/api/backtest/tab-weights')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.ok && d.weights && _pageToken === token) {
+                        var wa = document.getElementById('tabWeightsArea');
+                        if (wa) wa.innerHTML = renderTabWeights(d.weights);
+                    }
+                })
+                .catch(() => {});
+        }
     } catch (err) {
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }

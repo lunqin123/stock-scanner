@@ -649,6 +649,12 @@ def run_tab_backtest(
                              start=start, end=end, top_n=top_n, capital=int(capital))
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
+            # 缓存命中也保存 tab 表现 (确保自动调权有数据)
+            try:
+                from weight_manager import save_tab_performance
+                save_tab_performance(tab, cached.get('summary', {}))
+            except Exception:
+                pass
             return cached
 
     trade_dates = _trading_dates_in_range(start, end, max_count=max_days)
@@ -908,6 +914,13 @@ def run_tab_backtest(
         _save_backtest_result(result)
     except Exception as _e:
         print(f"  [引擎持久化] 写入失败: {_e}", file=sys.stderr)
+
+    # 保存 tab 表现 → 自动调权
+    try:
+        from weight_manager import save_tab_performance
+        save_tab_performance(tab, result.get('summary', {}))
+    except Exception:
+        pass
 
     return result
 

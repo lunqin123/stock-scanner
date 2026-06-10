@@ -2374,6 +2374,17 @@ def api_tracker_stats():
     return {'ok': True, 'tabs': stats}
 
 
+@app.get("/api/backtest/tab-weights")
+def api_tab_weights():
+    """全 tab 策略权重 — 基于回测胜率+EV 自动调权"""
+    try:
+        from weight_manager import compute_tab_weights
+        weights = compute_tab_weights()
+        return {"ok": True, "weights": weights}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
 @app.get("/api/backtest/t1/top")
 def api_backtest_t1_top(
     days: int = Query(30),

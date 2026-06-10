@@ -1154,6 +1154,25 @@ function renderT1BacktestPanel(data) {
 }
 window.renderT1BacktestPanel = renderT1BacktestPanel;
 
+// ─── 全 Tab 策略权重面板 ───
+function renderTabWeights(weights) {
+    if (!weights || !weights.length) return '';
+    var html = '<div class="card" style="margin:16px"><h3 style="margin:0 0 10px">📊 策略权重分配 (基于滚动胜率+EV)</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+    weights.forEach(function(w) {
+        var bg = w.color + '18';
+        html += '<div style="flex:1;min-width:140px;padding:10px 12px;background:' + bg + ';border:1px solid ' + w.color + '44;border-radius:8px;text-align:center">';
+        html += '<div style="font-size:13px;font-weight:600;color:' + w.color + '">' + w.name_cn + '</div>';
+        html += '<div style="font-size:20px;font-weight:700;color:' + w.color + ';margin:4px 0">' + w.win_rate.toFixed(1) + '%</div>';
+        html += '<div style="font-size:11px;color:var(--text-muted)">EV ' + (w.ev >= 0 ? '+' : '') + w.ev.toFixed(2) + '% | ' + w.trades + '笔(' + w.days + '天)</div>';
+        html += '<div style="font-size:11px;font-weight:600;color:' + w.color + ';margin-top:4px">' + w.label + ' · ' + w.allocation_pct + '%仓位</div>';
+        html += '</div>';
+    });
+    html += '</div></div>';
+    return html;
+}
+window.renderTabWeights = renderTabWeights;
+
 // ─── 推荐追踪面板 — 各 tab 胜率 ───
 function renderTrackerPanel(data) {
     if (!data || !data.ok || !data.tabs || data.tabs.length === 0) {
