@@ -782,7 +782,14 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     """
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
-    raw_key = make_key("app", "trend_raw", date=today, principal=int(principal))
+    # 缓存键含权重哈希 — 权重变了自动刷新
+    try:
+        from weight_manager import load_trend_weights
+        tw = load_trend_weights()
+        w_hash = hash(tuple(sorted(tw.items()))) % 10000
+    except Exception:
+        w_hash = 0
+    raw_key = make_key("app", "trend_raw", date=today, principal=int(principal), w=w_hash)
 
     cached_data, from_cache, err = _cached_pool_loader(
         raw_key,
