@@ -15,9 +15,9 @@ const _dom = {
 
 // P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
 let _btTab = localStorage.getItem('btTab') || 'trend';  // 默认趋势(52.2%胜率)
-// 各 tab 推荐 TOP-N: 趋势66.7%/翘板60% → TOP1; 涨停→TOP3
-const _tabDefaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
-let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 3;
+// 各 tab 推荐 TOP-N (用户1把梭3万, 全 tab 统一 TOP1 + 3万本金)
+const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
+let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 
 function _saveBacktestParams() {
@@ -86,7 +86,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
     _btTab = tab;
-    var recTopN = _tabDefaultTopN[tab] || 3;
+    var recTopN = _tabDefaultTopN[tab] || 1;
     if (_btTopN !== recTopN) { _btTopN = recTopN; _btCapital = _btTopN * 30000; }
     _saveBacktestParams();
     var topSel = document.getElementById('btTopN');
@@ -575,8 +575,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                     { key: 'dtqiaoban', label: '翘板', days: 30 },
                     { key: 'reversal', label: '反转', days: 30 },
                 ];
-                // 趋势66.7%胜率+正EV → 默认TOP1; 涨停/翘板TOP1更稳
-                var defaultTopN = { 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
+                // 用户1把梭3万, 全 tab 统一 TOP1
+                var defaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'trend';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
