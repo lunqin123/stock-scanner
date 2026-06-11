@@ -65,6 +65,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     } catch (e) {
         if (myToken !== _btLoadToken) return;  // 同上,过期错误也丢弃
         var msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
+        console.error('[回测] 加载失败:', tab, 'msg=', msg, e);
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
     }
 }

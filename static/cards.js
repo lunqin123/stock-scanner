@@ -995,8 +995,14 @@ window.renderBacktestDashboard = renderBacktestDashboard;
 // ═══════════════════════════════════════════
 
 function renderBacktestTabFull(data) {
-    if (!data || !data.ok) {
-        return '<div class="loading">回测加载失败 - ' + (data && data.error || '未知错误') + '</div>';
+    if (!data) {
+        console.error('[回测] 返回 data 为 null/undefined');
+        return '<div class="error-text">回测加载失败 - 无响应 (请检查网络或服务端日志)</div>';
+    }
+    if (!data.ok) {
+        var errMsg = data.error || data.msg || '未知错误 (服务端未返回 error 字段)';
+        console.error('[回测] 服务端 ok=false:', data);
+        return '<div class="error-text">回测加载失败 - ' + esc(errMsg) + '</div>';
     }
     var bt = data.backtest || {};
     var s = bt.summary || {};

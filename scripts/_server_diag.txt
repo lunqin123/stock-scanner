@@ -1,0 +1,16 @@
+==== 诊断步骤 (在服务器上跑) ====
+
+# 1. 看服务运行状态
+sudo systemctl status stock-scanner --no-pager -n 5
+
+# 2. 看最近 50 行日志 (找 ERROR / Traceback)
+sudo journalctl -u stock-scanner -n 50 --no-pager
+
+# 3. 看 weight_scheduler 调权状态
+curl -s http://localhost:8080/api/weights/status | python -m json.tool
+
+# 4. 直接调 /full 端点看返回
+curl -s http://localhost:8080/api/bt/trend/full?days=30 | head -200
+
+# 5. 如果需要, 强制重启 (清掉 daemon 残留)
+sudo systemctl restart stock-scanner && sleep 3 && curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/bt/trend/full
