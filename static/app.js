@@ -59,11 +59,24 @@ async function loadBacktestTab(tab, days, topN, capital) {
         var resp = await fetch('/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital, { signal: ctrl.signal });
         clearTimeout(tid);
         var data = await resp.json();
-        if (myToken !== _btLoadToken) return;  // 已被新请求抢断,丢弃
-        _btCache[key] = data;
+        // 注: 不要 token-check 后直接 return, 必须把 data 写进 cache
+        // 理由: 用户切走再切回 → 第一次 fetch 拿回 data 但被丢弃 → 第二次 fetch 又发同样请求
+        // 解决: 即使 token 变了, 也写 cache (下次同 key 直接命中, 零延迟)
+        if (data && typeof data === 'object' && data.ok) {
+            _btCache[key] = { data: data, ts: Date.now() };
+        }
+        if (myToken !== _btLoadToken) return;  // 已被新请求抢断,丢弃渲染 (data 已入 cache)
+        if (!data) {
+            contentEl.innerHTML = '<div class="error-text">回测加载失败 - 服务端返回空 (请刷新重试)</div>';
+            return;
+        }
         contentEl.innerHTML = renderBacktestTabFull(data);
     } catch (e) {
-        if (myToken !== _btLoadToken) return;  // 同上,过期错误也丢弃
+        if (myToken !== _btLoadToken) {
+            // token 变了, 不报错(让新请求主导), 但至少 console 一下
+            console.warn('[回测] 过期错误被丢弃:', tab, e.message);
+            return;
+        }
         var msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
         console.error('[回测] 加载失败:', tab, 'msg=', msg, e);
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
