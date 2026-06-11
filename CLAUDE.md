@@ -55,8 +55,16 @@ plan_a 7因子加权 (100分制, `weight_manager.py:14-32`):
 
 ## 回测 + 调权
 
-- `auto_verify_backtest()` 在每次扫描后 daemon 线程运行 → 保存因子相关性到 `rolling_correlations.json`
-- `daily_adjust_weights()` 取近5天滚动均值，每天调权 (lr=0.02)
+- `weight_scheduler.py` 盘后自动调权 (v1.24.2 新增)
+  - **调度点**: `app.py:_run_close_scan()` 完成后 (15:05 收盘后) 自动触发
+  - **盘中不调**: `get_market_status() in ('trading','lunch')` 立即跳过
+  - **互斥锁**: `threading.Lock` + `data/weight_adjust.lock` 文件
+  - **阶段1**: plan_a (跑 5 天回测 → score×ret 相关性 → 调权重)
+  - **阶段2**: trend (从 archive.db daily_stocks 读 next_day → 调权重)
+  - **状态查询**: `GET /api/weights/status`
+  - **手动触发**: `POST /api/weights/run?force=bool` 或 `python weight_scheduler.py --force`
+- `auto_verify_backtest` 在每次扫描后 daemon 线程运行 → 保存因子相关性到 `rolling_correlations.json`
+- `daily_adjust_weights` 取近5天滚动均值，每天调权 (lr=0.02)
 - 可调权因子: seal/sector_mom/tech/sector_res/history (5个)
 - 权重软钳制: 0.5x~1.5x 默认值
 - 模拟交易排除次日一字板 (换手<1%+涨>9.5%)

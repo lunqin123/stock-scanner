@@ -2248,6 +2248,17 @@ def _run_close_scan(principal=20000):
                 print("  [T+1 回测] 已触发后台运行 (30 天 / TOP 3)", file=sys.stderr)
             except Exception as e:
                 print(f"  [T+1 回测] 启动失败: {e}", file=sys.stderr)
+            # 触发盘后自动调权 (后台, 不阻塞, 慢 ~30-60s, 互斥锁防盘中冲撞)
+            try:
+                import weight_scheduler
+                threading.Thread(
+                    target=weight_scheduler.run_after_hours_weight_adjust,
+                    kwargs={'force': False},
+                    daemon=True
+                ).start()
+                print("  [调权调度] 已触发盘后自动调权 (plan_a + trend, 互斥锁防盘中拉数据冲撞)", file=sys.stderr)
+            except Exception as e:
+                print(f"  [调权调度] 启动失败: {e}", file=sys.stderr)
         else:
             print("  [收盘扫描] 情绪数据异常，10分钟后重试", file=sys.stderr)
             threading.Timer(600, lambda: _run_close_scan(principal=principal)).start()
@@ -2327,6 +2338,36 @@ def api_health():
 def api_market_status():
     status = get_market_status()
     return {"ok": True, "status": status}
+
+
+@app.get("/api/weights/status")
+def api_weights_status():
+    """盘后调权状态 — 供前端面板展示"上次调权时间 / 调权中"等
+
+    盘中永远显示"never_run"或"stale", 用户看到"调权中"是异常
+    """
+    import weight_scheduler
+    return {
+        "ok": True,
+        "weight_adjust": weight_scheduler.get_weight_adjust_status(),
+    }
+
+
+@app.post("/api/weights/run")
+def api_weights_run(force: bool = Query(False, description="强制调权, 跳过市场状态检查")):
+    """手动触发调权 (CLI/调试用)
+
+    force=True: 跳过盘中检查 (供用户在盘中手动触发, 不推荐)
+    force=False: 仅盘后触发
+    """
+    import weight_scheduler
+    # 后台跑, 不阻塞 API
+    threading.Thread(
+        target=weight_scheduler.run_after_hours_weight_adjust,
+        kwargs={'force': force},
+        daemon=True
+    ).start()
+    return {"ok": True, "msg": f"调权已在后台启动 (force={force})"}
 
 
 @app.get("/api/backtest/dashboard")

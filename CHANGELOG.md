@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.24.2 (2026-06-11)
+
+### 调度 — 盘后自动调权 (解决 v1.23 之前的死代码)
+- **新增 `weight_scheduler.py`**: 盘后调权统一入口
+  - **互斥锁**: `threading.Lock` + `data/weight_adjust.lock` 文件 (跨进程防并发)
+  - **盘中不调**: `get_market_status() in ('trading', 'lunch')` 立即跳过, 避免冲撞用户实时拉数据
+  - **僵死锁恢复**: 状态文件 > 10 分钟没动 → 视为上次崩了, 允许新调权启动
+  - **fire-and-forget**: 调权期间用户请求直接用旧值 (不阻塞用户)
+- **接入点**: `app.py:_run_close_scan()` 完成后 (15:05+60s) 触发
+  - 阶段1: plan_a — 跑 5 天回测 → score × net_ret_pct 相关性 → 调权重
+  - 阶段2: trend — 从 archive.db daily_stocks 读 next_day 数据 → 调权重
+  - 阶段3: reversal/tab — 暂搁, archive.db 缺 rev_xxx 因子分列
+- **新 API**:
+  - `GET /api/weights/status` — 上次调权时间/状态/tabs
+  - `POST /api/weights/run?force=bool` — 手动触发 (CLI/调试)
+- **CLI**: `python weight_scheduler.py --status` / `--force`
+
+### 修复 — archiver 漏补 trend 的 next_day
+- `_update_next_day_data` 之前只用 `stock_zt_pool_previous_em` (limit_up only)
+- **新增方法2**: 用 `stock_zh_a_spot_em` 全市场行情查 trend 等其他类型代码的次日涨跌幅
+- 效果: 15:05 收盘后, trend 类型的 next_day_change 自动填上 (历史 248 条全 None → 明日自动开始累积)
+
+### 数据缺口 (已知)
+- `backtest_engine.run_tab_backtest` 返回的 trades **不包含每笔的因子分** (seal_score/tech_score/...)
+  → plan_a 调权只能用 `score 总体 × net_ret_pct` 相关性, 4 个因子共用同一相关系数 (粗调, 后续升级需 backtest_engine 补 trades 因子分列)
+
+### 文档
+- CLAUDE.md 加"盘后调度"说明
+- 注释: `auto_verify_backtest` 在 weight_manager.py 中实际是 `daily_adjust_weights` + `save_daily_correlations` 的合称 (v1.23 之前叫法, 现统一为 `weight_scheduler.run_after_hours_weight_adjust`)
+
+---
+
 ## v1.24.1 (2026-06-11)
 
 ### 配置

@@ -628,6 +628,11 @@ def _update_next_day_data(conn, target_date, current_date):
     更新 target_date 的股票的 next_day 数据。
     target_date: 需要补数据的交易日（前一天）
     current_date: 当前日期（今天，用于取次日数据）
+
+    三步走:
+    1. limit_up 类型: 用 stock_zt_pool_previous_em (上交易日涨停表)
+    2. trend/其他类型: 用 stock_zh_a_spot_em 全市场行情查代码的涨跌幅
+    3. 跳过已有数据的代码 (next_day_change IS NOT NULL)
     """
     # 检查是否已有数据
     existing = conn.execute(
@@ -640,8 +645,9 @@ def _update_next_day_data(conn, target_date, current_date):
     import akshare as ak
     import pandas as _pd
 
-    # 方法1: 用 stock_zt_pool_previous_em 获取上交易日涨停股的今日表现
     updated = 0
+
+    # 方法1: 用 stock_zt_pool_previous_em 获取上交易日涨停股的今日表现 (limit_up 类型)
     try:
         prev = ak.stock_zt_pool_previous_em(date=current_date)
         if prev is not None and not prev.empty:
@@ -653,14 +659,40 @@ def _update_next_day_data(conn, target_date, current_date):
                 chg = float(row[chg_col]) if _pd.notna(row[chg_col]) else None
                 if chg is not None:
                     conn.execute(
-                        "UPDATE daily_stocks SET next_day_change=?, updated_at=datetime('now','localtime') WHERE trade_date=? AND code=? AND next_day_change IS NULL",
+                        "UPDATE daily_stocks SET next_day_change=?, updated_at=datetime('now','localtime') "
+                        "WHERE trade_date=? AND code=? AND next_day_change IS NULL",
                         (chg, target_date, code)
                     )
                     if conn.execute("SELECT changes()").fetchone()[0] > 0:
                         updated += 1
             conn.commit()
     except Exception as e:
-        print(f"      更新next_day错误: {e}")
+        print(f"      更新next_day(limit_up)错误: {e}")
+
+    # 方法2: 用全市场行情查 trend 等其他类型的代码的次日涨跌幅
+    try:
+        # 查 target_date 当天所有还缺 next_day 数据的代码 (排除已更新的 limit_up)
+        need_codes = [r[0] for r in conn.execute(
+            "SELECT code FROM daily_stocks WHERE trade_date=? AND next_day_change IS NULL",
+            (target_date,)
+        ).fetchall()]
+        if need_codes:
+            spot = ak.stock_zh_a_spot_em()
+            if spot is not None and not spot.empty:
+                spot['_code'] = spot['代码'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
+                spot_map = dict(zip(spot['_code'], spot['涨跌幅']))
+                for code in need_codes:
+                    if code in spot_map and _pd.notna(spot_map[code]):
+                        conn.execute(
+                            "UPDATE daily_stocks SET next_day_change=?, updated_at=datetime('now','localtime') "
+                            "WHERE trade_date=? AND code=? AND next_day_change IS NULL",
+                            (float(spot_map[code]), target_date, code)
+                        )
+                        if conn.execute("SELECT changes()").fetchone()[0] > 0:
+                            updated += 1
+                conn.commit()
+    except Exception as e:
+        print(f"      更新next_day(全市场)错误: {e}")
 
     return updated
 
