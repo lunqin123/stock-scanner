@@ -107,7 +107,7 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 5  # v4→v5: 扩展数据源 (north_flow/margin_ratio/inst_rating/limit_reason)
+_RAW_CACHE_VERSION = 6  # v5→v6: plan_a 加权和 71→100 调整
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
@@ -2387,63 +2387,6 @@ def _run_t1_backtest_cached(max_days=30, top_n=3, capital=30000, force=False):
     except Exception as e:
         return {'error': f'T+1 回测失败: {str(e)[:200]}', 'summary': {}, 'trades': []}
 
-
-@app.get("/api/backtest/t1")
-def api_backtest_t1(
-    days: int = Query(30, description="回测天数"),
-    top_n: int = Query(3, description="每天取 TOP N"),
-    capital: float = Query(30000, description="单笔本金 (元)"),
-    refresh: bool = Query(False, description="强制刷新缓存")
-):
-    """T+1 真实回测面板 (A 股 T+1 规则)
-    策略: 信号日 (涨停) → D+1 开盘买入 → D+2 开盘卖出
-    返回: 胜率/平均/总盈亏/盈亏比/回撤/EV + 每日明细 + TOP5/BOTTOM5
-    """
-    result = _run_t1_backtest_cached(
-        max_days=days, top_n=top_n, capital=capital, force=refresh
-    )
-    return {
-        'ok': 'error' not in result,
-        'data': result,
-    }
-
-
-# ═══════════════════════════════════════════
-#  推荐追踪系统 - 各 tab 胜率
-# ═══════════════════════════════════════════
-
-@app.get("/api/tracker/stats")
-def api_tracker_stats():
-    """各 tab 推荐次日的胜率统计"""
-    stats = _get_tracker_stats()
-    return {'ok': True, 'tabs': stats}
-
-
-@app.get("/api/backtest/tab-weights")
-def api_tab_weights():
-    """全 tab 策略权重 — 基于回测胜率+EV 自动调权"""
-    try:
-        from weight_manager import compute_tab_weights
-        weights = compute_tab_weights()
-        return {"ok": True, "weights": weights}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
-
-
-@app.get("/api/backtest/t1/top")
-def api_backtest_t1_top(
-    days: int = Query(30),
-    top_n: int = Query(3),
-    capital: float = Query(30000)
-):
-    """T+1 真实回测 - 仅返回 TOP 5 (最快)"""
-    res = _run_t1_backtest_cached(max_days=days, top_n=top_n, capital=capital)
-    return {
-        'ok': 'error' not in res,
-        'top5': res.get('top5', []),
-        'bottom5': res.get('bottom5', []),
-        'summary': res.get('summary', {}),
-    }
 
 
 # ═══════════════════════════════════════════

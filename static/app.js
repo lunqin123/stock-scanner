@@ -26,8 +26,12 @@ function _saveBacktestParams() {
     localStorage.setItem('btCapital', _btCapital);
 }
 
-// P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存，切回秒显示
+// P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存 data 对象,切回秒显示
+// 关键修复:
+//   1. 缓存 data 而不是 html(避免以后加 generated_at 等动态字段时缓存陈旧)
+//   2. _btLoadToken 防竞态:慢请求完成后丢弃(避免切tab时旧请求覆盖新loading)
 var _btCache = {};
+var _btLoadToken = 0;
 
 function _btCacheKey(tab, days, topN, capital) {
     return tab + '_' + days + '_' + topN + '_' + capital;
@@ -42,20 +46,24 @@ async function loadBacktestTab(tab, days, topN, capital) {
 
     var key = _btCacheKey(tab, days, topN, capital);
     if (_btCache[key]) {
-        contentEl.innerHTML = _btCache[key];
+        _btCache[key].ts = Date.now();  // LRU 命中刷时间戳, 防止"热数据被冷数据挤掉"
+        contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
         return;
     }
 
+    _btLoadToken++;
+    var myToken = _btLoadToken;
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
         var resp = await fetch('/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital, { signal: ctrl.signal });
         clearTimeout(tid);
         var data = await resp.json();
-        var html = renderBacktestTabFull(data);
-        _btCache[key] = html;
-        contentEl.innerHTML = html;
+        if (myToken !== _btLoadToken) return;  // 已被新请求抢断,丢弃
+        _btCache[key] = data;
+        contentEl.innerHTML = renderBacktestTabFull(data);
     } catch (e) {
+        if (myToken !== _btLoadToken) return;  // 同上,过期错误也丢弃
         var msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
     }
@@ -83,23 +91,8 @@ async function switchBacktestTab(tab, days) {
     await loadBacktestTab(tab, days, _btTopN, _btCapital);
 }
 
-// 共用: 拉取回测数据并渲染
-async function _fetchBacktest(tab, days, topN, capital, contentEl) {
-    try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 60000);
-        const url = '/api/bt/' + tab + '?days=' + days + '&top_n=' + topN + '&capital=' + capital;
-        const resp = await fetch(url, { signal: ctrl.signal });
-        clearTimeout(tid);
-        const data = await resp.json();
-        contentEl.innerHTML = renderT1BacktestPanel(data);
-    } catch (e) {
-        const msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
-        contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
-    }
-}
-
 // TOP-N / 本金 切换
+// 注:days 固定 30(回测页 UI 没有 days 选择器,见 v2 任务清单决策记录)
 function onBacktestParamChange() {
     var topSel = document.getElementById('btTopN');
     var capInput = document.getElementById('btCapital');
@@ -980,11 +973,3 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshCurrent();
     });
 });
-
-// T+1 真实回测刷新 (强制重跑, ~1-2 分钟)
-async function refreshT1Backtest() {
-    if (!confirm('T+1 回测强制重跑约 1-2 分钟, 是否继续?')) return;
-    _btCache = {};  // 清缓存强制重拉
-    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
-}
-window.refreshT1Backtest = refreshT1Backtest;

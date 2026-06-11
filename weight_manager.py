@@ -12,19 +12,23 @@ import pandas as pd
 import numpy as np
 
 DEFAULT_WEIGHTS = {
-    'seal': 22.0,      # 封板强度（回测r=+0.126，唯一显著预测因子，seal20+黄金区均涨+5.9%）
-    'tech': 6.0,       # 量价结构（简化为换手率评级，回测r=+0.027）
-    'sector': 12.0,    # 板块合力（合并原sector_res+sector_mom，消除重复计算）
-    'sentiment': 25.0, # 大盘情绪（系数调节，不参与加权和）
+    'seal': 31.0,      # 封板强度（回测r=+0.126，唯一显著预测因子，seal20+黄金区均涨+5.9%）
+    'tech': 8.0,       # 量价结构（简化为换手率评级，回测r=+0.027）
+    'sector': 17.0,    # 板块合力（合并原sector_res+sector_mom，消除重复计算）
+    'sentiment': 25.0, # DEPRECATED 占位: 大盘情绪（系数调节，不参与加权和）
     'sector_res': 0.0, # DEPRECATED: 已合并到sector
     'sector_mom': 0.0, # DEPRECATED: 已合并到sector
-    'history': 4.0,    # 历史股性（回测中为默认值，降权）
-    'money': 12.0,     # 资金驱动（阶梯式分级，回测不可验证但实盘关键）
+    'history': 6.0,    # 历史股性（回测中为默认值，降权）
+    'money': 17.0,     # 资金驱动（阶梯式分级，回测不可验证但实盘关键）
     'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
-    'stock_sentiment': 9.0,   # 个股情绪（资金态度+确定性+板块领先度）
-    'principal_score': 6.0,   # 本金适配（提权，增强低价小市值标的区分度）
+    'stock_sentiment': 13.0,  # 个股情绪（资金态度+确定性+板块领先度）
+    'principal_score': 8.0,   # 本金适配（提权，增强低价小市值标的区分度）
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 96
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
+# 注: 实际"加权和"是 100 (7 个非零因子: seal+money+sector+tech+history+stock_sentiment+principal_score
+# = 31+17+17+8+6+13+8 = 100; sentiment/buyability/sector_res/sector_mom 不参与加权 — sentiment 是
+# 乘法系数 [×0.85~1.15], sector_res/mom 已合并到 sector, buyability 降为纯过滤器)。
+# 历史: 22+6+12+12+4+9+6=71  →  v1.24.1: 31+8+17+17+6+13+8=100 (按比例 ×1.408 拉满, 因子相对关系不变)
 
 # 回测中可调权的因子
 BACKTEST_FACTORS = ['seal', 'tech', 'sector', 'history']
@@ -712,8 +716,8 @@ def get_trend_weight_summary() -> dict:
 # ═══════════════════════════════════════════
 
 _WEIGHT_HISTORY_FILE = os.path.join(
-    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
-    "stock_scanner_cache", "weight_history.jsonl"
+    os.path.dirname(os.path.abspath(__file__)),
+    "data", "weight_history.jsonl"
 )
 
 
@@ -755,26 +759,43 @@ def get_weight_history(tab: str, days: int = 30) -> list:
     return out
 
 
+# plan_a 因子名映射(用真实 DEFAULT_WEIGHTS key,而不是 v2 重构时硬编码的旧 key 列表)
+_PLAN_A_FACTOR_NAMES = {
+    'seal': '封板', 'tech': '技术', 'sector': '板块',
+    'sentiment': '大盘情绪', 'history': '历史', 'money': '资金',
+    'stock_sentiment': '个股情绪', 'principal_score': '本金',
+}
+
+
 def _plan_a_summary() -> dict:
-    """limit-up tab 因子权重摘要 (plan_a 9因子)"""
-    w = load_weights()
-    default = DEFAULT_WEIGHTS
+    """limit-up tab 因子权重摘要(走 plan_a 9 因子)
+
+    关键修复(v2 重构时硬编码了已 DEPRECATED 的 key 列表):
+    - DEFAULT_WEIGHTS 里 'sector_res' / 'sector_mom' / 'buyability' 都 = 0(已合并/降级)
+    - DEFAULT_WEIGHTS 实际生效的 key 是: seal/tech/sector/sentiment/history/money/stock_sentiment/principal_score
+    - weights.json 里存的是 'principal_score',不是 'principal'
+    """
+    w = load_weights()           # 运行时权重(已 merge default)
+    default = DEFAULT_WEIGHTS    # 原始默认值(用于显示 default 和计算 delta)
+    # 选 default > 0 的 key(过滤掉 DEPRECATED 零值)
+    active_keys = [k for k in default.keys() if default[k] > 0]
     factors = []
-    for k in ['seal', 'tech', 'sector_res', 'sector_mom', 'history', 'money',
-              'buyability', 'stock_sentiment', 'principal']:
+    for k in active_keys:
+        cur = w.get(k, default[k])
         factors.append({
             'key': k,
-            'name': {'seal': '封板', 'tech': '技术', 'sector_res': '板块共振',
-                     'sector_mom': '板块动量', 'history': '历史', 'money': '资金',
-                     'buyability': '可买性', 'stock_sentiment': '情绪', 'principal': '本金'}.get(k, k),
-            'current': round(w.get(f'{k}_score' if k != 'sector_res' and k != 'sector_mom' else k, w.get(k, 0)), 1),
-            'default': round(default.get(f'{k}_score', default.get(k, 0)), 1),
+            'name': _PLAN_A_FACTOR_NAMES.get(k, k),
+            'current': round(float(cur), 1),
+            'default': round(float(default[k]), 1),
+            'delta': round(float(cur) - default[k], 1),
+            # plan_a 是 daily_adjust_weights 改运行副本(不写文件),
+            # 调权方向字段填 '—',UI 不显示箭头
+            'arrow': '—',
         })
-    df = {k: round(v, 1) for k, v in w.items()}
     return {
         'factors': factors,
-        'total': round(sum(w.values()), 1),
-        'defaults': default,
+        'total': round(sum(f['current'] for f in factors), 1),
+        'note': 'plan_a 实时调权,无持久化历史,delta/arrow 不展示',
     }
 
 
@@ -812,6 +833,36 @@ def _reversal_summary() -> dict:
     }
 
 
+def _tab_position_summary() -> dict:
+    """sector tab 仓位权重摘要 — 走 tab_performance.json 的仓位系数 (0.5-1.2)
+
+    注: sector 是板块联动,没有"因子权重"概念,只有"仓位权重"。
+    把所有 tab 的仓位权重展平成单一列表,前端可平铺展示。
+    """
+    try:
+        all_weights = compute_tab_weights()
+    except Exception as e:
+        return {'factors': [], 'total': 0, 'error': f'compute_tab_weights 失败: {e}'}
+    if not all_weights:
+        return {'factors': [], 'total': 0, 'error': 'tab_performance.json 暂无数据'}
+    factors = []
+    for w in all_weights:
+        factors.append({
+            'key': w['tab'],
+            'name': w.get('name_cn', w['tab']),
+            'current': w['weight'],
+            'default': 1.0,
+            'delta': round(w['weight'] - 1.0, 2),
+            'arrow': '↑' if w['weight'] > 1.0 else ('↓' if w['weight'] < 1.0 else '→'),
+            'extra': f"{w.get('label','')} (WR {w.get('win_rate',0):.1f}% / EV {w.get('ev',0):.2f}%)"
+        })
+    return {
+        'factors': factors,
+        'total': round(sum(f['current'] for f in factors), 1),
+        'note': 'sector tab 走的是 tab 仓位权重,非因子权重',
+    }
+
+
 def get_tab_weight_summary(tab: str) -> dict:
     """统一入口: 返回各tab的因子权重摘要 + 调权历史"""
     if tab == 'trend':
@@ -825,6 +876,8 @@ def get_tab_weight_summary(tab: str) -> dict:
         s = _tab_factor_summary(tab)
     elif tab == 'limit-up':
         s = _plan_a_summary()
+    elif tab == 'sector':
+        s = _tab_position_summary()
     else:
         return {'factors': [], 'total': 0, 'error': f'未知 tab: {tab}'}
     s['history'] = get_weight_history(tab)

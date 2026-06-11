@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone, timedelta
 from config import CACHE_DIR as _CACHE_DIR, CACHE_TTL as _CACHE_TTL
 
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
-_CACHE_VER = 7  # v6→v7: 评分重构(seal22+黄金奖励, sector合并, tech简化, principal增强)  # 向后兼容, 实际从 config 导入
+_CACHE_VER = 8  # v7→v8: plan_a 加权和 71→100 (7 因子按比例 ×1.408 拉满, sentiment 仍不参与加权)
 
 # ─── 2小时短期缓存（避免重复拉取慢 API） ───
 

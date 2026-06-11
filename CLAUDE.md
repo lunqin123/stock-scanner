@@ -34,10 +34,11 @@ test_invariants.py  64项不变性测试
 
 ## 评分体系
 
-9因子加权 (100分制，`weight_manager.py:15-26`):
-- seal(6)+tech(11)+sector_res(8)+sector_mom(12)+history(8)+money(3)+buyability(12)+stock_sentiment(9)+principal(6)
+plan_a 7因子加权 (100分制, `weight_manager.py:14-32`):
+- seal(31)+tech(8)+sector(17)+money(17)+history(6)+stock_sentiment(13)+principal_score(8) = 100
 - stock_sentiment 含舆情分数 30% 权重
-- 大盘情绪 sentiment 是乘法系数 (×0.85~1.15)
+- 大盘情绪 sentiment 是乘法系数 (×0.85~1.15), 不参与加权和
+- DEPRECATED 占位(不参与加权): sector_res/sector_mom (已合并到 sector), buyability (降为纯过滤器)
 
 ## 关键流程
 
@@ -66,6 +67,8 @@ test_invariants.py  64项不变性测试
 - 盘中默认趋势扫描，盘后默认涨停评分 (`get_market_status()`)
 - 数据格式: akshare 时间 "092502" (无冒号)，换手率为字符串需转换
 - 板块过滤: `filter_non_main_board()` 统一排除 ST/科创/北交/创业板
+  - 开关: `config.INCLUDE_CHINEXT` (默认 `False`, 改 `True` 保留 30/301 创业板 + 688 科创板)
+  - 6 折 stock：主板 (60/00/002) + 创业板 (30/301) + 科创板 (688)
 - 前端 SSE 流: `loadCardViewStream` 处理 `msg.items`，`loadTextViewStream` 处理 `msg.output`
 - 编码: Windows GBK 终端避免 emoji，用纯中文
 - 无参运行自动检测市场状态 (`get_default_mode()`)

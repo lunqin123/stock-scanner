@@ -60,14 +60,18 @@ import weight_manager as wm
 
 w = wm.DEFAULT_WEIGHTS  # 直读默认值，不受 weights.json 旧调权影响
 check(isinstance(w, dict), "DEFAULT_WEIGHTS 应返回 dict")
-check(w['seal'] == 22.0, f"seal 默认权重应为 22.0(回测最强因子)，实际 {w['seal']}")
-check(w['money'] == 12.0, f"money 默认权重应为 12.0，实际 {w['money']}")
+check(w['seal'] == 31.0, f"seal 默认权重应为 31.0(回测最强因子，v1.24.1 拉满 100 分制)，实际 {w['seal']}")
+check(w['money'] == 17.0, f"money 默认权重应为 17.0(v1.24.1 拉满 100 分制)，实际 {w['money']}")
 check('community' not in w, "DEFAULT_WEIGHTS 不应含 community")
 check('principal_score' in w, "DEFAULT_WEIGHTS 应含 principal_score")
-check(w.get('principal_score', 0) >= 6.0, f"principal_score 权重应>=6(增强区分度)，实际 {w.get('principal_score', 0)}")
+check(w.get('principal_score', 0) >= 8.0, f"principal_score 权重应>=8(v1.24.1 拉满 100 分制，增强区分度)，实际 {w.get('principal_score', 0)}")
 check('buyability' in w, "DEFAULT_WEIGHTS 应含 buyability")
 check('sector' in w, "DEFAULT_WEIGHTS 应含 sector(合并后)")
-check(abs(sum(w.values()) - 96) < 0.01, f"权重和应为 96 (buyability=0, sector_res/mom=0), 实际 {sum(w.values())}")
+# 加权和: 只算 7 个非 sentiment 因子 (sentiment 是乘法系数, 不参与加权和)
+non_sentiment_keys = ['seal', 'money', 'sector', 'tech', 'history', 'stock_sentiment', 'principal_score']
+non_sentiment_sum = sum(w[k] for k in non_sentiment_keys)
+check(abs(non_sentiment_sum - 100) < 0.01,
+      f"加权和应为 100 (v1.24.1 7 因子拉满, sentiment 不参与加权), 实际 {non_sentiment_sum}, 全部键总和 {sum(w.values())}")
 check(w.get('buyability', -1) == 0.0, f"buyability应=0(已退场)，实际 {w.get('buyability', -1)}")
 
 # apply_weights 计算验证（新签名：sector_scores合并）
@@ -208,29 +212,30 @@ if status == 'trading':
 else:
     check(mode == 'after_hours', f"非盘中默认应为 after_hours，实际: {mode}")
 
-# scan_trend 使用强势池（确保不抛异常）
+# scan_trend 使用强势池 — FAIL-FAST: 任何异常都是真 BUG, 不允许降级
+# (历史教训: v1.23 前这里 try/except PASS, 实际 NameError 偷偷通过)
 import scanner as sc
 from datetime import date as date_cls
 today_raw_test = date_cls.today().strftime("%Y%m%d")
+# 不实际 print 输出, 但保证异常会传播
+import io as _io
+_old_stdout = sys.stdout
+sys.stdout = _io.StringIO()
 try:
-    # 不实际 print 输出，只测路径不炸
-    import io as _io
-    _old_stdout = sys.stdout
-    sys.stdout = _io.StringIO()
     result = sc.scan_trend(today_raw_test, _table_mode=False, top_n=5)
     sys.stdout = _old_stdout
-    check(result is not None or True, "scan_trend 应正常完成（None=无数据，非异常）")
+    check(True, "scan_trend 应正常完成（无异常）")
 except Exception as e:
-    # 如果强势池接口挂了，也不应 crash
-    sys.stdout = _old_stdout if '_old_stdout' in dir() else sys.stdout
-    check(True, f"scan_trend 降级处理: {e}")
+    sys.stdout = _old_stdout
+    check(False, f"scan_trend 抛异常 (FAIL-FAST): {type(e).__name__}: {e}")
+    # 不 raise 是为了继续跑后面的 case, 但 check 已经标记为 FAIL
 
-# fetch_limit_up_pool 接受 date_str 参数
+# fetch_limit_up_pool 接受 date_str 参数 — FAIL-FAST
 try:
     pool_dated = scanner.fetch_limit_up_pool(date_str=today_raw_test)
     check(pool_dated is not None, "fetch_limit_up_pool(date_str=...) 应非 None")
 except Exception as e:
-    check(True, f"fetch_limit_up_pool 日期参数测试: {e}")
+    check(False, f"fetch_limit_up_pool 抛异常 (FAIL-FAST): {type(e).__name__}: {e}")
 
 # ─────────────────────────────────────────────────────
 #  P7: 多 Tab 回测扩展 (新 5 个 case, 共 71 项)
@@ -266,27 +271,28 @@ sig = inspect.signature(run_t1_backtest)
 check('tab' not in sig.parameters or sig.parameters.get('tab', None) is None or True,
       f"run_t1_backtest 签名兼容旧调用: {list(sig.parameters.keys())}")
 
-# case_70: 未知 tab 返回 error, 不抛异常
+# case_70: 未知 tab 返回 error, 不抛异常 — FAIL-FAST
 try:
     bad = run_tab_backtest(tab='unknown-tab', max_days=5, top_n=3, capital=10000, use_cache=False)
     check('error' in bad and bad.get('error', '').startswith('未知 tab'),
           f"未知 tab 应返回 error 字段, 实际: {bad}")
 except Exception as e:
-    check(True, f"未知 tab 降级处理: {e}")
+    check(False, f"未知 tab 抛异常 (FAIL-FAST): {type(e).__name__}: {e}")
 
 # case_71: 各 tab run_tab_backtest 跑 3 天不报错 (dry-run 模式:use_cache=False)
+# FAIL-FAST: 异常 = 真 BUG, 立即失败
 import time as _time
 short_tabs_ok = []
 for tab in ALL_TABS:
+    # 限 3-5 天,避免 case 71 超时 (P1.2 OHLCV 批量缓存对历史日仍要逐股)
+    days_n = 5
     try:
-        # 限 3-5 天,避免 case 71 超时 (P1.2 OHLCV 批量缓存对历史日仍要逐股)
-        days_n = 5
         res = run_tab_backtest(tab=tab, max_days=days_n, top_n=3, capital=10000, use_cache=False)
         # 不强求有交易 (可能数据空), 但函数不应抛异常
         check(True, f"tab={tab} {days_n}天跑通 ({res.get('summary', {}).get('trade_count', 0)} 笔)")
         short_tabs_ok.append(tab)
     except Exception as e:
-        check(True, f"tab={tab} 降级: {type(e).__name__}: {str(e)[:60]}")
+        check(False, f"tab={tab} 抛异常 (FAIL-FAST): {type(e).__name__}: {str(e)[:60]}")
 
 check(len(short_tabs_ok) >= 4,
       f"至少 4 个 tab 应能跑通, 实际: {short_tabs_ok}")

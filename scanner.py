@@ -121,13 +121,26 @@ TOP_N = 10                    # 输出数量
 
 # ─── 板块黑名单：非主板代码前缀（统一过滤，唯一真相来源） ───
 # 科创板 68xxxx, 北交所 8xxxxx/92xxxx/94xxxx, 创业板 30xxxx/301xxx
-NON_MAIN_BOARD_PREFIXES = ('68', '8', '9', '30')
+# INCLUDE_CHINEXT=True 时, 把 '68' / '30' 从黑名单移出(只过滤 8/9 北交所)
+# 注: 用 import config (而非 from config import) 让运行时修改 INCLUDE_CHINEXT 生效
+import config
+
+def _get_non_main_prefixes():
+    """运行时读 config.INCLUDE_CHINEXT, 改完即时生效 (避免 import 固化)"""
+    return ('68', '8', '9', '30') if not config.INCLUDE_CHINEXT else ('8', '9')
+
+# 兼容历史: 模块级常量
+NON_MAIN_BOARD_PREFIXES = _get_non_main_prefixes()
 
 def filter_non_main_board(df: pd.DataFrame,
                           code_col: str = '代码',
                           name_col: str = '名称') -> pd.DataFrame:
-    """统一板块过滤：排除 ST、科创板、北交所、创业板。
-    所有扫描模式/端点必须调用此函数，不重复发明过滤逻辑。"""
+    """统一板块过滤：排除 ST、北交所，可选排除科创板/创业板。
+    所有扫描模式/端点必须调用此函数，不重复发明过滤逻辑。
+
+    INCLUDE_CHINEXT=False (默认): 排除 ST + 科创板 + 北交所 + 创业板 (历史行为)
+    INCLUDE_CHINEXT=True:        排除 ST + 北交所 (保留科创板/创业板 20% 涨停)
+    """
     df = df.copy()
     # ST / *ST / 退市
     for nc in [name_col, '股票名称']:
@@ -136,9 +149,9 @@ def filter_non_main_board(df: pd.DataFrame,
             st_mask = names.str.startswith(('ST', '*ST', '退', '退市'), na=False)
             df = df[~st_mask]
             break
-    # 非主板代码
+    # 非主板代码 (运行时读 config, 改 INCLUDE_CHINEXT 后下次调用即时生效)
     if code_col in df.columns:
-        df = df[~df[code_col].astype(str).str.startswith(NON_MAIN_BOARD_PREFIXES)]
+        df = df[~df[code_col].astype(str).str.startswith(_get_non_main_prefixes())]
     return df
 
 # ─── 除权除息前缀：当日价格机械性下调，非市场驱动 ───
@@ -339,7 +352,10 @@ def fetch_fund_flow_data():
     try:
         fund_df = ak.stock_fund_flow_individual()
         fund_df = fund_df.copy()
-        # akshare 返回列: 序号, 股票代码, 股票简称, 最新价, 涨跌幅, 换手率, 流入资金, 流出资金, 净额, 成交额
+        # akshare 返回列序(2026-06-11 实测):
+        #   0:序号 1:股票代码 2:股票简称 3:最新价 4:涨跌幅 5:换手率
+        #   6:流入资金 7:流出资金 8:净额 9:成交额
+        # 注: 涨跌幅/换手率带 '%' 后缀, 是字符串; 最新价是 float
         fund_df['_code'] = fund_df.iloc[:, 1].astype(str).str.replace(r'\D', '', regex=True).str.zfill(6)
         fund_df['_price'] = fund_df.iloc[:, 3].astype(float)
         fund_df['_net'] = fund_df.iloc[:, 8].astype(str)   # 净额 = 流入 - 流出
@@ -1956,6 +1972,7 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
         volume_col = '成交额' if '成交额' in df.columns else df.columns[6]
         cap_col = '流通市值' if '流通市值' in df.columns else None
         industry_col = '所属行业' if '所属行业' in df.columns else None
+        new_high_col = '是否新高' if '是否新高' in df.columns else None   # 强势池特有
 
         # 板块过滤
         df = filter_non_main_board(df, code_col=code_col)
