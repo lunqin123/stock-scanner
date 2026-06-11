@@ -26,6 +26,18 @@ function _saveBacktestParams() {
     localStorage.setItem('btCapital', _btCapital);
 }
 
+// 重置回默认 (1把梭3万, 全部 TOP1)
+function _resetBacktestParams() {
+    if (!confirm('重置回测参数为默认值?\n(全部 tab 用 TOP1 + 3万本金, 切回默认趋势 tab)')) return;
+    localStorage.removeItem('btTab');
+    localStorage.removeItem('btTopN');
+    localStorage.removeItem('btCapital');
+    // 同步清空 _btCache 让 UI 立即反映
+    _btCache = {};
+    location.reload();  // 最简单可靠 — 重新读 localStorage 默认值
+}
+window._resetBacktestParams = _resetBacktestParams;
+
 // P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存 data 对象,切回秒显示
 // 关键修复:
 //   1. 缓存 data 而不是 html(避免以后加 generated_at 等动态字段时缓存陈旧)
@@ -595,6 +607,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<input id="btCapital" type="number" value="' + _btCapital + '" onchange="onBacktestParamChange()" style="width:80px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5000" min="10000">'
                     + '<span style="color:var(--text-muted)">元</span>'
                     + '<span style="color:var(--text-muted);margin-left:4px">(单只本金)</span>'
+                    + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '</div>';
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
                 html += '</div></div>';
