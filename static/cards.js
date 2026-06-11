@@ -1144,6 +1144,44 @@ function renderBacktestTabFull(data) {
         html += '</div>';
     }
 
+    // ═══ 全部交易明细 (按策略分列) ═══
+    var allTrades = [];
+    [
+        { key: 'open_buy', label: 'A 开盘买', color: '#3b82f6' },
+        { key: 'close_buy', label: 'B 尾盘买', color: '#a855f7' },
+        { key: 'stop_loss', label: 'C 休盘+止损', color: '#f59e0b' }
+    ].forEach(function(st) {
+        var trades = (cmp[st.key] && cmp[st.key].trades) || [];
+        trades.forEach(function(t) { t._strategy = st.label; t._sColor = st.color; });
+        allTrades = allTrades.concat(trades);
+    });
+    allTrades.sort(function(a, b) { return (b.net_ret_pct || 0) - (a.net_ret_pct || 0); });
+
+    if (allTrades.length > 0) {
+        html += '<div class="card" style="margin:0 12px;padding:12px">';
+        html += '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">📋 全部交易明细 (' + allTrades.length + '笔) — 点击展开</summary>';
+        html += '<div style="max-height:400px;overflow-y:auto;margin-top:8px">';
+        html += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+        html += '<tr style="border-bottom:2px solid var(--accent);color:var(--accent);position:sticky;top:0;background:var(--card-bg)">';
+        html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
+        html += '<th style="text-align:center">策略</th><th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
+        html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr>';
+        allTrades.forEach(function(t) {
+            var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
+            html += '<tr style="border-bottom:1px solid var(--border)">';
+            html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
+            html += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
+            html += '<td style="padding:3px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
+            html += '<td style="padding:3px;text-align:center"><span style="font-size:10px;color:' + t._sColor + ';font-weight:600">' + t._strategy + '</span></td>';
+            html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.buy_price||0).toFixed(2) + '</td>';
+            html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.sell_price||0).toFixed(2) + '</td>';
+            html += '<td style="padding:3px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
+            html += '<td style="padding:3px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
+            html += '</tr>';
+        });
+        html += '</table></div></details></div>';
+    }
+
     return html;
 }
 window.renderBacktestTabFull = renderBacktestTabFull;
