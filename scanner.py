@@ -141,6 +141,29 @@ def filter_non_main_board(df: pd.DataFrame,
         df = df[~df[code_col].astype(str).str.startswith(NON_MAIN_BOARD_PREFIXES)]
     return df
 
+# ─── 除权除息前缀：当日价格机械性下调，非市场驱动 ───
+# XR=除权, XD=除息, DR=除权除息
+# 主涨停扫描不应过滤(填权行情可能涨停)，但反转/炸板/翘板必须排除
+XR_XD_DR_PREFIXES = ('XR', 'XD', 'DR')
+
+def filter_xr_xd_dr(df: pd.DataFrame, name_col: str = '名称') -> pd.DataFrame:
+    """过滤除权除息日股票：价格波动为机械性调整，非市场驱动。
+    用于反转/炸板/翘板等"日内波动"评分场景，避免除权价格下调被误判为"回调洗盘"/"炸板分歧"。
+
+    注意：主涨停扫描不应使用此函数——除权日涨停可能是"填权行情"，属真强势。
+    """
+    df = df.copy()
+    for nc in [name_col, '股票名称']:
+        if nc in df.columns:
+            names = df[nc].astype(str)
+            xr_mask = names.str.startswith(XR_XD_DR_PREFIXES, na=False)
+            excluded = int(xr_mask.sum())
+            if excluded > 0:
+                print(f"  [XR/XD/DR过滤] 排除 {excluded} 只除权除息股", file=sys.stderr)
+            df = df[~xr_mask]
+            break
+    return df
+
 # ─── 辅助函数 ───
 
 def get_today_str() -> str:
@@ -1410,6 +1433,7 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None) ->
              f_turn * w['turnover'] + f_sector * w['sector'])
     df['总分'] = (total / max_raw * 100).clip(lower=0).round(1)
     df['zb_seal'] = (f_seal * w['seal']).round(1)
+    df['封板质量'] = seal_scores.round(1)
     df['zb_money'] = (f_money * w['money']).round(1)
     df['zb_feature'] = (f_feature * w['feature']).round(1)
     df['zb_turnover'] = (f_turn * w['turnover']).round(1)
@@ -1551,6 +1575,10 @@ def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
         return
 
     chg_col = df.columns[3]; code_col = df.columns[1]; name_col = df.columns[2]
+    df = filter_xr_xd_dr(df, name_col=name_col)
+    if df.empty:
+        print("no_data")
+        return
     price_col = df.columns[4]; turnover_col = df.columns[9]
     ind_col = df.columns[15] if len(df.columns) > 15 else None
     seal_stat_col = df.columns[14] if len(df.columns) > 14 else None
@@ -1616,6 +1644,7 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
     df = zb_df.copy()
     before = len(df)
     df = filter_non_main_board(df)
+    df = filter_xr_xd_dr(df)
     if '流通市值' in df.columns:
         df = df[df['流通市值'].astype(float) <= MAX_MARKET_CAP * 1e8]
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
@@ -1847,18 +1876,18 @@ def _calc_ma_regression(df: pd.DataFrame, code_col: str = None) -> pd.Series:
     prices = {}
 
     def _fetch(code):
-        prefix = 'sh' if code.startswith('6') else 'sz'
         try:
-            hist = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}',
-                                         start_date=start, end_date=today)
+            hist = ak.stock_zh_a_hist(symbol=code, period='daily',
+                                       start_date=start, end_date=today,
+                                       adjust='qfq')
             if hist is not None and not hist.empty and len(hist) >= 5:
-                closes = hist['close'].astype(float).values
+                closes = hist['收盘'].astype(float).values
                 return code, closes
         except Exception:
             pass
         return code, None
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(_fetch, c): c for c in codes}
         for f in as_completed(futures):
             code, closes = f.result()
@@ -2398,6 +2427,7 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
     before = len(df)
 
     df = filter_non_main_board(df)
+    df = filter_xr_xd_dr(df)
 
     # 过滤市值过大（市值小的更容易翘板）
     if '流通市值' in df.columns:

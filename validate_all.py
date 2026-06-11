@@ -6,7 +6,7 @@ warnings.filterwarnings('ignore')
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta
 from cache import _is_trading_day
-from scanner import filter_non_main_board, score_seal_strength, score_tech_form, get_sector_score
+from scanner import filter_non_main_board, filter_xr_xd_dr, score_seal_strength, score_tech_form, get_sector_score
 import akshare as ak
 from archiver import batch_fetch_history
 
@@ -94,6 +94,7 @@ for i in range(len(dates)-1):
         prev = ak.stock_zt_pool_previous_em(date=sd)
         if prev is None or prev.empty: continue
         df = filter_non_main_board(prev)
+        df = filter_xr_xd_dr(df)
         if df.empty: continue
         cc = df.columns[1]; tc = df.columns[9]; sc = df.columns[14] if len(df.columns)>14 else None
         df['chg'] = df[df.columns[3]].astype(float)
@@ -157,6 +158,7 @@ for i in range(len(dates)-1):
         zbdf = ak.stock_zt_pool_zbgc_em(date=sd)
         if zbdf is None or zbdf.empty: continue
         df = filter_non_main_board(zbdf)
+        df = filter_xr_xd_dr(df)
         if df.empty: continue
         cc = df.columns[1]; tc = df.columns[9] if len(df.columns)>9 else None
         st_c = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns)>11 else None)

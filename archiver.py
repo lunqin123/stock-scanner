@@ -355,8 +355,9 @@ def archive_day_t(trade_date: str = None):
             prev = ak.stock_zt_pool_previous_em(date=trade_date)
             if prev is not None and not prev.empty:
                 _save_pool_pickle(trade_date, 'prev_pool', prev)  # 归档原始 DF
-                from scanner import filter_non_main_board
+                from scanner import filter_non_main_board, filter_xr_xd_dr
                 prev = filter_non_main_board(prev)
+                prev = filter_xr_xd_dr(prev)
                 # 涨幅2-9%为趋势候选
                 chg_col = prev.columns[3] if '涨跌幅' in prev.columns else prev.columns[3]
                 prev_vals = prev[chg_col].astype(float)
@@ -797,7 +798,7 @@ def _should_skip() -> bool:
 #  快速批量历史数据（腾讯源+缓存，回测核心）
 # ═══════════════════════════════════════════
 
-def batch_fetch_history(codes, start_date, end_date, max_workers=8):
+def batch_fetch_history(codes, start_date, end_date, max_workers=4):
     """
     批量获取个股历史涨跌幅，缓存到 archive.db。
     - 先查缓存，只拉取缺失的
@@ -832,14 +833,16 @@ def batch_fetch_history(codes, start_date, end_date, max_workers=8):
     end_fmt = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
 
     def _fetch_one(code):
-        prefix = 'sh' if code.startswith('6') else 'sz'
         try:
-            df = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}', start_date=start_fmt, end_date=end_fmt)
+            df = ak.stock_zh_a_hist(symbol=code, period='daily',
+                                    start_date=start_date, end_date=end_date,
+                                    adjust='qfq')
             if df is None or df.empty: return code, {}
-            df['chg'] = df['close'].pct_change() * 100
-            df['d'] = pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
+            df['chg'] = df['收盘'].pct_change() * 100
+            df['d'] = pd.to_datetime(df['日期']).dt.strftime('%Y%m%d')
             return code, dict(zip(df['d'], df['chg'].round(2)))
-        except:
+        except Exception as e:
+            print(f"  [_fetch_one] {code}: {e}", file=sys.stderr)
             return code, {}
 
     fetched = 0

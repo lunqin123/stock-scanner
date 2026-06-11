@@ -35,7 +35,7 @@ from t1_real_backtest import (
 )
 
 from scanner import (
-    filter_non_main_board,
+    filter_non_main_board, filter_xr_xd_dr,
     score_zhaban_data, score_dtqiaoban_data,
     _score_reversal as scanner_score_reversal,
     _score_trend as scanner_score_trend,
@@ -192,6 +192,7 @@ def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
             chg_col = c
             break
     chg_col = chg_col or df.columns[3]
+    df = filter_xr_xd_dr(df)
     df['_chg'] = df[chg_col].astype(float)
     pullback = df[(df['_chg'] >= -7) & (df['_chg'] <= 1)].copy()
     if not pullback.empty:
@@ -386,6 +387,7 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
     if df is None or df.empty:
         return None
     df = filter_non_main_board(df)
+    df = filter_xr_xd_dr(df)
     if df.empty:
         return None
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
@@ -405,6 +407,7 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
     if df is None or df.empty:
         return None
     df = filter_non_main_board(df)
+    df = filter_xr_xd_dr(df)
     if df.empty:
         return None
     try:
@@ -974,7 +977,11 @@ def run_tab_backtest(
     except Exception:
         pass
 
-    # 趋势/反转: 因子级自动调权
+    # 因子级自动调权 (仅盘后, 盘中数据不完整)
+    from scanner import get_market_status
+    if get_market_status() == 'trading':
+        return result
+
     if tab == TAB_TREND and records_open:
         try:
             from weight_manager import adjust_trend_weights_from_backtest

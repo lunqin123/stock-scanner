@@ -814,7 +814,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
 def api_reversal_cards(refresh: bool = Query(False, description="强制刷新")):
     """涨停回调反转扫描 — 上交易日涨停今回调→明日反包潜力"""
     import akshare as ak; import pandas as pd
-    from scanner import filter_non_main_board
+    from scanner import filter_non_main_board, filter_xr_xd_dr
 
     today = _today_trading()
     print("  [反转扫描] 开始...", file=sys.stderr)
@@ -842,6 +842,9 @@ def api_reversal_cards(refresh: bool = Query(False, description="强制刷新"))
     chg_col = '涨跌幅' if '涨跌幅' in df.columns else (df.columns[3] if len(df.columns) > 3 else df.columns[0])
     code_col = '代码' if '代码' in df.columns else (df.columns[1] if len(df.columns) > 1 else df.columns[0])
     name_col = '名称' if '名称' in df.columns else (df.columns[2] if len(df.columns) > 2 else df.columns[1])
+    df = filter_xr_xd_dr(df, name_col=name_col)
+    if df.empty:
+        return {"ok": True, "items": []}
     price_col = df.columns[4] if len(df.columns) > 4 else df.columns[0]
     turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
     ind_col = df.columns[15] if len(df.columns) > 15 else None
@@ -955,7 +958,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     import akshare as ak
     import pandas as pd
     from datetime import date
-    from scanner import filter_non_main_board
+    from scanner import filter_non_main_board, filter_xr_xd_dr
     print("  [炸板卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     raw_key = make_key("app", "zhaban_raw", date=today)
@@ -973,6 +976,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     # 过滤 (与 /api/scan/zhaban 一致: ST/北交/科创/创业板 + 流通市值 + 价格)
     df = zb.copy()
     df = filter_non_main_board(df)
+    df = filter_xr_xd_dr(df)
     if '流通市值' in df.columns:
         df = df[df['流通市值'].astype(float) <= 200 * 1e8]
     if len(df.columns) > 4:
@@ -1098,10 +1102,11 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
     def run():
         import akshare as ak
         import pandas as pd
-        from scanner import filter_non_main_board, score_dtqiaoban_data
+        from scanner import filter_non_main_board, filter_xr_xd_dr, score_dtqiaoban_data
         dt = ak.stock_zt_pool_dtgc_em(date=today)
         if dt.empty: return [], {}
         df = filter_non_main_board(dt)
+        df = filter_xr_xd_dr(df)
         if len(df.columns) > 6 and '流通市值' in df.columns:
             df = df[df['流通市值'].astype(float) <= 200 * 1e8]
         elif len(df.columns) > 6:
@@ -2013,8 +2018,9 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
         zb = ak.stock_zt_pool_zbgc_em(date=today)
         if zb.empty: return [], {}
         df = zb.copy()
-        from scanner import filter_non_main_board
+        from scanner import filter_non_main_board, filter_xr_xd_dr
         df = filter_non_main_board(df)
+        df = filter_xr_xd_dr(df)
         if '流通市值' in df.columns: df = df[df['流通市值'].astype(float) <= 200 * 1e8]
         price_f = df.columns[4] if len(df.columns) > 4 else df.columns[0]; df = df[df[price_f].astype(float) <= 60]
         if df.empty: return [], {}
@@ -2080,8 +2086,9 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
         dt = ak.stock_zt_pool_dtgc_em(date=today)
         if dt.empty: return [], {}
         print(f"  [翘板] 共 {len(dt)} 只, 评分中...", file=sys.stderr)
-        from scanner import filter_non_main_board, score_dtqiaoban_data
+        from scanner import filter_non_main_board, filter_xr_xd_dr, score_dtqiaoban_data
         df = filter_non_main_board(dt)
+        df = filter_xr_xd_dr(df)
         if len(df.columns) > 6 and '流通市值' in df.columns:
             df = df[df['流通市值'].astype(float) <= 200 * 1e8]
         elif len(df.columns) > 6:
