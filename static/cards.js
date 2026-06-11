@@ -1155,17 +1155,17 @@ function renderBacktestTabFull(data) {
         trades.forEach(function(t) { t._strategy = st.label; t._sColor = st.color; });
         allTrades = allTrades.concat(trades);
     });
-    allTrades.sort(function(a, b) { return (b.net_ret_pct || 0) - (a.net_ret_pct || 0); });
+    allTrades.sort(function(a, b) { return (b.signal_date || '').localeCompare(a.signal_date || ''); });
 
     if (allTrades.length > 0) {
         html += '<div class="card" style="margin:0 12px;padding:12px">';
         html += '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">📋 全部交易明细 (' + allTrades.length + '笔) — 点击展开</summary>';
         html += '<div style="max-height:400px;overflow-y:auto;margin-top:8px">';
         html += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
-        html += '<tr style="border-bottom:2px solid var(--accent);color:var(--accent);position:sticky;top:0;background:var(--card-bg)">';
+        html += '<thead style="position:sticky;top:0;z-index:1"><tr style="border-bottom:2px solid var(--accent);color:var(--accent);background:var(--card-bg)">';
         html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
         html += '<th style="text-align:center">策略</th><th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
-        html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr>';
+        html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
         allTrades.forEach(function(t) {
             var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
             html += '<tr style="border-bottom:1px solid var(--border)">';
