@@ -512,10 +512,18 @@ def _get_daily_ohlcv_batch(date_str: str) -> dict:
     (akshare urllib3 默认重试 3 次,每次连接断开耗 30+ 秒)
     → 改用**进程级开关** _SPOT_DISABLED 控制是否启用批量缓存。
     默认禁用,确保服务器跑得通;本地高性能环境可手动开启。
+
+    P1.24.3 修复: 当 date_str == today, stock_zh_a_spot_em 返回的"今开"实际是当日 9:30 开盘价,
+    用作"次日开盘"是错的 (跨日数据错位), 直接返回空 → 降级到 _get_ohlcv_batch 逐股 (用历史 API)
     """
     global _SPOT_DISABLED
     if _SPOT_DISABLED:
         return {}  # 主循环会降级到 _get_ohlcv_batch 逐股
+
+    # P1.24.3: 拒绝用 spot_em 处理 today (今日实时数据无"次日"语义)
+    from datetime import datetime as _dt
+    if date_str == _dt.now().strftime('%Y%m%d'):
+        return {}
 
     cache_key = f"daily_ohlcv_all_{date_str}"
     cached = _cache_get(cache_key)
@@ -671,6 +679,15 @@ def run_tab_backtest(
 
     if end_date is None:
         cur = datetime.now()
+        end = cur.strftime('%Y%m%d')
+        while not _is_trading_day(end):
+            cur -= timedelta(days=1)
+            end = cur.strftime('%Y%m%d')
+        # P1.24.3 修复: 未来函数 — sig=today 的 buy/sell 价都未发生
+        # end 必须是"前一个 completed 交易日"(sig_date 最晚 = today-1 交易日)
+        # 否则 sig=today 的 trade 会用今天实时价当 buy/sell, 失去回测意义
+        # 例: 18:32 跑, today=6/12, end 应=6/11
+        cur = datetime.strptime(end, '%Y%m%d') - timedelta(days=1)
         end = cur.strftime('%Y%m%d')
         while not _is_trading_day(end):
             cur -= timedelta(days=1)
@@ -832,7 +849,11 @@ def run_tab_backtest(
                 sell_px = sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
-                if buyable:
+                # P1.24.3 修复: T+0 (d_buy == d_sell) 跳过策略A/B — 不算 T+1 回测
+                # 否则 buy/sell 同日开盘价, 用户看到 buy=sell 觉得"反了"
+                if d_buy == d_sell:
+                    pass  # 策略A/B 跳过 (直接到策略C, 仅 close_buy_tabs)
+                elif buyable:
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
@@ -853,17 +874,17 @@ def run_tab_backtest(
                             rec[fk] = round(float(val), 1)
                     records_open.append(rec)
 
-                # ── 策略B: 尾盘买 ──
-                close_buy_px = buy_ohlcv['close']
-                raw_ret_c = (sell_px / close_buy_px - 1) * 100
-                net_ret_c = raw_ret_c - _COMMISSION_PCT - _SLIPPAGE_PCT
-                records_close.append({
-                    'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
-                    'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
-                    'buy_price': round(close_buy_px, 2), 'sell_price': round(sell_px, 2),
-                    'raw_ret_pct': round(raw_ret_c, 2), 'net_ret_pct': round(net_ret_c, 2),
-                    'pnl': round(capital * net_ret_c / 100, 0), **intraday,
-                })
+                    # ── 策略B: 尾盘买 ──
+                    close_buy_px = buy_ohlcv['close']
+                    raw_ret_c = (sell_px / close_buy_px - 1) * 100
+                    net_ret_c = raw_ret_c - _COMMISSION_PCT - _SLIPPAGE_PCT
+                    records_close.append({
+                        'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
+                        'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
+                        'buy_price': round(close_buy_px, 2), 'sell_price': round(sell_px, 2),
+                        'raw_ret_pct': round(raw_ret_c, 2), 'net_ret_pct': round(net_ret_c, 2),
+                        'pnl': round(capital * net_ret_c / 100, 0), **intraday,
+                    })
 
                 # ── 策略C: 休盘买+止损 (趋势/反转专用) ──
                 # 信号日收盘买入 → 次日低开≥3%止损开盘卖, 否则收盘卖
@@ -935,8 +956,20 @@ def run_tab_backtest(
         return result
 
     sorted_trades = sorted(records_open, key=lambda x: -x['net_ret_pct']) if records_open else []
-    top5 = sorted_trades[:5]
-    bot5 = sorted_trades[-5:][::-1] if len(sorted_trades) >= 5 else sorted_trades[::-1]
+    # P1.24.3 修复: top5/bot5 在数据少时 overlap (用户报"买/卖反"实为 bot5 混入赚票)
+    # 正确做法: 总数 N < 10 时, top5 取前 ceil(N/2) 条, bot5 取后 floor(N/2) 条
+    # 总数 N >= 10 时, top5/bot5 各 5 条, 互斥 (因 N>=10 时重叠概率为 0)
+    n_total = len(sorted_trades)
+    if n_total == 0:
+        top5, bot5 = [], []
+    elif n_total < 10:
+        top_n = (n_total + 1) // 2  # ceil(n/2): 3→2, 4→2, 5→3, ...
+        bot_n = n_total - top_n
+        top5 = sorted_trades[:top_n]
+        bot5 = sorted_trades[-bot_n:][::-1] if bot_n > 0 else []
+    else:
+        top5 = sorted_trades[:5]
+        bot5 = sorted_trades[-5:][::-1]
 
     result = {
         'summary': sum_open or sum_close,
