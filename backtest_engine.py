@@ -849,11 +849,9 @@ def run_tab_backtest(
                 sell_px = sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
-                # P1.24.3 修复: T+0 (d_buy == d_sell) 跳过策略A/B — 不算 T+1 回测
-                # 否则 buy/sell 同日开盘价, 用户看到 buy=sell 觉得"反了"
-                if d_buy == d_sell:
-                    pass  # 策略A/B 跳过 (直接到策略C, 仅 close_buy_tabs)
-                elif buyable:
+                # 不跳过 T+0 (d_buy == d_sell): A 股 T+1 是"隔夜 1 晚", 次日买次日卖也算 T+1
+                # 同价 ret ≈ 0 是真实结果, 用户该看到
+                if buyable:
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT

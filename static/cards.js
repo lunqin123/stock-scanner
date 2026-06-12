@@ -1132,13 +1132,16 @@ function renderBacktestTabFull(data) {
             if (!trades.length) return '';
             var h = '<div class="card" style="flex:1;min-width:320px;padding:12px"><h4 style="margin:0 0 8px;font-size:13px">' + icon + ' ' + title + '</h4>';
             h += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
-            h += '<tr style="border-bottom:1px solid var(--border);color:var(--text-muted)"><th style="padding:4px;text-align:left">日期</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th><th style="text-align:right">买→卖</th><th style="text-align:right">收益</th></tr>';
+            h += '<tr style="border-bottom:1px solid var(--border);color:var(--text-muted)"><th style="padding:4px;text-align:left">信号日</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th><th style="text-align:right">买价(买日)</th><th style="text-align:right">卖价(卖日)</th><th style="text-align:right">收益</th></tr>';
             trades.slice(0, 5).forEach(function(t) {
                 h += '<tr style="border-bottom:1px solid var(--border)">';
                 h += '<td style="padding:4px;font-size:10px">' + t.signal_date + '</td>';
                 h += '<td style="padding:4px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:10px"> ' + t.code + '</span></td>';
                 h += '<td style="padding:4px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
-                h += '<td style="padding:4px;text-align:right;font-size:10px">' + t.buy_price + '→' + t.sell_price + '</td>';
+                // 显示"价(日期)"格式,避免同日 buy=sell 看着像反
+                var sameDate = t.buy_date === t.sell_date;
+                h += '<td style="padding:4px;text-align:right;font-size:10px">' + t.buy_price + (sameDate ? '' : '<span style="color:var(--text-muted)">(' + t.buy_date.slice(4) + ')</span>') + '</td>';
+                h += '<td style="padding:4px;text-align:right;font-size:10px">' + t.sell_price + '<span style="color:var(--text-muted)">(' + t.sell_date.slice(4) + ')</span></td>';
                 h += '<td style="padding:4px;text-align:right;font-weight:700;color:' + color + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
                 h += '</tr>';
             });
