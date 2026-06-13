@@ -54,6 +54,15 @@ _WEIGHTS_FILE_B = os.path.join(
 )
 
 
+def _atomic_write_json(path: str, data, indent=None, separators=(',', ':')):
+    """原子写 JSON: 写 .tmp → os.replace, 避免写崩丢权重"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=indent, separators=separators)
+    os.replace(tmp, path)
+
+
 def load_weights(plan_name: str = 'A') -> dict:
     """加载权重。Plan A 用 weights.json, Plan B 用 weights_b.json, 无文件返回默认值"""
     path = _WEIGHTS_FILE_B if plan_name.upper() == 'B' else _WEIGHTS_FILE
@@ -71,12 +80,10 @@ def load_weights(plan_name: str = 'A') -> dict:
 
 
 def save_weights(weights: dict, plan_name: str = 'A'):
-    """持久化权重。Plan A → weights.json, Plan B → weights_b.json"""
+    """持久化权重。Plan A → weights.json, Plan B → weights_b.json。原子写防丢权重"""
     path = _WEIGHTS_FILE_B if plan_name.upper() == 'B' else _WEIGHTS_FILE
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(weights, f, ensure_ascii=False, indent=None, separators=(',', ':'))
+        _atomic_write_json(path, weights, indent=None, separators=(',', ':'))
     except Exception as e:
         print(f"  [WARN] 权重保存失败: {e}", file=sys.stderr)
 
@@ -164,9 +171,7 @@ def save_daily_correlations(correlations: dict, trading_date: str = None, plan_n
         data = [d for d in data if not (d['date'] == today_str and d.get('plan', 'A') == plan_name)]
         data.append({'date': today_str, 'correlations': dict(correlations), 'plan': plan_name})
         data = data[-ROLLING_WINDOW * 6:]  # keep enough history
-        os.makedirs(os.path.dirname(_ROLLING_FILE), exist_ok=True)
-        with open(_ROLLING_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
+        _atomic_write_json(_ROLLING_FILE, data, indent=2)
     except Exception as e:
         print(f"  [weight_manager L212] failed: {e}", file=sys.stderr)
 
@@ -314,8 +319,7 @@ def save_tab_performance(tab: str, summary: dict):
         if len(perf) > 30:
             perf = perf[-30:]
         data[tab] = perf
-        with open(_TAB_PERF_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(_TAB_PERF_FILE, data, indent=2)
     except Exception as e:
         print(f"  [tab_perf] 保存失败: {e}", file=sys.stderr)
 
@@ -464,9 +468,7 @@ def load_reversal_weights() -> dict:
 
 def save_reversal_weights(weights: dict):
     try:
-        os.makedirs(os.path.dirname(_REV_WEIGHTS_FILE), exist_ok=True)
-        with open(_REV_WEIGHTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(weights, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(_REV_WEIGHTS_FILE, weights, indent=2)
     except Exception as e:
         print(f"  [rev_weights] 保存失败: {e}", file=sys.stderr)
 
@@ -634,11 +636,9 @@ def load_trend_weights() -> dict:
 
 
 def save_trend_weights(weights: dict):
-    """持久化趋势因子权重"""
+    """持久化趋势因子权重。原子写防丢权重"""
     try:
-        os.makedirs(os.path.dirname(_TREND_WEIGHTS_FILE), exist_ok=True)
-        with open(_TREND_WEIGHTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(weights, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(_TREND_WEIGHTS_FILE, weights, indent=2)
     except Exception as e:
         print(f"  [trend_weights] 保存失败: {e}", file=sys.stderr)
 

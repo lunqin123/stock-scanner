@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.24.3 (2026-06-13)
+
+### 修复 — 审计 2: 缓存/竞态/持久化 (4 项 BUG)
+- **BUG 1 [高]**: `app.js:runCurrent` cache key 被 `_r=<random>` 污染 → 永不命中, 每次 14s 重 fetch
+  - 修法: 拆分 `stableKey` (业务 cache) + `url` (含 `_r`, 绕浏览器 HTTP 缓存)
+- **BUG 2 [高]**: `cache.py:daily_get_pkl` 无 mtime 过期检查 → 跨日沿用周五的旧 pkl
+  - 修法: 仿 `daily_get` 加 mtime 跨日/盘前检查, 自动删旧文件
+- **BUG 3 [中]**: `weight_manager.py` 5 个 save_* (`save_weights`/`save_reversal_weights`/`save_trend_weights`/`save_daily_correlations`/`save_tab_performance`) 全非原子写 → 写崩后 except 吞错返默认值, 调权静默丢失
+  - 修法: 新增 `_atomic_write_json` helper (tmp + os.replace)
+- **BUG 4 [低]**: `cache.py:clear_all` 跳过 .json 文件, 旧版 daily_*.json 残留
+  - 修法: .pkl 和 .json 一起检查版本号
+- **测试**: `test_invariants.py` 新增 section 9 持久化与缓存安全 (9 项回归测试), 总 80 → 89 全过
+- **报告**: `docs/audit2-cache-concurrency.md`
+
 ## v1.24.2 (2026-06-11)
 
 ### 调度 — 盘后自动调权 (解决 v1.23 之前的死代码)

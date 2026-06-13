@@ -297,6 +297,104 @@ for tab in ALL_TABS:
 check(len(short_tabs_ok) >= 4,
       f"至少 4 个 tab 应能跑通, 实际: {short_tabs_ok}")
 
+# ── 9. 持久化与缓存安全 (审计 3 + 4 回归) ──
+section("9. 持久化与缓存安全")
+
+# 9.1 权重原子写: save_weights 写半截时文件不应被截断
+import tempfile, shutil as _sh
+import weight_manager
+
+# 复制 _WEIGHTS_FILE 到临时路径, 模拟崩溃
+_orig_weights_file = weight_manager._WEIGHTS_FILE
+_tmpdir = tempfile.mkdtemp(prefix='wm_test_')
+_test_wf = os.path.join(_tmpdir, 'weights.json')
+weight_manager._WEIGHTS_FILE = _test_wf
+try:
+    weight_manager.save_weights({'seal': 50, 'money': 50, 'sector': 0, 'tech': 0, 'history': 0,
+                                   'stock_sentiment': 0, 'principal_score': 0})
+    # 写完后应该用 os.replace 原子替换, 不留 .tmp 残留
+    leftover = [f for f in os.listdir(_tmpdir) if f.endswith('.tmp')]
+    check(len(leftover) == 0, f"save_weights 原子写不应留 .tmp, 实际: {leftover}")
+    # 文件能正常 load
+    loaded = weight_manager.load_weights()
+    check(loaded.get('seal') == 50, f"save_weights 后 load_weights 应拿到新值, 实际 seal={loaded.get('seal')}")
+finally:
+    weight_manager._WEIGHTS_FILE = _orig_weights_file
+    _sh.rmtree(_tmpdir, ignore_errors=True)
+
+# 9.2 reversal 权重原子写
+_orig_rev = weight_manager._REV_WEIGHTS_FILE
+_test_rev = os.path.join(_tmpdir if 'tmpdir' in dir() else tempfile.mkdtemp(prefix='wm_rev_'), 'rev.json')
+_test_rev_dir = os.path.dirname(_test_rev)
+os.makedirs(_test_rev_dir, exist_ok=True)
+weight_manager._REV_WEIGHTS_FILE = _test_rev
+try:
+    weight_manager.save_reversal_weights({'pullback': 0.5, 'volume_shrink': 0.5})
+    leftover = [f for f in os.listdir(_test_rev_dir) if f.endswith('.tmp')]
+    check(len(leftover) == 0, f"save_reversal_weights 原子写不应留 .tmp, 实际: {leftover}")
+finally:
+    weight_manager._REV_WEIGHTS_FILE = _orig_rev
+
+# 9.3 trend 权重原子写
+_orig_tw = weight_manager._TREND_WEIGHTS_FILE
+_test_tw_dir = tempfile.mkdtemp(prefix='wm_tw_')
+_test_tw = os.path.join(_test_tw_dir, 'trend.json')
+weight_manager._TREND_WEIGHTS_FILE = _test_tw
+try:
+    weight_manager.save_trend_weights({'tech_break': 0.3, 'volume': 0.3, 'ma_align': 0.4})
+    leftover = [f for f in os.listdir(_test_tw_dir) if f.endswith('.tmp')]
+    check(len(leftover) == 0, f"save_trend_weights 原子写不应留 .tmp, 实际: {leftover}")
+finally:
+    weight_manager._TREND_WEIGHTS_FILE = _orig_tw
+    _sh.rmtree(_test_tw_dir, ignore_errors=True)
+
+# 9.4 daily_get_pkl 跨日应自动失效 (审计 3 BUG 2)
+import pickle as _pkl
+_test_pkl_dir = tempfile.mkdtemp(prefix='pkl_test_')
+_test_pkl = os.path.join(_test_pkl_dir, 'test.pkl')
+with open(_test_pkl, 'wb') as f:
+    _pkl.dump({'old': 'data'}, f)
+# 改 mtime 到 5 天前
+import time as _t
+old_time = _t.time() - 5 * 86400
+os.utime(_test_pkl, (old_time, old_time))
+# 临时把 cache 的 _CACHE_DIR 切到测试目录
+_orig_cache_dir = cache._CACHE_DIR
+cache._CACHE_DIR = _test_pkl_dir
+try:
+    # daily_get_pkl 期望路径格式 daily_YYYY-MM-DD_<key>_v{VER}.pkl (与 _daily_path 一致)
+    today_d = cache._trading_date()  # '2026-06-12' 格式
+    test_file = os.path.join(_test_pkl_dir, f"daily_{today_d}_audit9_v{cache._CACHE_VER}.pkl")
+    import shutil as _sh2
+    _sh2.copy(_test_pkl, test_file)
+    os.utime(test_file, (old_time, old_time))
+    # 调 daily_get_pkl, 跨日应返 None 并删文件
+    result = cache.daily_get_pkl('audit9')
+    check(result is None, f"daily_get_pkl 跨日应返 None (mtime=5天前, today=今天), 实际: {result}")
+    check(not os.path.exists(test_file), f"daily_get_pkl 跨日应删旧文件, 文件应不存在")
+finally:
+    cache._CACHE_DIR = _orig_cache_dir
+    _sh.rmtree(_test_pkl_dir, ignore_errors=True)
+
+# 9.5 clear_all 应清 .json 旧版本 (审计 3 BUG 3)
+_test_clear_dir = tempfile.mkdtemp(prefix='clear_test_')
+_old_json = os.path.join(_test_clear_dir, f"daily_20260101_oldkey_v{cache._CACHE_VER - 1}.json")
+_new_json = os.path.join(_test_clear_dir, f"daily_20260101_newkey_v{cache._CACHE_VER}.json")
+_old_pkl = os.path.join(_test_clear_dir, f"somecache_v{cache._CACHE_VER - 1}.pkl")
+with open(_old_json, 'w') as f: f.write('{}')
+with open(_new_json, 'w') as f: f.write('{}')
+with open(_old_pkl, 'wb') as f: _pkl.dump({}, f)
+_orig_cache_dir = cache._CACHE_DIR
+cache._CACHE_DIR = _test_clear_dir
+try:
+    cache.clear_all()
+    check(not os.path.exists(_old_json), f"clear_all 应删旧版 .json, 文件应不存在")
+    check(os.path.exists(_new_json), f"clear_all 应保留当前版 .json, 文件应存在")
+    check(not os.path.exists(_old_pkl), f"clear_all 应删旧版 .pkl, 文件应不存在")
+finally:
+    cache._CACHE_DIR = _orig_cache_dir
+    _sh.rmtree(_test_clear_dir, ignore_errors=True)
+
 # ── 总结 ──
 section("总结")
 print(f"  [PASS] {PASS} 通过")

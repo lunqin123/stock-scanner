@@ -205,10 +205,25 @@ def daily_set_pkl(key: str, data, force=False):
 
 
 def daily_get_pkl(key: str):
-    """pickle 模式读。失败返回 None(不抛异常)"""
+    """pickle 模式读。失败返回 None(不抛异常)。
+    与 daily_get 保持一致: mtime 跨日则删, 盘前写入视为过期。"""
     try:
         path = _daily_path(key).replace('.json', '.pkl')
         if os.path.exists(path):
+            now = datetime.now(_CST)
+            mtime = os.path.getmtime(path)
+            mtime_dt = datetime.fromtimestamp(mtime, _CST)
+            today_t = _trading_date()
+            mtime_file_date = mtime_dt.strftime("%Y-%m-%d")
+            # 跨日: 旧交易日写入, 新交易日读取 → 删旧文件返 None
+            if mtime_file_date < today_t:
+                os.remove(path)
+                return None
+            # 今日但开盘前写入视为过期
+            if _is_trading_day(now.strftime("%Y%m%d")) and mtime_file_date == today_t:
+                if mtime_dt.hour < 9 or (mtime_dt.hour == 9 and mtime_dt.minute < 30):
+                    os.remove(path)
+                    return None
             with open(path, 'rb') as f:
                 return _pickle.load(f)
     except Exception:
@@ -243,8 +258,10 @@ def clear_all():
         removed = 0
         for f in os.listdir(_CACHE_DIR):
             fp = os.path.join(_CACHE_DIR, f)
-            if os.path.isfile(fp) and not f.endswith(".json"):
-                # pickle 文件检查版本号
+            if not os.path.isfile(fp):
+                continue
+            # .pkl 和 .json 都检查版本号, 旧版一律删
+            if f.endswith(".pkl") or f.endswith(".json"):
                 if f"_v{_CACHE_VER}" not in f:
                     os.remove(fp)
                     removed += 1
