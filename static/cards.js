@@ -917,7 +917,8 @@ function renderBacktestDashboard(data) {
 
     // 1. 权重对比卡片
     html += '<div class="card" style="flex:1;min-width:280px"><h3 style="margin:0 0 12px">权重对比 (当前 vs 默认)</h3>';
-    html += '<table style="width:100%;font-size:13px;border-collapse:collapse">';
+    html += '<div class="table-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+    html += '<table style="width:100%;font-size:13px;border-collapse:collapse;min-width:260px">';
     html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px">因子</th><th>当前</th><th>默认</th><th>偏移</th></tr>';
     var weights = data.weights || [];
     for (var i = 0; i < weights.length; i++) {
@@ -931,7 +932,7 @@ function renderBacktestDashboard(data) {
         html += '<td style="text-align:center;padding:4px;color:' + deltaColor + '">' + deltaSign + w.delta.toFixed(2) + '</td>';
         html += '</tr>';
     }
-    html += '</table></div>';
+    html += '</table></div></div>';
 
     // 2. 相关性历史卡片（分页，每页5条）
     html += '<div class="card" style="flex:2;min-width:360px"><h3 style="margin:0 0 12px">因子相关性历史</h3>';
@@ -941,7 +942,8 @@ function renderBacktestDashboard(data) {
         var totalPages = Math.ceil(corrHist.length / PAGE_SIZE);
         var uid = 'corr_' + Date.now();
         // 表头
-        html += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead>';
+        html += '<div class="table-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+        html += '<table style="width:100%;font-size:12px;border-collapse:collapse;min-width:480px"><thead>';
         html += '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:3px">日期</th>';
         var factors = data.backtest_factors || [];
         for (var f = 0; f < factors.length; f++) {
@@ -960,7 +962,7 @@ function renderBacktestDashboard(data) {
             }
             html += '</tr>';
         }
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         if (totalPages > 1) {
             html += '<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0;font-size:12px">';
             html += '<button data-uid="' + uid + '" data-delta="-1" data-total="' + totalPages + '" class="corr-page-btn" style="padding:2px 8px;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:4px">&lt; 上一页</button>';
@@ -1131,7 +1133,8 @@ function renderBacktestTabFull(data) {
         function _tbl(title, trades, color, icon) {
             if (!trades.length) return '';
             var h = '<div class="card" style="flex:1;min-width:320px;padding:12px"><h4 style="margin:0 0 8px;font-size:13px">' + icon + ' ' + title + '</h4>';
-            h += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+            h += '<div class="table-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+            h += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:380px">';
             h += '<tr style="border-bottom:1px solid var(--border);color:var(--text-muted)"><th style="padding:4px;text-align:left">信号日</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th><th style="text-align:right">买价(买日)</th><th style="text-align:right">卖价(卖日)</th><th style="text-align:right">收益</th></tr>';
             trades.slice(0, 5).forEach(function(t) {
                 h += '<tr style="border-bottom:1px solid var(--border)">';
@@ -1145,7 +1148,7 @@ function renderBacktestTabFull(data) {
                 h += '<td style="padding:4px;text-align:right;font-weight:700;color:' + color + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
                 h += '</tr>';
             });
-            h += '</table></div>';
+            h += '</table></div></div>';
             return h;
         }
         html += _tbl('TOP5 最赚', top5, '#ef4444', '🏆');
@@ -1169,8 +1172,9 @@ function renderBacktestTabFull(data) {
     if (allTrades.length > 0) {
         html += '<div class="card" style="margin:0 12px;padding:12px">';
         html += '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">📋 全部交易明细 (' + allTrades.length + '笔) — 点击展开</summary>';
-        html += '<div style="max-height:400px;overflow-y:auto;margin-top:8px">';
-        html += '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+        // 移动端: .table-wrap 允许横向滚动 (8 列会挤压)
+        html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:8px;-webkit-overflow-scrolling:touch">';
+        html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:680px">';
         html += '<thead style="position:sticky;top:0;z-index:1"><tr style="border-bottom:2px solid var(--accent);color:var(--accent);background:var(--card-bg)">';
         html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
         html += '<th style="text-align:center">策略</th><th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';

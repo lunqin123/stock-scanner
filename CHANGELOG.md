@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.24.4 (2026-06-14)
+
+### 移动端适配强化
+- **viewport meta**: 加 `maximum-scale=1.0, user-scalable=no, viewport-fit=cover` (iOS 防止表单聚焦时缩放)
+- **横向溢出防护**: `body { overflow-x: hidden }` + `.output-area` 局部限制
+- **全局工具栏 2 行布局** (768px): 拉取/运行/本金/方案 各占 50% 宽, 自动换行
+- **回测 panel 表格** 全部包 `.table-wrap` (横向滚动):
+  - 权重对比表 (`min-width:260px`)
+  - 因子相关性历史表 (`min-width:480px`)
+  - TOP5/BOTTOM5 表格 (`min-width:380px`)
+  - 全部交易明细表 (`min-width:680px`)
+- **回测 panel 字号降级**: `[style*="font-size:20px"]` 在 768px→16px / 480px→14px
+- **allTrades mini-width 元素放宽**: 150→110px, 160→110px, 140→100px (避免 flex 父不 wrap 挤压)
+- **iOS 表单元素**: number/text 重置 `-webkit-appearance:none`, select 保留原生箭头
+- **进度条 mobile 调紧凑**: padding 8px, track height 4px
+- **板块标签 max-height:80px** + 纵向滚动 (避免 dashboard 顶部过高)
+- **审计脚本**: `scripts/_mobile_audit.py` (CSS 解析 + 表格未包检测)
+
 ## v1.24.3 (2026-06-13)
 
 ### 修复 — 审计 2: 缓存/竞态/持久化 (4 项 BUG)

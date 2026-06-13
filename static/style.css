@@ -1016,6 +1016,46 @@ body {
     .btn-sm { min-height: 32px; padding: 5px 12px; }
 
     .text-report { font-size: 12px; }
+
+    /* ── 横向溢出防护 (主滚动区不出现整体横滚) ── */
+    body { overflow-x: hidden; }
+    .output-area { overflow-x: hidden; }
+    .stock-card, .card { max-width: 100%; word-wrap: break-word; }
+
+    /* ── inline style 大字号回测 banner 降级 (cards.js 写死 20px 在 mobile 偏大) ── */
+    [style*="font-size:20px"] { font-size: 16px !important; }
+
+    /* ── 全局工具栏 2行布局 (拉取/运行 独占一行, 本金/方案 独占一行) ── */
+    .global-toolbar {
+        padding: 6px 8px !important;
+    }
+    .global-toolbar .btn {
+        flex: 1 1 calc(50% - 6px);
+    }
+    .global-toolbar .principal-group {
+        flex: 1 1 calc(50% - 6px);
+        justify-content: space-between;
+    }
+
+    /* ── progress 进度条 mobile 调紧凑 ── */
+    .progress-container { padding: 8px 10px; }
+    .progress-track { height: 4px; }
+    .progress-status { font-size: 11px; }
+
+    /* ── 板块标签 mobile 换行 + 隐藏次要文字 ── */
+    .dash-sectors-wrap { max-height: 80px; overflow-y: auto; }
+
+    /* ── 回测 panel 胜率 banner 调小字号 ── */
+    .text-report h3, .text-report h4 { font-size: 14px; }
+
+    /* ── iOS 表单元素样式重置 + 防止缩放 ── */
+    input[type="number"], input[type="text"], textarea {
+        -webkit-appearance: none;
+        appearance: none;
+        border-radius: 6px;
+    }
+    /* select 保留原生外观 (避免 iOS 箭头丢失) */
+    select { font-size: 14px; }
 }
 
 /* ── 小屏手机 (< 480px) ── */
@@ -1051,6 +1091,18 @@ body {
     .card[style*="flex:0 0 100%"] + div[style*="flex-wrap"] > div {
         min-width: 100% !important;
     }
+
+    /* ── 480px 小屏额外压缩 ── */
+    .mobile-title { font-size: 15px; }
+    .hamburger { font-size: 20px; min-width: 40px; min-height: 40px; }
+    [style*="font-size:20px"] { font-size: 14px !important; }
+    /* allTrades 表 (mobile 表格内容精简) */
+    .table-wrap table thead th,
+    .table-wrap table tbody td { padding: 4px 6px !important; font-size: 10px !important; }
+    /* 卡片副信息 min-width 允许更小 (避免 flex 不 wrap) */
+    [style*="min-width:150px"] { min-width: 110px !important; }
+    [style*="min-width:160px"] { min-width: 110px !important; }
+    [style*="min-width:140px"] { min-width: 100px !important; }
 }
 /* ─── 板块成分股标签 ─── */
 .sector-stock-label {
