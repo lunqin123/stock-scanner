@@ -1156,43 +1156,69 @@ function renderBacktestTabFull(data) {
         html += '</div>';
     }
 
-    // ═══ 全部交易明细 (按策略分列) ═══
-    var allTrades = [];
-    [
-        { key: 'open_buy', label: 'A 开盘买', color: '#3b82f6' },
-        { key: 'close_buy', label: 'B 尾盘买', color: '#a855f7' },
-        { key: 'stop_loss', label: 'C 休盘+止损', color: '#f59e0b' }
-    ].forEach(function(st) {
-        var trades = (cmp[st.key] && cmp[st.key].trades) || [];
-        trades.forEach(function(t) { t._strategy = st.label; t._sColor = st.color; });
-        allTrades = allTrades.concat(trades);
-    });
-    allTrades.sort(function(a, b) { return (b.signal_date || '').localeCompare(a.signal_date || ''); });
-
-    if (allTrades.length > 0) {
+    // ═══ 全部交易明细 (按策略分 3 张表) ═══
+    var strategies = [
+        { key: 'open_buy', label: 'A 开盘买', color: '#3b82f6', icon: '🌅' },
+        { key: 'close_buy', label: 'B 尾盘买', color: '#a855f7', icon: '🌇' },
+        { key: 'stop_loss', label: 'C 休盘+止损', color: '#f59e0b', icon: '🛑' }
+    ];
+    var totalAll = 0;
+    strategies.forEach(function(st) { totalAll += ((cmp[st.key] && cmp[st.key].trades) || []).length; });
+    if (totalAll > 0) {
         html += '<div class="card" style="margin:0 12px;padding:12px">';
-        html += '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">📋 全部交易明细 (' + allTrades.length + '笔) — 点击展开</summary>';
-        // 移动端: .table-wrap 允许横向滚动 (8 列会挤压)
-        html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:8px;-webkit-overflow-scrolling:touch">';
-        html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:680px">';
-        html += '<thead style="position:sticky;top:0;z-index:1"><tr style="border-bottom:2px solid var(--accent);color:var(--accent);background:var(--card-bg)">';
-        html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
-        html += '<th style="text-align:center">策略</th><th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
-        html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
-        allTrades.forEach(function(t) {
-            var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
-            html += '<tr style="border-bottom:1px solid var(--border)">';
-            html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
-            html += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
-            html += '<td style="padding:3px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
-            html += '<td style="padding:3px;text-align:center"><span style="font-size:10px;color:' + t._sColor + ';font-weight:600">' + t._strategy + '</span></td>';
-            html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.buy_price||0).toFixed(2) + '</td>';
-            html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.sell_price||0).toFixed(2) + '</td>';
-            html += '<td style="padding:3px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
-            html += '<td style="padding:3px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
-            html += '</tr>';
+        html += '<div style="font-size:13px;font-weight:600;color:var(--text-muted);margin-bottom:10px">📋 全部交易明细 (' + totalAll + '笔, 按策略分列)</div>';
+
+        strategies.forEach(function(st) {
+            var trades = ((cmp[st.key] && cmp[st.key].trades) || []).slice();
+            if (trades.length === 0) return;
+            // 策略级小计
+            var winCount = 0, sumRet = 0, sumPnl = 0;
+            trades.forEach(function(t) {
+                if (t.net_ret_pct > 0) winCount++;
+                sumRet += (t.net_ret_pct || 0);
+                sumPnl += (t.pnl || 0);
+            });
+            var wrPct = (winCount / trades.length) * 100;
+            var avgRet = sumRet / trades.length;
+            var wrColor = wrPct >= 60 ? '#ef4444' : wrPct >= 45 ? '#f59e0b' : '#22c55e';
+            var pnlColor = sumPnl >= 0 ? '#ef4444' : '#22c55e';
+
+            // 按时间倒序
+            trades.sort(function(a, b) { return (b.signal_date || '').localeCompare(a.signal_date || ''); });
+
+            // 策略标题 (默认 A 展开, B/C 折叠)
+            var openByDefault = (st.key === 'open_buy') ? ' open' : '';
+            html += '<details' + openByDefault + ' style="margin-bottom:10px;border:1px solid var(--border-light);border-radius:6px;padding:0">';
+            html += '<summary style="cursor:pointer;padding:8px 10px;background:' + st.color + '10;border-bottom:1px solid ' + st.color + '33;font-size:12px;font-weight:600;display:flex;flex-wrap:wrap;gap:8px;align-items:center;list-style:none">';
+            html += '<span style="color:' + st.color + '">' + st.icon + ' ' + st.label + '</span>';
+            html += '<span style="color:var(--text-muted);font-weight:400">' + trades.length + '笔</span>';
+            html += '<span style="color:' + wrColor + '">胜率 ' + wrPct.toFixed(0) + '%</span>';
+            html += '<span style="color:' + wrColor + '">均收益 ' + (avgRet>=0?'+':'') + avgRet.toFixed(2) + '%</span>';
+            html += '<span style="color:' + pnlColor + '">总盈亏 ' + (sumPnl>=0?'+':'') + sumPnl.toFixed(0) + '元</span>';
+            html += '</summary>';
+
+            // 表格 (8 列去掉"策略"列, 因为已是分组表)
+            html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:0;-webkit-overflow-scrolling:touch">';
+            html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:580px">';
+            html += '<thead style="position:sticky;top:0;z-index:1"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + ';background:var(--card-bg)">';
+            html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
+            html += '<th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
+            html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
+            trades.forEach(function(t) {
+                var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
+                html += '<tr style="border-bottom:1px solid var(--border)">';
+                html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
+                html += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
+                html += '<td style="padding:3px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
+                html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.buy_price||0).toFixed(2) + '</td>';
+                html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.sell_price||0).toFixed(2) + '</td>';
+                html += '<td style="padding:3px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
+                html += '<td style="padding:3px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
+                html += '</tr>';
+            });
+            html += '</table></div></details>';
         });
-        html += '</table></div></details></div>';
+        html += '</div>';
     }
 
     return html;
