@@ -1096,14 +1096,23 @@ function renderBacktestTabFull(data) {
             var cur = f.current || 0;
             var def = f.default || 1;
             var delta = f.delta || 0;
-            var pct = Math.min(100, Math.max(0, cur / Math.max(def, 0.01) * 50));
-            var barColor = delta > 0 ? '#ef4444' : delta < 0 ? '#22c55e' : '#3b82f6';
+            var dScale = Math.max(def, 1);
+            // 进度条: 中线=默认值, 正权向右, 负权向左
+            var barPct, barLeft;
+            if (cur >= 0) {
+                barPct = Math.min(50, cur / dScale * 50);
+                barLeft = 50;
+            } else {
+                barPct = Math.min(50, Math.abs(cur) / dScale * 50);
+                barLeft = 50 - barPct;
+            }
+            var barColor = cur < 0 ? '#f59e0b' : (delta > 0.3 ? '#ef4444' : delta < -0.3 ? '#22c55e' : '#3b82f6');
             var arrow = delta > 0.3 ? '↑' : delta < -0.3 ? '↓' : '→';
             html += '<div style="display:flex;align-items:center;gap:8px;font-size:11px">';
             html += '<span style="width:48px;text-align:right;color:var(--text-muted);flex-shrink:0">' + f.name + '</span>';
             html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:7px;overflow:hidden;position:relative">';
             html += '<div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>';
-            html += '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:7px;opacity:0.7;transition:width 0.5s"></div>';
+            html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:7px;opacity:0.7;transition:all 0.5s"></div>';
             html += '</div>';
             html += '<span style="width:36px;text-align:right;font-weight:700;font-family:monospace;color:' + barColor + '">' + cur.toFixed(1) + '</span>';
             html += '<span style="width:60px;font-size:10px;color:' + barColor + '">' + arrow + ' ' + (delta>=0?'+':'') + delta.toFixed(1) + '</span>';
