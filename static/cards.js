@@ -1090,36 +1090,41 @@ function renderBacktestTabFull(data) {
     // ═══ 第3行: 因子权重 — 带进度条的精致卡片 ═══
     if (factors.length > 0) {
         html += '<div class="card" style="flex:0 0 100%;padding:14px">';
-        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:10px">⚙️ 因子权重 (IC驱动自动调权) &nbsp; <span style="font-size:10px;font-weight:400"><span style="color:#f59e0b">负权◀</span> | <span style="color:var(--text-muted)">零权基准</span> | <span style="color:#22c55e">▶正权</span></span></div>';
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:10px">⚙️ 因子权重 (IC驱动自动调权) &nbsp; <span style="font-size:10px;font-weight:400"><span style="color:#ef4444">◀低于默认</span> | <span style="color:var(--text-muted)">▎默认基准</span> | <span style="color:#22c55e">高于默认▶</span></span></div>';
         html += '<div style="display:flex;flex-direction:column;gap:5px">';
         factors.forEach(function(f) {
             var cur = f.current || 0;
             var def = f.default || 1;
             var delta = f.delta || 0;
             var dScale = Math.max(def, 5);
-            // 进度条: 中线=零权基准, 正权向右, 负权向左
+            // 进度条: 中线=默认权重, 高于默认→右, 低于默认→左
+            var deviation = cur - def;
             var barPct, barLeft, barRadius;
-            if (cur > 0) {
-                barPct = Math.min(50, cur / (dScale * 1.5) * 50);
+            if (deviation > 0) {
+                // 高于默认: 从中线向右, 最大偏到 1.5×default
+                barPct = Math.min(50, deviation / (dScale * 1.5 - dScale) * 50 || 0);
                 barLeft = 50;
-                barRadius = '0 7px 7px 0';  // 右边圆角, 左边(靠中线)平直
-            } else if (cur < 0) {
-                barPct = Math.min(50, Math.abs(cur) / dScale * 50);
+                barRadius = '0 6px 6px 0';
+            } else if (deviation < 0) {
+                // 低于默认: 从中线向左, 最大偏到 -1×max(def,5)
+                var maxLeft = dScale + def;  // def向下到-dScale的距离
+                barPct = Math.min(50, Math.abs(deviation) / maxLeft * 50);
                 barLeft = 50 - barPct;
-                barRadius = '7px 0 0 7px';  // 左边圆角, 右边(靠中线)平直
+                barRadius = '6px 0 0 6px';
             } else {
                 barPct = 0; barLeft = 50;
                 barRadius = '0';
             }
-            var barColor = cur < 0 ? '#f59e0b' : (cur > def ? '#ef4444' : '#22c55e');
-            var dirIcon = cur < 0 ? '◀' : cur > 0 ? '▶' : '·';
+            // 颜色: 负权=橙, 高于默认=绿, 低于默认=红
+            var barColor = cur < 0 ? '#f59e0b' : (deviation > 0 ? '#22c55e' : '#ef4444');
+            var dirIcon = deviation > 0.5 ? '▶' : deviation < -0.5 ? '◀' : '▎';
             html += '<div style="display:flex;align-items:center;gap:8px;font-size:11px">';
             html += '<span style="width:48px;text-align:right;color:var(--text-muted);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + f.name + '">' + f.name + '</span>';
             // 进度条容器
             html += '<div style="flex:1;min-width:60px;height:12px;background:var(--bg-primary);border-radius:6px;overflow:hidden;position:relative">';
-            // 中线基准 (零权)
+            // 中线基准 (默认值)
             html += '<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:var(--text-muted);opacity:0.5;transform:translateX(-1px)"></div>';
-            if (barPct > 0) {
+            if (barPct > 0.5) {
                 html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:' + barRadius + ';opacity:0.75"></div>';
             }
             html += '</div>';
