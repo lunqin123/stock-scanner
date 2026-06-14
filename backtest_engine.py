@@ -641,6 +641,7 @@ def run_tab_backtest(
     capital: float = CAPITAL_DEFAULT,
     max_days: int = 30,
     use_cache: bool = True,
+    strategy: str = None,
 ):
     """多 tab 回测主入口
 
@@ -651,6 +652,10 @@ def run_tab_backtest(
         capital: 单笔本金
         max_days: 默认 30 天
         use_cache: True 走 daily cache
+        strategy: 预定义策略过滤器, None=全量; 可选:
+            'trend-elite': 趋势精选(rank1+gap+周一/二)
+            'limit-sweet': 涨停甜点(gap0~5+周二/五+避开Q4)
+            'limit-prime': 涨停黄金(rank1+gap0~5+周二/五)
 
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
@@ -945,6 +950,22 @@ def run_tab_backtest(
             'error': '无有效交易',
         }
         return result
+
+    # ── 策略过滤器 (基于数据挖掘的最优规则) ──
+    if strategy:
+        try:
+            from strategy_filters import get_preset, apply_filters
+            preset = get_preset(strategy)
+            if preset and preset.get('filters'):
+                pre_a = len(records_open)
+                pre_c = len(records_close)
+                pre_s = len(records_stop)
+                records_open = apply_filters(records_open, preset['filters'])
+                records_close = apply_filters(records_close, preset['filters'])
+                records_stop = apply_filters(records_stop, preset['filters'])
+                print(f"  [策略过滤] {preset['name']}: A {pre_a}→{len(records_open)} B {pre_c}→{len(records_close)} C {pre_s}→{len(records_stop)}", file=sys.stderr)
+        except ImportError:
+            pass
 
     sorted_trades = sorted(records_open, key=lambda x: -x['net_ret_pct']) if records_open else []
     # P1.24.3 修复: top5/bot5 在数据少时 overlap (用户报"买/卖反"实为 bot5 混入赚票)
