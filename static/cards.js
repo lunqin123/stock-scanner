@@ -1091,6 +1091,13 @@ function renderBacktestTabFull(data) {
     if (factors.length > 0) {
         html += '<div class="card" style="flex:0 0 100%;padding:14px">';
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px">⚙️ 因子权重 (IC驱动自动调权)</div>';
+        // 零权基准标签
+        html += '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--text-muted);margin-bottom:4px;padding-left:56px">';
+        html += '<span style="flex:1;display:flex;justify-content:space-between">';
+        html += '<span style="color:#f59e0b">◀ 负权</span>';
+        html += '<span style="border-left:2px solid var(--text-muted);padding-left:4px">零权基准</span>';
+        html += '<span style="color:#22c55e">正权 ▶</span>';
+        html += '</span></div>';
         html += '<div style="display:flex;flex-direction:column;gap:6px">';
         factors.forEach(function(f) {
             var cur = f.current || 0;
