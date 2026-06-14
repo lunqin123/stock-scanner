@@ -963,6 +963,10 @@ def run_tab_backtest(
                 records_open = apply_filters(records_open, preset['filters'])
                 records_close = apply_filters(records_close, preset['filters'])
                 records_stop = apply_filters(records_stop, preset['filters'])
+                # 重算过滤后的 summary
+                sum_open = _aggregate(records_open, 'open')
+                sum_close = _aggregate(records_close, 'close')
+                sum_stop = _aggregate(records_stop, 'stop')
                 print(f"  [策略过滤] {preset['name']}: A {pre_a}→{len(records_open)} B {pre_c}→{len(records_close)} C {pre_s}→{len(records_stop)}", file=sys.stderr)
         except ImportError:
             pass
