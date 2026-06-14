@@ -19,11 +19,13 @@ let _btTab = localStorage.getItem('btTab') || 'trend';  // 默认趋势(52.2%胜
 const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
+let _btStrategy = localStorage.getItem('btStrategy') || '';
 
 function _saveBacktestParams() {
     localStorage.setItem('btTab', _btTab);
     localStorage.setItem('btTopN', _btTopN);
     localStorage.setItem('btCapital', _btCapital);
+    localStorage.setItem('btStrategy', _btStrategy);
 }
 
 // 重置回默认 (1把梭3万, 全部 TOP1)
@@ -32,9 +34,10 @@ function _resetBacktestParams() {
     localStorage.removeItem('btTab');
     localStorage.removeItem('btTopN');
     localStorage.removeItem('btCapital');
-    // 同步清空 _btCache 让 UI 立即反映
+    localStorage.removeItem('btStrategy');
+    _btStrategy = '';
     _btCache = {};
-    location.reload();  // 最简单可靠 — 重新读 localStorage 默认值
+    location.reload();
 }
 window._resetBacktestParams = _resetBacktestParams;
 
@@ -45,8 +48,8 @@ window._resetBacktestParams = _resetBacktestParams;
 var _btCache = {};
 var _btLoadToken = 0;
 
-function _btCacheKey(tab, days, topN, capital) {
-    return tab + '_' + days + '_' + topN + '_' + capital;
+function _btCacheKey(tab, days, topN, capital, strategy) {
+    return tab + '_' + days + '_' + topN + '_' + capital + '_' + (strategy || '');
 }
 
 async function loadBacktestTab(tab, days, topN, capital) {
@@ -56,9 +59,9 @@ async function loadBacktestTab(tab, days, topN, capital) {
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
 
-    var key = _btCacheKey(tab, days, topN, capital);
+    var key = _btCacheKey(tab, days, topN, capital, _btStrategy);
     if (_btCache[key]) {
-        _btCache[key].ts = Date.now();  // LRU 命中刷时间戳, 防止"热数据被冷数据挤掉"
+        _btCache[key].ts = Date.now();
         contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
         return;
     }
@@ -68,7 +71,9 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var resp = await fetch('/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital, { signal: ctrl.signal });
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital;
+        if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
+        var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
         var data = await resp.json();
         // 注: 不要 token-check 后直接 return, 必须把 data 写进 cache
@@ -124,6 +129,13 @@ function onBacktestParamChange() {
     var capInput = document.getElementById('btCapital');
     if (topSel) _btTopN = parseInt(topSel.value) || 3;
     if (capInput) _btCapital = parseInt(capInput.value) || 90000;
+    _saveBacktestParams();
+    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
+}
+
+function onBacktestStrategyChange() {
+    var sel = document.getElementById('btStrategy');
+    _btStrategy = sel ? sel.value : '';
     _saveBacktestParams();
     loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
@@ -609,6 +621,12 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<input id="btCapital" type="number" value="' + _btCapital + '" onchange="onBacktestParamChange()" style="width:80px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5000" min="10000">'
                     + '<span style="color:var(--text-muted)">元</span>'
                     + '<span style="color:var(--text-muted);margin-left:4px">(单只本金)</span>'
+                    + '<select id="btStrategy" onchange="onBacktestStrategyChange()" style="margin-left:8px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);font-size:11px">'
+                    + '<option value=""' + (!_btStrategy ? ' selected' : '') + '>全量(无过滤)</option>'
+                    + '<option value="trend-elite"' + (_btStrategy === 'trend-elite' ? ' selected' : '') + '>🎯 趋势精选</option>'
+                    + '<option value="limit-sweet"' + (_btStrategy === 'limit-sweet' ? ' selected' : '') + '>🍯 涨停甜点</option>'
+                    + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
+                    + '</select>'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '</div>';
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
