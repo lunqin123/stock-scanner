@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import threading
 
 import pandas as pd
 import numpy as np
@@ -160,8 +161,10 @@ DAILY_LR = 0.1        # 每日学习率（配合30天回测数据量, 加速IC�
 ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
 
 
+_ROLLING_LOCK = threading.Lock()
+
 def save_daily_correlations(correlations: dict, trading_date: str = None, plan_name: str = 'A'):
-    """保存因子相关性到滚动缓存 (按 Plan 分组)。trading_date 用交易日而非日历日。"""
+    """保存因子相关性到滚动缓存 (按 Plan 分组, 线程安全)。"""
     if not correlations:
         return
     if trading_date:
@@ -169,15 +172,16 @@ def save_daily_correlations(correlations: dict, trading_date: str = None, plan_n
         if len(s) == 8 and s.isdigit():
             trading_date = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     today_str = trading_date if trading_date else date.today().isoformat()
-    try:
-        data = _load_rolling_data()
-        # 去重: 同日期+同Plan
-        data = [d for d in data if not (d['date'] == today_str and d.get('plan', 'A') == plan_name)]
-        data.append({'date': today_str, 'correlations': dict(correlations), 'plan': plan_name})
-        data = data[-ROLLING_WINDOW * 6:]  # keep enough history
-        _atomic_write_json(_ROLLING_FILE, data, indent=2)
-    except Exception as e:
-        print(f"  [weight_manager L212] failed: {e}", file=sys.stderr)
+    with _ROLLING_LOCK:
+        try:
+            data = _load_rolling_data()
+            # 去重: 同日期+同Plan
+            data = [d for d in data if not (d['date'] == today_str and d.get('plan', 'A') == plan_name)]
+            data.append({'date': today_str, 'correlations': dict(correlations), 'plan': plan_name})
+            data = data[-ROLLING_WINDOW * 6:]  # keep enough history
+            _atomic_write_json(_ROLLING_FILE, data, indent=2)
+        except Exception as e:
+            print(f"  [weight_manager] save_daily_correlations failed: {e}", file=sys.stderr)
 
 
 def _load_rolling_data() -> list:
@@ -590,9 +594,9 @@ def _save_tab_weights(tab: str, weights: dict):
     if not path: return
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(weights, f, ensure_ascii=False, indent=2)
-    except Exception: pass
+        _atomic_write_json(path, weights, indent=2)
+    except Exception as e:
+        print(f"  [_save_tab_weights] {tab} 写入失败: {e}", file=sys.stderr)
 
 
 def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.1):

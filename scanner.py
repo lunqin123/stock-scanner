@@ -2828,7 +2828,6 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
             from plans.archiver import list_plan_results, load_plan_result
             plan_names = list_plan_results(yesterday)
             if plan_names:
-                archive_used = True
                 for plan_name in plan_names:
                     archive = load_plan_result(yesterday, plan_name)
                     if not archive or not archive.get('stocks'):
@@ -2858,6 +2857,7 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
                         if not pd.isna(c):
                             plan_fc[fkey.replace('_score', '')] = round(float(c), 4)
                     if plan_fc:
+                        archive_used = True  # 仅在确实产出有效IC后标记
                         lines.append(f" [Plan {plan_name}] 归档验证 | {len(stocks)}只")
                         all_fc.update(plan_fc)
         except Exception as e:

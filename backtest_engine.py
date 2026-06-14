@@ -699,12 +699,6 @@ def run_tab_backtest(
                              start=start, end=end, top_n=top_n, capital=int(capital))
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
-            # 缓存命中也保存 tab 表现 (确保自动调权有数据)
-            try:
-                from weight_manager import save_tab_performance
-                save_tab_performance(tab, cached.get('summary', {}))
-            except Exception:
-                pass
             return cached
 
     trade_dates = _trading_dates_in_range(start, end, max_count=max_days)
@@ -815,6 +809,11 @@ def run_tab_backtest(
                     buy_ohlcv = buy_ohlcv or ohlcv_map.get(d_buy)
                     sell_ohlcv = sell_ohlcv or ohlcv_map.get(d_sell)
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
+                    missing = []
+                    if not signal_ohlcv: missing.append(f'signal={d_signal}')
+                    if not buy_ohlcv: missing.append(f'buy={d_buy}')
+                    if not sell_ohlcv: missing.append(f'sell={d_sell}')
+                    skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: {", ".join(missing)}'})
                     continue
 
                 signal_close = signal_ohlcv['close']
