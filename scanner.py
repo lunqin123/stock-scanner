@@ -1554,8 +1554,8 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     # 加权总分 (归一化到0-100, 与其他tab可比)
     total = (f_to * w['turnover'] + f_lb * w['consecutive'] +
              f_chg * w['pullback'] + f_sector * w['sector'])
-    weight_sum = sum(w.values())
-    normalized = (total / weight_sum * 100) if weight_sum > 0 else total
+    weight_sum = sum(abs(v) for v in w.values())
+    normalized = (total / max(weight_sum, 1) * 100) if weight_sum != 0 else total
 
     pullback = pullback.copy()
     pullback['反转评分'] = normalized.clip(lower=0).round(1)
@@ -1835,7 +1835,7 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     df = df.copy()
     # 6. MA回归因子 (0-10): 偏离均线越远越容易回调
     f_ma = pd.Series(5.0, index=df.index)
-    if w.get('ma_rev', 0) > 0:  # 权重>0才拉取MA数据(避免无谓API调用)
+    if w.get('ma_rev', 0) != 0:  # 权重非零才拉取MA数据(支持负权因子)
         code_col_ma = '代码' if '代码' in df.columns else df.columns[1]
         try:
             f_ma = _calc_ma_regression(df, code_col=code_col_ma)
@@ -1846,9 +1846,9 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
              f_amount * w['amount'] + f_vr * w['vol_ratio'] +
              f_nh * w['new_high'] + f_ma * w.get('ma_rev', 0))
 
-    # 归一化到0-100 (除以当前权重总和, 跨tab可比)
-    weight_sum = sum(w.values())
-    normalized = (total / weight_sum * 100) if weight_sum > 0 else total
+    # 归一化到0-100 (除以当前权重绝对值总和, 支持负权)
+    weight_sum = sum(abs(v) for v in w.values())
+    normalized = (total / max(weight_sum, 1) * 100) if weight_sum != 0 else total
 
     df = df.copy()
     df['动量评分'] = normalized.clip(lower=0).round(1)  # 负权允许, 但总分不<0

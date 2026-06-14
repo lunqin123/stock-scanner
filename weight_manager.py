@@ -44,6 +44,9 @@ BACKTEST_FACTORS_B = [
 # IC 阈值: |IC| < 此值 → 权重归零 (统计噪声)
 IC_NOISE_THRESHOLD = 0.02
 
+# delta 调权的最小缩放基准: 默认=0 的死因子也能以最小步长移动
+MIN_DELTA_SCALE = 1
+
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
     "claude_stock_cache", "weights.json"
@@ -259,29 +262,59 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
         else:
             dropped.append(f)
 
-    # ── 统一 ICIR 加权 (Plan A / Plan B 共用) ──
-    total_icir = sum(ic_stats[f]['icir'] for f in active_factors) or 1.0
+    # ── 权重调整 ──
     new_weights = {}
     for k in defaults:
         new_weights[k] = 0.0
-    for f in active_factors:
-        new_weights[f] = round(defaults[f] * ic_stats[f]['icir'] / total_icir, 1)
 
-    # 软钳制 [0.5×default, 1.5×default]
-    for f in active_factors:
-        lo = defaults[f] * 0.5
-        hi = defaults[f] * 1.5
-        new_weights[f] = max(lo, min(hi, new_weights[f]))
+    if plan_name.upper() == 'B':
+        # Plan B: ICIR 按比例重分配 (14因子, 保持正权)
+        total_icir = sum(ic_stats[f]['icir'] for f in active_factors) or 1.0
+        for f in active_factors:
+            new_weights[f] = round(defaults[f] * ic_stats[f]['icir'] / total_icir, 1)
+        # 钳制 [0, 1.5×default]
+        for f in active_factors:
+            hi = defaults[f] * 1.5
+            new_weights[f] = max(0.0, min(hi, new_weights[f]))
+    else:
+        # Plan A: Delta 驱动 (signed IC, 允许负权)
+        for f in active_factors:
+            d_scale = max(defaults[f], MIN_DELTA_SCALE)
+            delta = ic_stats[f]['ic_mean'] * DAILY_LR * d_scale
+            new_val = current_weights.get(f, defaults[f]) + delta
+            lo = -d_scale          # 允许负权, 反向指标
+            hi = d_scale * 1.5     # 上限 1.5×
+            new_weights[f] = round(max(lo, min(hi, new_val)), 1)
+        # 噪声因子: 保持当前值 (不归零, 也不回到默认)
+        for f in dropped:
+            if f in current_weights:
+                new_weights[f] = current_weights[f]
 
-    save_weights({k: v for k, v in new_weights.items() if v > 0}, plan_name=plan_name)
+    # 保存: Plan A 保留零值 (防止下次加载回退默认), Plan B 过滤零值
+    save_data = {}
+    for k, v in new_weights.items():
+        if plan_name.upper() == 'B':
+            if v > 0:
+                save_data[k] = v
+        else:
+            if v != 0 or k in current_weights:
+                save_data[k] = v
+    save_weights(save_data, plan_name=plan_name)
 
     # 摘要
     pname = f"Plan {plan_name}"
-    lines = [f"  {pname} ICIR调权 ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
+    adj_type = 'ICIR调权' if plan_name.upper() == 'B' else 'Delta调权'
+    lines = [f"  {pname} {adj_type} ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
     for f in valid_factors:
         s = ic_stats[f]
         status = "+" if f in active_factors else "x"
-        lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} sigma={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
+        if plan_name.upper() == 'B':
+            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} sigma={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
+        else:
+            d_scale = max(defaults.get(f, 1), MIN_DELTA_SCALE)
+            delta = s['ic_mean'] * DAILY_LR * d_scale
+            cur = current_weights.get(f, defaults.get(f, 0))
+            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} ICIR={s['icir']:.1f} cur={cur:.1f} delta={delta:+.3f}")
     if dropped:
         lines.append(f"  噪声剔除(|IC|<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
     return new_weights, '\n'.join(lines)
@@ -502,10 +535,10 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.02):
     new_weights = dict(current)
     lines = []
     for f, corr in corrs.items():
-        delta = corr * lr * REV_DEFAULT_WEIGHTS[f]
+        delta = corr * lr * max(REV_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE)
         new_val = current[f] + delta
-        lo = -REV_DEFAULT_WEIGHTS[f]
-        hi = REV_DEFAULT_WEIGHTS[f] * 2.0
+        lo = -max(REV_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE)
+        hi = max(REV_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE) * 2.0
         new_weights[f] = round(max(lo, min(hi, new_val)), 1)
         arrow = '↑' if delta > 0 else '↓'
         lines.append(f"  {arrow} {REV_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
@@ -587,9 +620,9 @@ def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.02):
     if not corrs: return current, "无有效IC"
     new_weights = dict(current)
     for f, corr in corrs.items():
-        delta = corr * lr * defaults[f]
+        delta = corr * lr * max(defaults[f], MIN_DELTA_SCALE)
         new_val = current[f] + delta
-        lo = -defaults[f]; hi = defaults[f] * 2.0
+        lo = -max(defaults[f], MIN_DELTA_SCALE); hi = max(defaults[f], MIN_DELTA_SCALE) * 2.0
         new_weights[f] = round(max(lo, min(hi, new_val)), 1)
     _save_tab_weights(tab, new_weights)
     for f, corr in corrs.items():
@@ -681,11 +714,11 @@ def adjust_trend_weights_from_backtest(records: list, lr: float = 0.02):
     new_weights = dict(current)
     lines = []
     for f, corr in corrs.items():
-        delta = corr * lr * TREND_DEFAULT_WEIGHTS[f]
+        delta = corr * lr * max(TREND_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE)
         new_val = current[f] + delta
-        # 钳制: -1.0x~2.0x 默认值 (允许负权,反向指标)
-        lo = -TREND_DEFAULT_WEIGHTS[f]
-        hi = TREND_DEFAULT_WEIGHTS[f] * 2.0
+        # 钳制: -max(d,1) ~ 2*max(d,1) (允许负权,反向指标, 死因子复活)
+        lo = -max(TREND_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE)
+        hi = max(TREND_DEFAULT_WEIGHTS[f], MIN_DELTA_SCALE) * 2.0
         new_weights[f] = round(max(lo, min(hi, new_val)), 1)
         arrow = '↑' if delta > 0 else '↓'
         lines.append(f"  {arrow} {TREND_FACTOR_NAMES.get(f,f)}: {current[f]:.0f}→{new_weights[f]:.1f} (IC={corr:+.3f})")
