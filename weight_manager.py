@@ -155,7 +155,7 @@ _ROLLING_FILE = os.path.join(
 )
 
 # 每日调权参数
-DAILY_LR = 0.02       # 每日学习率（低，避免单日波动）
+DAILY_LR = 0.1        # 每日学习率（配合30天回测数据量, 加速IC收敛）
 ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
 
 
@@ -506,7 +506,7 @@ def save_reversal_weights(weights: dict):
         print(f"  [rev_weights] 保存失败: {e}", file=sys.stderr)
 
 
-def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.02):
+def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
     if len(records) < 5:
         return load_reversal_weights(), "数据不足(需≥5笔)"
 
@@ -594,7 +594,7 @@ def _save_tab_weights(tab: str, weights: dict):
     except Exception: pass
 
 
-def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.02):
+def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.1):
     if len(records) < 5:
         return _load_tab_weights(tab), "数据不足"
     current = _load_tab_weights(tab)
@@ -676,7 +676,7 @@ def save_trend_weights(weights: dict):
         print(f"  [trend_weights] 保存失败: {e}", file=sys.stderr)
 
 
-def adjust_trend_weights_from_backtest(records: list, lr: float = 0.02):
+def adjust_trend_weights_from_backtest(records: list, lr: float = 0.1):
     """基于回测交易记录调整趋势因子权重
 
     对每笔交易的因子分与收益做相关性分析, 正相关因子加权重, 负相关降权重。
