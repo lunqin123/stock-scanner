@@ -1292,6 +1292,17 @@ def api_backtest_tab_full(tab: str,
         return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
 
 
+@app.get("/api/signal/tomorrow")
+def api_signal_tomorrow():
+    """明日买入信号 — 盘前已知信息过滤 (rank+星期+评分)."""
+    try:
+        from signal_tomorrow import generate_signals
+        result = generate_signals()
+        return {"ok": True, **result}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]})
+
+
 @app.get("/api/community")
 def api_community(top_n: int = Query(10, description="分析前N只股票")):
     """舆情监测 — 股吧/雪球/新闻情感分析"""

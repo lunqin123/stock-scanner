@@ -139,6 +139,42 @@ function onBacktestStrategyChange() {
     _saveBacktestParams();
     loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
+
+async function loadTomorrowSignals() {
+    var el = document.getElementById('tomorrowSignals');
+    if (!el) return;
+    el.style.display = 'block';
+    el.innerHTML = '<div class="loading">⏳ 正在分析明日信号...</div>';
+    try {
+        var resp = await fetch('/api/signal/tomorrow');
+        var data = await resp.json();
+        if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
+        var h = '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📡 明日买入信号 (' + data.date + ' ' + data.weekday + ')</div>';
+        if (data.alerts && data.alerts.length > 0) {
+            h += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">';
+            data.alerts.forEach(function(a) { h += '⏭ ' + a + '<br>'; });
+            h += '</div>';
+        }
+        if (data.signals && data.signals.length > 0) {
+            data.signals.forEach(function(s) {
+                h += '<div style="display:flex;align-items:center;gap:8px;padding:8px;margin:4px 0;background:' + (s.tab==='limit-up'?'#ef4444':'#22c55e') + '11;border-radius:6px;border-left:3px solid ' + (s.tab==='limit-up'?'#ef4444':'#22c55e') + '">';
+                h += '<span style="font-weight:700;font-size:14px">' + s.name + '</span>';
+                h += '<span style="font-size:11px;color:var(--text-muted)">' + s.code + '</span>';
+                h += '<span style="font-size:11px;background:var(--bg-secondary);padding:2px 6px;border-radius:3px">' + s.tab_cn + '</span>';
+                h += '<span style="font-size:11px">评分 ' + s.score.toFixed(0) + '</span>';
+                h += '<span style="font-size:10px;color:var(--text-muted)">买入日 ' + s.buy_date + '</span>';
+                h += '</div>';
+                h += '<div style="font-size:10px;color:var(--text-muted);margin-left:8px;margin-bottom:6px">' + s.reason + '</div>';
+            });
+        } else {
+            h += '<div style="color:var(--text-muted);font-size:12px">今日无符合规则的买入信号 (' + data.summary + ')</div>';
+        }
+        el.innerHTML = h;
+    } catch(e) {
+        el.innerHTML = '<span style="color:#ef4444">❌ 信号分析失败: ' + e.message + '</span>';
+    }
+}
+window.loadTomorrowSignals = loadTomorrowSignals;
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 let currentPage = '';
@@ -628,7 +664,9 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
                     + '</select>'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
-                    + '</div>';
+                    + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
+                    + '</div>'
+                    + '<div id="tomorrowSignals" style="display:none;margin:8px 0;padding:12px;background:var(--card-bg);border:1px solid #f59e0b;border-radius:8px"></div>';
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
                 html += '</div></div>';
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items); } else if (pageKey === 'scan-reversal') { html += renderReversalCards(items);
