@@ -44,8 +44,9 @@ BACKTEST_FACTORS_B = [
 # IC 阈值: |IC| < 此值 → 权重归零 (统计噪声)
 IC_NOISE_THRESHOLD = 0.02
 
-# delta 调权的最小缩放基准: 默认=0 的死因子也能以最小步长移动
-MIN_DELTA_SCALE = 1
+# delta 调权的最小缩放基准: 默认=0 的死因子也能以合理步长移动
+# 太小(1)→钳制[-1,2]太窄, -1就触底; 5→[-5,10]给负权留出空间
+MIN_DELTA_SCALE = 5
 
 _WEIGHTS_FILE = os.path.join(
     os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
