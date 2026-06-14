@@ -730,8 +730,11 @@ def run_tab_backtest(
             continue
         d_sell = _next_trading_date(d_buy)
         # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
+        # 但策略A/B需要真正的T+1卖出日, d_sell被兜底时跳过(否则同日买卖无意义)
+        d_sell_fallback = False
         if tab in _close_buy_tabs and (d_sell is None or d_sell > trade_dates[-1]):
-            d_sell = d_buy  # 策略A/B会被跳过, 仅策略C可用
+            d_sell = d_buy
+            d_sell_fallback = True  # 仅策略C可用
         elif d_sell is None or d_sell > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
             continue
@@ -841,9 +844,8 @@ def run_tab_backtest(
                 sell_px = sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
-                # 不跳过 T+0 (d_buy == d_sell): A 股 T+1 是"隔夜 1 晚", 次日买次日卖也算 T+1
-                # 同价 ret ≈ 0 是真实结果, 用户该看到
-                if buyable:
+                # d_sell_fallback=T时跳过: 同日买卖buy=sell同价, ret≈0是数据假象非真实结果
+                if buyable and not d_sell_fallback:
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
