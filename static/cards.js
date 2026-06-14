@@ -1097,25 +1097,32 @@ function renderBacktestTabFull(data) {
             var def = f.default || 1;
             var delta = f.delta || 0;
             var dScale = Math.max(def, 1);
-            // 进度条: 中线=默认值, 正权向右, 负权向左
+            // 进度条: 中线=零权基准, 正权向右(绿), 负权向左(橙)
             var barPct, barLeft;
-            if (cur >= 0) {
-                barPct = Math.min(50, cur / dScale * 50);
+            if (cur > 0) {
+                // 正权: 从中线向右, 最大 1.5×default 填满右半
+                barPct = Math.min(50, cur / (dScale * 1.5) * 50);
                 barLeft = 50;
-            } else {
+            } else if (cur < 0) {
+                // 负权: 从中线向左, 最大 -1×default 填满左半
                 barPct = Math.min(50, Math.abs(cur) / dScale * 50);
                 barLeft = 50 - barPct;
+            } else {
+                barPct = 0; barLeft = 50;
             }
-            var barColor = cur < 0 ? '#f59e0b' : (delta > 0.3 ? '#ef4444' : delta < -0.3 ? '#22c55e' : '#3b82f6');
-            var arrow = delta > 0.3 ? '↑' : delta < -0.3 ? '↓' : '→';
+            var barColor = cur < 0 ? '#f59e0b' : (cur > def ? '#ef4444' : '#22c55e');
+            var dirIcon = cur < 0 ? '◀' : cur > 0 ? '▶' : '·';
             html += '<div style="display:flex;align-items:center;gap:8px;font-size:11px">';
             html += '<span style="width:48px;text-align:right;color:var(--text-muted);flex-shrink:0">' + f.name + '</span>';
             html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:7px;overflow:hidden;position:relative">';
-            html += '<div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>';
-            html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:7px;opacity:0.7;transition:all 0.5s"></div>';
+            // 中线基准 (零权)
+            html += '<div style="position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--text-muted);opacity:0.4"></div>';
+            if (barPct > 0) {
+                html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:7px;opacity:0.7;transition:all 0.5s"></div>';
+            }
             html += '</div>';
-            html += '<span style="width:36px;text-align:right;font-weight:700;font-family:monospace;color:' + barColor + '">' + cur.toFixed(1) + '</span>';
-            html += '<span style="width:60px;font-size:10px;color:' + barColor + '">' + arrow + ' ' + (delta>=0?'+':'') + delta.toFixed(1) + '</span>';
+            html += '<span style="width:38px;text-align:right;font-weight:700;font-family:monospace;color:' + barColor + '">' + cur.toFixed(1) + '</span>';
+            html += '<span style="width:55px;font-size:10px;color:' + barColor + '">' + dirIcon + ' ' + (delta>=0?'+':'') + delta.toFixed(1) + '</span>';
             html += '<span style="width:36px;font-size:9px;color:var(--text-muted)">默认' + def.toFixed(0) + '</span>';
             html += '</div>';
         });
