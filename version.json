@@ -1,13 +1,10 @@
 {
-  "version": "1.23.0",
-  "date": "2026-06-07",
+  "version": "1.24.5",
+  "date": "2026-06-14",
   "changes": [
-    "🐛 回测系统12项BUG修复: T+1缓存键参数化, Seal黄金双计, 周末检查, 内存-磁盘一致性",
-    "🐛 LHB龙虎榜API参数修复: date_specified→date + 三层fallback",
-    "🧹 死代码清理: adjust_weights(67行), _T1_BACKTEST_TTL, today_df参数",
-    "🧹 健壮性: 硬编码列→列名匹配, seal_time_score统一阶梯逻辑, 滚动窗口口径一致",
-    "📝 CHANGELOG补全 v1.22.0 + v1.23.0",
-    "📝 weight_manager docstring修正 + 滚动窗口显式排序"
+    "🐛 回测end_date回退逻辑导致卖出日期错误 (神剑股份 sell_date=6/11应为6/12)",
+    "🐛 移除冗余的end回退一天, 改用_trading_date()直接取当前交易日",
+    "🐛 未来函数防护由_get_daily_ohlcv_batch的today拦截负责, end不需要额外回退"
   ],
   "history": [
     {

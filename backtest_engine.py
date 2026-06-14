@@ -678,20 +678,12 @@ def run_tab_backtest(
         max_days = tab_max
 
     if end_date is None:
-        cur = datetime.now()
-        end = cur.strftime('%Y%m%d')
-        while not _is_trading_day(end):
-            cur -= timedelta(days=1)
-            end = cur.strftime('%Y%m%d')
-        # P1.24.3 修复: 未来函数 — sig=today 的 buy/sell 价都未发生
-        # end 必须是"前一个 completed 交易日"(sig_date 最晚 = today-1 交易日)
-        # 否则 sig=today 的 trade 会用今天实时价当 buy/sell, 失去回测意义
-        # 例: 18:32 跑, today=6/12, end 应=6/11
-        cur = datetime.strptime(end, '%Y%m%d') - timedelta(days=1)
-        end = cur.strftime('%Y%m%d')
-        while not _is_trading_day(end):
-            cur -= timedelta(days=1)
-            end = cur.strftime('%Y%m%d')
+        # 用 _trading_date(): 凌晨/周末/节假日自动归为上一个交易日
+        # P1.24.4 修复: P1.24.3 让 end 退一天, 6/10 signal → d_buy=6/11 → d_sell=6/12 > trade_dates[-1]=6/11
+        #   触发 L741 兜底 d_sell=d_buy, 看着像同日买卖 (神剑 B 策略 BUG)
+        # 真正的未来函数防护在主循环 L736: d_buy > trade_dates[-1] 自动跳过
+        from cache import _trading_date as _get_td
+        end = _get_td().replace('-', '')
     else:
         end = end_date
 
