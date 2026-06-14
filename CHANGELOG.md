@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.24.5 (2026-06-14)
+
+### 修复 — 回测卖出日期错误 (2 项 BUG)
+- **BUG 1 [高]**: `fc4859a` end 回退一天导致神剑股份 sell_date=6/11 应为 6/12
+  - 根因: end 双重回退 → trade_dates[-1] 缩水 → d_sell 被 L733 兜底为 d_buy
+  - 修法: 移除冗余的 end 回退, 改用 `_trading_date()` 直接取当前交易日
+  - 未来函数防护已由 `_get_daily_ohlcv_batch` today 拦截负责
+- **BUG 2 [中]**: d_sell 兜底时策略 A/B 产生同日买卖数据假象 (合锻智能 603011)
+  - 根因: signal=6/11 → d_sell=6/15 超区间 → 兜底 d_sell=6/12 → A策略6/12同日买卖, buy=sell=32.64
+  - 修法: 加 `d_sell_fallback` 标记, 跳过策略 A/B, 仅保留策略 C (信号日收盘买→次日卖, 有效 T+1)
+- **API**: `/api/bt/{tab}/full` 新增 `force=true` 参数跳过 daily cache 强制重算
+
 ## v1.24.4 (2026-06-14)
 
 ### 移动端适配强化
