@@ -1090,47 +1090,43 @@ function renderBacktestTabFull(data) {
     // ═══ 第3行: 因子权重 — 带进度条的精致卡片 ═══
     if (factors.length > 0) {
         html += '<div class="card" style="flex:0 0 100%;padding:14px">';
-        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px">⚙️ 因子权重 (IC驱动自动调权)</div>';
-        // 零权基准标签
-        html += '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--text-muted);margin-bottom:4px;padding-left:56px">';
-        html += '<span style="flex:1;display:flex;justify-content:space-between">';
-        html += '<span style="color:#f59e0b">◀ 负权</span>';
-        html += '<span style="border-left:2px solid var(--text-muted);padding-left:4px">零权基准</span>';
-        html += '<span style="color:#22c55e">正权 ▶</span>';
-        html += '</span></div>';
-        html += '<div style="display:flex;flex-direction:column;gap:6px">';
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:10px">⚙️ 因子权重 (IC驱动自动调权) &nbsp; <span style="font-size:10px;font-weight:400"><span style="color:#f59e0b">负权◀</span> | <span style="color:var(--text-muted)">零权基准</span> | <span style="color:#22c55e">▶正权</span></span></div>';
+        html += '<div style="display:flex;flex-direction:column;gap:5px">';
         factors.forEach(function(f) {
             var cur = f.current || 0;
             var def = f.default || 1;
             var delta = f.delta || 0;
-            var dScale = Math.max(def, 1);
-            // 进度条: 中线=零权基准, 正权向右(绿), 负权向左(橙)
-            var barPct, barLeft;
+            var dScale = Math.max(def, 5);
+            // 进度条: 中线=零权基准, 正权向右, 负权向左
+            var barPct, barLeft, barRadius;
             if (cur > 0) {
-                // 正权: 从中线向右, 最大 1.5×default 填满右半
                 barPct = Math.min(50, cur / (dScale * 1.5) * 50);
                 barLeft = 50;
+                barRadius = '0 7px 7px 0';  // 右边圆角, 左边(靠中线)平直
             } else if (cur < 0) {
-                // 负权: 从中线向左, 最大 -1×default 填满左半
                 barPct = Math.min(50, Math.abs(cur) / dScale * 50);
                 barLeft = 50 - barPct;
+                barRadius = '7px 0 0 7px';  // 左边圆角, 右边(靠中线)平直
             } else {
                 barPct = 0; barLeft = 50;
+                barRadius = '0';
             }
             var barColor = cur < 0 ? '#f59e0b' : (cur > def ? '#ef4444' : '#22c55e');
             var dirIcon = cur < 0 ? '◀' : cur > 0 ? '▶' : '·';
             html += '<div style="display:flex;align-items:center;gap:8px;font-size:11px">';
-            html += '<span style="width:48px;text-align:right;color:var(--text-muted);flex-shrink:0">' + f.name + '</span>';
-            html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:7px;overflow:hidden;position:relative">';
+            html += '<span style="width:48px;text-align:right;color:var(--text-muted);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + f.name + '">' + f.name + '</span>';
+            // 进度条容器
+            html += '<div style="flex:1;min-width:60px;height:12px;background:var(--bg-primary);border-radius:6px;overflow:hidden;position:relative">';
             // 中线基准 (零权)
-            html += '<div style="position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--text-muted);opacity:0.4"></div>';
+            html += '<div style="position:absolute;left:50%;top:0;width:2px;height:100%;background:var(--text-muted);opacity:0.5;transform:translateX(-1px)"></div>';
             if (barPct > 0) {
-                html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:7px;opacity:0.7;transition:all 0.5s"></div>';
+                html += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + barPct + '%;background:' + barColor + ';border-radius:' + barRadius + ';opacity:0.75"></div>';
             }
             html += '</div>';
-            html += '<span style="width:38px;text-align:right;font-weight:700;font-family:monospace;color:' + barColor + '">' + cur.toFixed(1) + '</span>';
-            html += '<span style="width:55px;font-size:10px;color:' + barColor + '">' + dirIcon + ' ' + (delta>=0?'+':'') + delta.toFixed(1) + '</span>';
-            html += '<span style="width:36px;font-size:9px;color:var(--text-muted)">默认' + def.toFixed(0) + '</span>';
+            // 数值
+            html += '<span style="width:38px;text-align:right;font-weight:700;font-family:monospace;font-size:11px;color:' + barColor + '">' + (cur >= 0 ? '+' : '') + cur.toFixed(1) + '</span>';
+            html += '<span style="width:55px;font-size:10px;color:' + barColor + '">' + dirIcon + ' ' + (delta >= 0 ? '+' : '') + delta.toFixed(1) + '</span>';
+            html += '<span style="width:34px;font-size:9px;color:var(--text-muted);text-align:right">默认' + def.toFixed(0) + '</span>';
             html += '</div>';
         });
         html += '</div></div>';
