@@ -18,50 +18,97 @@ from t1_real_backtest import _next_trading_date
 from datetime import datetime, timedelta
 
 
-def _get_recent_redeem_codes(today_str: str, lookback_days: int = 5) -> set:
-    """获取近期可转债到期/强赎的正股代码集合."""
+def _get_warning_codes(today_str: str) -> dict:
+    """获取有风险的股票代码及原因.
+
+    检测项:
+    1. 可转债溢价率<-10% 或 债现价=100 → 即将到期/强赎, 转股抛压
+    2. 近5日可转债到期/强赎
+    Returns: {code: reason}
+    """
+    warnings = {}
     try:
         import akshare as ak
-        df = ak.bond_cb_redeem_jsl()
-        if df is None or df.empty:
-            return set()
 
-        # 找赎回日列
-        date_col = None
-        for c in df.columns:
-            if '赎回' in str(c) or '到期' in str(c) or '最后' in str(c):
-                date_col = c
-                break
-        if date_col is None:
-            return set()
+        # 方法1: bond_zh_cov 检测异常信号
+        try:
+            cov_df = ak.bond_zh_cov()
+            if cov_df is not None and not cov_df.empty:
+                stock_col = None
+                for c in cov_df.columns:
+                    if '正股代码' in str(c):
+                        stock_col = c
+                        break
+                prem_col = next((c for c in cov_df.columns if '溢价' in str(c)), None)
+                price_col = next((c for c in cov_df.columns if '现价' in str(c) or '债现价' in str(c)), None)
 
-        today = datetime.strptime(today_str, '%Y%m%d')
-        cutoff = today - timedelta(days=lookback_days)
-        codes = set()
-        for _, row in df.iterrows():
-            rd = row.get(date_col)
-            if rd is None or str(rd) in ('NaT', 'nan', ''):
-                continue
-            try:
-                if hasattr(rd, 'date'):
-                    rd_date = rd.date() if hasattr(rd, 'date') else rd
-                else:
-                    rd_date = datetime.strptime(str(rd)[:10], '%Y-%m-%d').date()
-                if cutoff.date() <= rd_date <= today.date():
-                    # 取正股代码列
-                    stock_code = None
-                    for c in df.columns:
-                        val = str(row.get(c, ''))
-                        if len(val) == 6 and val.isdigit() and (val.startswith('0') or val.startswith('3') or val.startswith('6')):
-                            stock_code = val.zfill(6)
-                            break
-                    if stock_code:
-                        codes.add(stock_code)
-            except Exception:
-                continue
-        return codes
+                if stock_col:
+                    for _, row in cov_df.iterrows():
+                        code = str(row.get(stock_col, '')).strip().zfill(6)
+                        if not code or len(code) != 6:
+                            continue
+
+                        reasons = []
+                        # 转股溢价率 < -10%: 折价异常, 通常意味着即将到期
+                        if prem_col:
+                            prem = row.get(prem_col)
+                            try:
+                                if prem is not None and float(prem) < -10:
+                                    reasons.append(f'转股溢价率{float(prem):.0f}%异常')
+                            except (ValueError, TypeError):
+                                pass
+                        # 债现价 = 100: 回到面值, 可能是到期/强赎
+                        if price_col:
+                            price = row.get(price_col)
+                            try:
+                                if price is not None and abs(float(price) - 100) < 0.5:
+                                    reasons.append('债价=100(到期面值)')
+                            except (ValueError, TypeError):
+                                pass
+                        if reasons:
+                            warnings[code] = '转债' + ','.join(reasons)
+        except Exception:
+            pass
+
+        # 方法2: bond_cb_redeem_jsl 近期到期
+        try:
+            redeem_df = ak.bond_cb_redeem_jsl()
+            if redeem_df is not None and not redeem_df.empty:
+                date_col = None
+                for c in redeem_df.columns:
+                    if '到期' in str(c) or '最后' in str(c):
+                        date_col = c
+                        break
+                stock_col = None
+                for c in redeem_df.columns:
+                    if '正股代码' in str(c):
+                        stock_col = c
+                        break
+
+                if date_col and stock_col:
+                    today = datetime.strptime(today_str, '%Y%m%d').date()
+                    cutoff = today - timedelta(days=5)
+                    for _, row in redeem_df.iterrows():
+                        rd = row.get(date_col)
+                        if rd is None or str(rd) in ('NaT', 'nan', ''):
+                            continue
+                        try:
+                            rd_date = rd if hasattr(rd, 'date') else datetime.strptime(str(rd)[:10], '%Y-%m-%d').date()
+                            if hasattr(rd_date, 'date'):
+                                rd_date = rd_date.date()
+                            if cutoff <= rd_date <= today:
+                                code = str(row.get(stock_col, '')).strip().zfill(6)
+                                if code and len(code) == 6:
+                                    if code not in warnings:
+                                        warnings[code] = f'转债{rd_date}到期'
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
     except Exception:
-        return set()
+        pass
+    return warnings
 
 
 def generate_signals(today_str: str = None) -> dict:
@@ -169,19 +216,19 @@ def generate_signals(today_str: str = None) -> dict:
     except Exception as e:
         alerts.append(f'趋势扫描: {e}')
 
-    # ── 可转债到期/强赎过滤 ──
+    # ── 可转债/风险事件过滤 ──
     try:
-        redeem_codes = _get_recent_redeem_codes(today_str)
-        if redeem_codes:
+        warnings = _get_warning_codes(today_str)
+        if warnings:
             filtered = []
             for s in signals:
-                if s['code'] in redeem_codes:
-                    alerts.append(f'{s["tab_cn"]} {s["name"]}({s["code"]}) — 转债近期到期/强赎, 抛压风险, 排除')
+                if s['code'] in warnings:
+                    alerts.append(f'{s["tab_cn"]} {s["name"]}({s["code"]}) — {warnings[s["code"]]}, 抛压风险排除')
                 else:
                     filtered.append(s)
             signals = filtered
     except Exception as e:
-        alerts.append(f'转债检查异常: {e}')
+        alerts.append(f'风险检查异常: {e}')
 
     if signals:
         names = [s['name'] for s in signals]
