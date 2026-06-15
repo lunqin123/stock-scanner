@@ -13,8 +13,55 @@ from datetime import datetime
 
 sys.path.insert(0, '.')
 
-from cache import _trading_date
+from cache import _trading_date, _is_trading_day
 from t1_real_backtest import _next_trading_date
+from datetime import datetime, timedelta
+
+
+def _get_recent_redeem_codes(today_str: str, lookback_days: int = 5) -> set:
+    """获取近期可转债到期/强赎的正股代码集合."""
+    try:
+        import akshare as ak
+        df = ak.bond_cb_redeem_jsl()
+        if df is None or df.empty:
+            return set()
+
+        # 找赎回日列
+        date_col = None
+        for c in df.columns:
+            if '赎回' in str(c) or '到期' in str(c) or '最后' in str(c):
+                date_col = c
+                break
+        if date_col is None:
+            return set()
+
+        today = datetime.strptime(today_str, '%Y%m%d')
+        cutoff = today - timedelta(days=lookback_days)
+        codes = set()
+        for _, row in df.iterrows():
+            rd = row.get(date_col)
+            if rd is None or str(rd) in ('NaT', 'nan', ''):
+                continue
+            try:
+                if hasattr(rd, 'date'):
+                    rd_date = rd.date() if hasattr(rd, 'date') else rd
+                else:
+                    rd_date = datetime.strptime(str(rd)[:10], '%Y-%m-%d').date()
+                if cutoff.date() <= rd_date <= today.date():
+                    # 取正股代码列
+                    stock_code = None
+                    for c in df.columns:
+                        val = str(row.get(c, ''))
+                        if len(val) == 6 and val.isdigit() and (val.startswith('0') or val.startswith('3') or val.startswith('6')):
+                            stock_code = val.zfill(6)
+                            break
+                    if stock_code:
+                        codes.add(stock_code)
+            except Exception:
+                continue
+        return codes
+    except Exception:
+        return set()
 
 
 def generate_signals(today_str: str = None) -> dict:
@@ -121,6 +168,20 @@ def generate_signals(today_str: str = None) -> dict:
                     })
     except Exception as e:
         alerts.append(f'趋势扫描: {e}')
+
+    # ── 可转债到期/强赎过滤 ──
+    try:
+        redeem_codes = _get_recent_redeem_codes(today_str)
+        if redeem_codes:
+            filtered = []
+            for s in signals:
+                if s['code'] in redeem_codes:
+                    alerts.append(f'{s["tab_cn"]} {s["name"]}({s["code"]}) — 转债近期到期/强赎, 抛压风险, 排除')
+                else:
+                    filtered.append(s)
+            signals = filtered
+    except Exception as e:
+        alerts.append(f'转债检查异常: {e}')
 
     if signals:
         names = [s['name'] for s in signals]
