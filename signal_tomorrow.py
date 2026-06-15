@@ -72,12 +72,28 @@ def generate_signals(today_str: str = None) -> dict:
 
     # ── 趋势信号 ──
     try:
+        # 先拉炸板名单，趋势池中排除炸板股（历史 EV -0.77%）
+        import akshare as ak
+        try:
+            zb_raw = ak.stock_zt_pool_zbgc_em(date=today_str)
+            zb_codes = set()
+            if zb_raw is not None and not zb_raw.empty:
+                zb_col = next((c for c in zb_raw.columns if '代码' in str(c)), zb_raw.columns[1])
+                zb_codes = set(zb_raw[zb_col].astype(str).str.strip().str.zfill(6))
+        except Exception:
+            zb_codes = set()
+
         from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_TREND
         fetcher = SIGNAL_POOL_FETCHERS[TAB_TREND]
         score_fn = SCORE_FUNCS[TAB_TREND]
         score_col = SCORE_COLUMNS[TAB_TREND]
 
         pool = fetcher(today_str)
+        # 排除炸板股
+        if pool is not None and not pool.empty and zb_codes:
+            code_col_t = next((c for c in pool.columns if '代码' in str(c)), None)
+            if code_col_t:
+                pool = pool[~pool[code_col_t].astype(str).str.strip().str.zfill(6).isin(zb_codes)]
         if pool is not None and not (hasattr(pool, 'empty') and pool.empty):
             df = score_fn(pool, today_str)
             if df is not None and not (hasattr(df, 'empty') and df.empty):
