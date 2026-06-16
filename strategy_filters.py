@@ -61,7 +61,7 @@ def score_sweet_spot(trade: dict, tab: str) -> bool:
     """
     score = trade.get('score', 0)
     if tab == 'limit-up':
-        return 38 <= score <= 74  # Q2+Q3, 避开Q4陷阱
+        return 38 <= score <= 72  # Q2+Q3, 避开Q4(>72)陷阱
     elif tab == 'trend':
         return 27 <= score <= 54  # Q2+Q3
     return True

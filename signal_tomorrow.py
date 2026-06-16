@@ -148,8 +148,8 @@ def generate_signals(today_str: str = None) -> dict:
                     if w not in [1, 4]:
                         alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — {weekday_name}非周二/五, 跳过')
                         break
-                    if score > 74:
-                        alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — Q4陷阱(>74)')
+                    if score > 72:
+                        alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — Q4陷阱(>72, 历史EV-0.29%)')
                         break
                     if score < 38:
                         alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — 评分偏低(<38)')
@@ -159,7 +159,7 @@ def generate_signals(today_str: str = None) -> dict:
                         'tab': 'limit-up', 'tab_cn': '涨停板', 'strategy': 'A开盘买',
                         'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
                         'signal_date': today_str, 'buy_date': next_td,
-                        'reason': '周二/五+rank1+评分38~74(历史EV+2.12%)',
+                        'reason': '周二/五+rank1+评分38~72(历史EV+2.12%)',
                     })
     except Exception as e:
         alerts.append(f'涨停扫描: {e}')
