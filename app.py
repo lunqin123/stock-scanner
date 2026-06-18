@@ -1226,6 +1226,7 @@ def api_backtest_tab_top(tab: str,
 def api_backtest_tab_full(tab: str,
                            days: int = Query(30, description="回测天数"),
                            top_n: int = Query(3, description="每日 TOP N"),
+                           min_score: float = Query(50.0, description="最低评分门槛(低于此分不买)"),
                            capital: float = Query(30000, description="单笔本金"),
                            force: bool = Query(False, description="强制重算(跳过缓存)"),
                            strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime")):
@@ -1240,8 +1241,8 @@ def api_backtest_tab_full(tab: str,
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
     try:
-        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, capital=capital,
-                                   use_cache=not force, strategy=strategy)
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score,
+                                   capital=capital, use_cache=not force, strategy=strategy)
 
         # 因子权重 + 调权历史
         try:

@@ -638,6 +638,7 @@ def run_tab_backtest(
     start_date: str = None,
     end_date: str = None,
     top_n: int = TOP_N_DEFAULT,
+    min_score: float = 50.0,
     capital: float = CAPITAL_DEFAULT,
     max_days: int = 30,
     use_cache: bool = True,
@@ -790,8 +791,10 @@ def run_tab_backtest(
                     break
             code_col = code_col or df_scored.columns[1]
 
-            # 取 top_n
-            top = df_scored.sort_values(actual_score_col, ascending=False).head(top_n)
+            # 取 top_n（按评分门槛过滤）
+            eligible = df_scored[df_scored[actual_score_col] >= min_score]
+            skipped_count = max(0, len(df_scored) - len(eligible))
+            top = eligible.sort_values(actual_score_col, ascending=False).head(top_n)
 
             # ── P1.2 优化: 提前批量拉取 3 个日期的全市场 OHLCV ──
             daily_ohlcv = {}

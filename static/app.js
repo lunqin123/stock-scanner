@@ -20,12 +20,14 @@ const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
+let _btMinScore = parseInt(localStorage.getItem('btMinScore')) || 50;
 
 function _saveBacktestParams() {
     localStorage.setItem('btTab', _btTab);
     localStorage.setItem('btTopN', _btTopN);
     localStorage.setItem('btCapital', _btCapital);
     localStorage.setItem('btStrategy', _btStrategy);
+    localStorage.setItem('btMinScore', _btMinScore);
 }
 
 // 重置回默认 (1把梭3万, 全部 TOP1)
@@ -48,8 +50,8 @@ window._resetBacktestParams = _resetBacktestParams;
 var _btCache = {};
 var _btLoadToken = 0;
 
-function _btCacheKey(tab, days, topN, capital, strategy) {
-    return tab + '_' + days + '_' + topN + '_' + capital + '_' + (strategy || '');
+function _btCacheKey(tab, days, topN, capital, strategy, minScore) {
+    return tab + '_' + days + '_' + topN + '_' + capital + '_' + (strategy || '') + '_' + (minScore || 50);
 }
 
 async function loadBacktestTab(tab, days, topN, capital) {
@@ -59,7 +61,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
 
-    var key = _btCacheKey(tab, days, topN, capital, _btStrategy);
+    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _btMinScore);
     if (_btCache[key]) {
         _btCache[key].ts = Date.now();
         contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
@@ -71,7 +73,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&capital=' + capital;
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _btMinScore + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
@@ -114,7 +116,7 @@ async function switchBacktestTab(tab, days) {
     var bar = document.getElementById('btTabBar');
     if (bar) {
         bar.querySelectorAll('button').forEach(function(btn) {
-            var isActive = btn.textContent.trim() === ({'limit-up':'涨停','trend':'趋势','zhaban':'炸板','dtqiaoban':'翘板','reversal':'反转'})[tab];
+            var isActive = btn.textContent.trim() === ({'trend':'趋势','limit-up':'涨停','zhaban':'炸板','reversal':'反转','dtqiaoban':'跌停'})[tab];
             btn.style.background = isActive ? 'var(--accent)' : 'var(--bg-secondary)';
             btn.style.color = isActive ? '#fff' : 'var(--text)';
         });
@@ -137,6 +139,14 @@ function onBacktestStrategyChange() {
     var sel = document.getElementById('btStrategy');
     _btStrategy = sel ? sel.value : '';
     _saveBacktestParams();
+    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
+}
+
+function onBacktestMinScoreChange() {
+    var inp = document.getElementById('btMinScore');
+    _btMinScore = parseInt(inp ? inp.value : 50) || 50;
+    _saveBacktestParams();
+    _btCache = {};
     loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
 
@@ -631,11 +641,11 @@ async function loadCardView(output, pageKey, apiUrl) {
             } else if (pageKey === 'backtest') {
                 // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
                 const tabs = [
-                    { key: 'limit-up', label: '涨停', days: 30 },
                     { key: 'trend', label: '趋势', days: 30 },
+                    { key: 'limit-up', label: '涨停', days: 30 },
                     { key: 'zhaban', label: '炸板', days: 30 },
-                    { key: 'dtqiaoban', label: '翘板', days: 30 },
                     { key: 'reversal', label: '反转', days: 30 },
+                    { key: 'dtqiaoban', label: '跌停', days: 30 },
                 ];
                 // 用户1把梭3万, 全 tab 统一 TOP1
                 var defaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
@@ -663,6 +673,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<option value="limit-sweet"' + (_btStrategy === 'limit-sweet' ? ' selected' : '') + '>🍯 涨停甜点</option>'
                     + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
                     + '</select>'
+                    + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
+                    + '<input id="btMinScore" type="number" value="' + _btMinScore + '" onchange="onBacktestMinScoreChange()" style="width:50px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '</div>'
