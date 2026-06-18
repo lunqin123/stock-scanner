@@ -1028,9 +1028,9 @@ def run_tab_backtest(
     if n_total == 0:
         top5, bot5 = [], []
     elif n_total < 10:
-        top_n = (n_total + 1) // 2  # ceil(n/2): 3→2, 4→2, 5→3, ...
-        bot_n = n_total - top_n
-        top5 = sorted_trades[:top_n]
+        top_n_cnt = (n_total + 1) // 2  # ceil(n/2): 3→2, 4→2, 5→3, ...
+        bot_n = n_total - top_n_cnt
+        top5 = sorted_trades[:top_n_cnt]
         bot5 = sorted_trades[-bot_n:][::-1] if bot_n > 0 else []
     else:
         top5 = sorted_trades[:5]
