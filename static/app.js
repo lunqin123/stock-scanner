@@ -124,8 +124,6 @@ function _prefetchBacktestTabs(currentTab, days, topN, capital) {
 // P6: 切换回测 tab
 async function switchBacktestTab(tab, days) {
     _btTab = tab;
-    var recTopN = _tabDefaultTopN[tab] || 1;
-    if (_btTopN !== recTopN) { _btTopN = recTopN; _btCapital = _btTopN * 30000; }
     _saveBacktestParams();
     var topSel = document.getElementById('btTopN');
     var capInput = document.getElementById('btCapital');
