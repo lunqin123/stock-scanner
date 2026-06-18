@@ -20,14 +20,28 @@ const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
+// 回测天数（服务端归档最多到109天，默认60天不过载）
+const _BT_DAYS = 60;
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
+// 各 tab 推荐的最低评分门槛
+var _TAB_DEFAULT_MIN_SCORE = {
+    'trend': 55,
+    'limit-up': 80,
+    'zhaban': 80,
+    'reversal': 0,
+    'dtqiaoban': 100,
+};
 var _btMinScores = (function() {
-    try { return JSON.parse(localStorage.getItem('btMinScores') || '{}'); } catch(e) { return {}; }
+    var stored;
+    try { stored = JSON.parse(localStorage.getItem('btMinScores') || '{}'); } catch(e) { stored = {}; }
+    // 用推荐默认值填充尚未设置的 tab
+    for (var k in _TAB_DEFAULT_MIN_SCORE) {
+        if (stored[k] === undefined) stored[k] = _TAB_DEFAULT_MIN_SCORE[k];
+    }
+    return stored;
 })();
-function _getMinScore(tab) { return _btMinScores[tab] || 0; }
+function _getMinScore(tab) { return _btMinScores[tab] !== undefined ? _btMinScores[tab] : 0; }
 function _setMinScore(tab, val) { _btMinScores[tab] = val; localStorage.setItem('btMinScores', JSON.stringify(_btMinScores)); }
-// 当前 tab 的 min_score（向后兼容，从各 tab 独立存储读取）
-function _loadCurMinScore() { return _getMinScore(_btTab); }
 
 function _saveBacktestParams() {
     localStorage.setItem('btTab', _btTab);
@@ -44,6 +58,7 @@ function _resetBacktestParams() {
     localStorage.removeItem('btTopN');
     localStorage.removeItem('btCapital');
     localStorage.removeItem('btStrategy');
+    localStorage.removeItem('btMinScores');
     _btStrategy = '';
     _btCache = {};
     location.reload();
@@ -160,7 +175,7 @@ function onBacktestParamChange() {
 
     // 如果只改了本金（TOP-N 没变），直接从缓存重算盈亏，不调 API
     if (newTopN === _btTopN && newCap !== _btCapital) {
-        var oldKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
+        var oldKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
         var cached = _btCache[oldKey];
         if (cached && cached.data && cached.data.ok) {
             var newData = JSON.parse(JSON.stringify(cached.data)); // 深拷贝
@@ -192,7 +207,7 @@ function onBacktestParamChange() {
             // 存入新缓存键
             _btCapital = newCap;
             _saveBacktestParams();
-            var newKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
+            var newKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
             _btCache[newKey] = { data: newData, ts: Date.now() };
             var el = document.getElementById('btTabContent');
             if (el) el.innerHTML = renderBacktestTabFull(newData);
@@ -203,14 +218,14 @@ function onBacktestParamChange() {
     _btTopN = newTopN;
     _btCapital = newCap;
     _saveBacktestParams();
-    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
+    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
 function onBacktestStrategyChange() {
     var sel = document.getElementById('btStrategy');
     _btStrategy = sel ? sel.value : '';
     _saveBacktestParams();
-    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
+    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
 function onBacktestMinScoreChange() {
@@ -218,7 +233,7 @@ function onBacktestMinScoreChange() {
     var val = parseInt(inp ? inp.value : 0) || 0;
     _setMinScore(_btTab, val);
     _btCache = {};
-    loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
+    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
 async function loadTomorrowSignals() {
@@ -712,11 +727,11 @@ async function loadCardView(output, pageKey, apiUrl) {
             } else if (pageKey === 'backtest') {
                 // P6: 多 tab T+1 真实回测面板 — 带 tab 切换器
                 const tabs = [
-                    { key: 'trend', label: '趋势', days: 30 },
-                    { key: 'limit-up', label: '涨停', days: 30 },
-                    { key: 'zhaban', label: '炸板', days: 30 },
-                    { key: 'reversal', label: '反转', days: 30 },
-                    { key: 'dtqiaoban', label: '跌停', days: 30 },
+                    { key: 'trend', label: '趋势', days: _BT_DAYS },
+                    { key: 'limit-up', label: '涨停', days: _BT_DAYS },
+                    { key: 'zhaban', label: '炸板', days: _BT_DAYS },
+                    { key: 'reversal', label: '反转', days: _BT_DAYS },
+                    { key: 'dtqiaoban', label: '跌停', days: _BT_DAYS },
                 ];
                 // 用户1把梭3万, 全 tab 统一 TOP1
                 var defaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
@@ -773,7 +788,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                 })
                 .catch(function() {});
             // 加载当前tab的回测数据
-            setTimeout(function() { loadBacktestTab(_btTab, 30, _btTopN, _btCapital); }, 100);
+            setTimeout(function() { loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital); }, 100);
         }
     } catch (err) {
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;

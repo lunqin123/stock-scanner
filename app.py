@@ -2204,16 +2204,28 @@ def get_market_status():
 _CLOSE_CACHE_KEY = "limit_up_cards_20000_default"
 
 def _schedule_close_scan():
-    """盘后 15:05 自动触发一次全量扫描，写入冻结缓存（默认本金 2 万）"""
+    """盘后 15:05 自动触发一次全量扫描，写入冻结缓存（默认本金 2 万）
+
+    每天调度一次，收盘后自动归档数据供回测使用。
+    """
     import threading
     from cache import daily_get, _is_trading_day
+    from datetime import timedelta
     now = datetime.now(_CST)
     if not _is_trading_day(now.strftime("%Y%m%d")):
-        return  # 非交易日（周末或节假日）跳过
+        # 非交易日，调度到明天的同一时间检查
+        tomorrow = now + timedelta(days=1)
+        delay = (tomorrow.replace(hour=15, minute=5, second=0, microsecond=0) - now).total_seconds()
+        threading.Timer(max(60, delay), _schedule_close_scan).start()
+        return
     target = now.replace(hour=15, minute=5, second=0, microsecond=0)
     if now >= target:
         has_cache = daily_get(_CLOSE_CACHE_KEY) is not None
         if has_cache:
+            # 已有缓存，调度到明天
+            tomorrow = now + timedelta(days=1)
+            delay = (tomorrow.replace(hour=15, minute=5, second=0, microsecond=0) - now).total_seconds()
+            threading.Timer(max(60, delay), _schedule_close_scan).start()
             return
         print("  [收盘扫描] 15:05 已过且无缓存，60秒后启动补扫", file=sys.stderr)
         threading.Timer(60, lambda: _run_close_scan(principal=20000)).start()
