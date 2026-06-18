@@ -144,11 +144,39 @@ def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.Dat
     try:
         df = _load_pool_pickle(date_str, pool_type)
         if df is not None:
+            # 数据质量检查：跳过占位值数据（如封板资金全为零的劣质归档）
+            if _is_placeholder_data(df, pool_type):
+                return None
             _cache_put(cache_key, df)  # 写入 2h 缓存,后续请求秒回
             return df
     except Exception:
         pass
     return None
+
+
+def _is_placeholder_data(df, pool_type: str) -> bool:
+    """检查 DataFrame 是否是占位值数据（而非真实的 akshare 原始数据）"""
+    if df is None or df.empty:
+        return True
+    # 检查封板资金：如果存在且全部为 0，说明是占位数据
+    for col in ['封板资金', '封单资金', '封单金额']:
+        if col in df.columns:
+            try:
+                vals = df[col].fillna(0).astype(float)
+                if vals.max() == 0 and vals.min() == 0:
+                    return True  # 全部为零 → 占位数据
+            except (ValueError, TypeError):
+                pass
+            break  # 找到一个列就够
+    # 检查名称列：如果名称==代码，说明是占位数据
+    if '名称' in df.columns and '代码' in df.columns:
+        try:
+            match = (df['名称'].astype(str) == df['代码'].astype(str)).sum()
+            if match > len(df) * 0.5:  # 超过50%的名称和代码相同
+                return True
+        except (ValueError, TypeError):
+            pass
+    return False
 
 def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
     """涨停池: 当日涨停 (stock_zt_pool_em, 含封板时间/封板资金等 plan_a 所需列)
