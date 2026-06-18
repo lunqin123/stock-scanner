@@ -90,6 +90,8 @@ async function loadBacktestTab(tab, days, topN, capital) {
             return;
         }
         contentEl.innerHTML = renderBacktestTabFull(data);
+        // 当前 tab 加载完后，后台预加载其他 tab 的数据
+        _prefetchBacktestTabs(tab, days, topN, capital);
     } catch (e) {
         if (myToken !== _btLoadToken) {
             // token 变了, 不报错(让新请求主导), 但至少 console 一下
@@ -100,6 +102,23 @@ async function loadBacktestTab(tab, days, topN, capital) {
         console.error('[回测] 加载失败:', tab, 'msg=', msg, e);
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
     }
+}
+
+// 后台预加载所有回测 tab 的数据（当前 tab 跳过，其他静默缓存）
+function _prefetchBacktestTabs(currentTab, days, topN, capital) {
+    var allTabs = ['trend', 'limit-up', 'zhaban', 'reversal', 'dtqiaoban'];
+    allTabs.forEach(function(t) {
+        if (t === currentTab) return;
+        var key = _btCacheKey(t, days, topN, capital, _btStrategy, _btMinScore);
+        if (_btCache[key]) return;
+        var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _btMinScore + '&capital=' + capital;
+        if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
+        fetch(url).then(function(r) { return r.json(); }).then(function(d) {
+            if (d && typeof d === 'object' && d.ok) {
+                _btCache[key] = { data: d, ts: Date.now() };
+            }
+        }).catch(function() {});
+    });
 }
 
 // P6: 切换回测 tab
