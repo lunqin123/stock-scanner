@@ -366,8 +366,13 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
 
     factors = compute_factors(scoring_base, fund_df=fund_df, principal=principal)
 
+    # 使用涨停专用权重（板块热度提权、封板强度降权）
+    from weight_manager import _load_tab_weights
+    limit_up_weights = _load_tab_weights('limit-up')
+
     total_scores, base_scores, danger_flags, weights = apply_scores(
-        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt)
+        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt,
+        weights=limit_up_weights)
 
     # 3. 附加评分列到 DataFrame
     filtered = filtered.copy()

@@ -564,12 +564,24 @@ ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'tu
 DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
 DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
 
+# 涨停专用权重（板块热度为核心，封板强度降低）
+DEFAULT_WEIGHTS_LIMIT_UP = {
+    'seal': 20.0,       # 封板强度（降权，对T+3预测力弱）
+    'sector': 25.0,     # 板块热度（涨停持续性的核心预测因子）
+    'money': 15.0,      # 资金驱动（重新启用）
+    'tech': 10.0,       # 量价结构
+    'history': 10.0,    # 历史股性
+    'stock_sentiment': 15.0,  # 个股情绪（板块龙头溢价）
+    'principal_score': 5.0,   # 本金适配
+}
+
 _WEIGHTS_FILES = {
     'zhaban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "zhaban_weights.json"),
     'dtqiaoban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "dtqiaoban_weights.json"),
+    'limit-up': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "limit_up_weights.json"),
 }
 
-DEFAULTS_MAP = {'zhaban': ZB_DEFAULT_WEIGHTS, 'dtqiaoban': DT_DEFAULT_WEIGHTS}
+DEFAULTS_MAP = {'zhaban': ZB_DEFAULT_WEIGHTS, 'dtqiaoban': DT_DEFAULT_WEIGHTS, 'limit-up': DEFAULT_WEIGHTS_LIMIT_UP}
 NAMES_MAP = {'zhaban': ZB_FACTOR_NAMES, 'dtqiaoban': DT_FACTOR_NAMES}
 PREFIX_MAP = {'zhaban': 'zb', 'dtqiaoban': 'dt'}
 

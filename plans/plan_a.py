@@ -153,10 +153,12 @@ def reindex_factors(factors, idx):
 #  评分聚合
 # ═══════════════════════════════════════════
 
-def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, today_str):
+def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, today_str,
+                  weights=None):
     """
     因子加权 + 大盘情绪系数 + 危险信号惩罚。
     返回 (total_scores, base_scores, danger_flags, weights)
+    weights: 可选，传入自定义权重字典，None 时从 weight_manager 加载全局权重
     """
     import weight_manager
 
@@ -171,7 +173,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     h_scores = history_scores.loc[filtered.index] if hasattr(history_scores, 'loc') and len(filtered.index) > 0 \
                else pd.Series(2.5, index=filtered.index)
 
-    weights = weight_manager.load_weights()
+    if weights is None:
+        weights = weight_manager.load_weights()
     sector_merged = (factors['sector_res'] + factors['sector_mom']) / 2.0
     base = weight_manager.apply_weights(
         factors['seal'], money, sector_merged,
