@@ -148,8 +148,53 @@ async function switchBacktestTab(tab, days) {
 function onBacktestParamChange() {
     var topSel = document.getElementById('btTopN');
     var capInput = document.getElementById('btCapital');
-    if (topSel) _btTopN = parseInt(topSel.value) || 3;
-    if (capInput) _btCapital = parseInt(capInput.value) || 90000;
+    var newTopN = parseInt(topSel ? topSel.value : 3) || 3;
+    var newCap = parseInt(capInput ? capInput.value : 90000) || 90000;
+
+    // 如果只改了本金（TOP-N 没变），直接从缓存重算盈亏，不调 API
+    if (newTopN === _btTopN && newCap !== _btCapital) {
+        var oldKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _btMinScore);
+        var cached = _btCache[oldKey];
+        if (cached && cached.data && cached.data.ok) {
+            var newData = JSON.parse(JSON.stringify(cached.data)); // 深拷贝
+            // 重算每条交易的 pnl
+            var bt = newData.backtest;
+            if (bt) {
+                var cmp = bt.comparison || {};
+                ['open_buy', 'close_buy', 'stop_loss'].forEach(function(k) {
+                    var group = cmp[k];
+                    if (group && group.trades) {
+                        group.trades.forEach(function(t) {
+                            var ret = parseFloat(t.net_ret_pct) || 0;
+                            t.pnl = Math.round(newCap * ret / 100);
+                        });
+                    }
+                });
+                // 重算 summary
+                ['summary', 'summary_30d'].forEach(function(sk) {
+                    var s = bt[sk];
+                    if (s && s.trade_count) {
+                        var totalPnl = 0;
+                        var src = cmp.open_buy && cmp.open_buy.trades ? cmp.open_buy.trades : (cmp.close_buy && cmp.close_buy.trades ? cmp.close_buy.trades : []);
+                        src.forEach(function(t) { totalPnl += (t.pnl || 0); });
+                        s.total_pnl = totalPnl;
+                    }
+                });
+                bt.config.capital = newCap;
+            }
+            // 存入新缓存键
+            _btCapital = newCap;
+            _saveBacktestParams();
+            var newKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _btMinScore);
+            _btCache[newKey] = { data: newData, ts: Date.now() };
+            var el = document.getElementById('btTabContent');
+            if (el) el.innerHTML = renderBacktestTabFull(newData);
+            return;
+        }
+    }
+
+    _btTopN = newTopN;
+    _btCapital = newCap;
     _saveBacktestParams();
     loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
