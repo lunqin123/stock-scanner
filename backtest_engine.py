@@ -734,7 +734,8 @@ def run_tab_backtest(
         if d_buy is None or d_buy > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
             continue
-        d_sell = _next_trading_date(d_buy)
+        d_sell = _next_trading_date(d_buy)          # T+2
+        d_sell = _next_trading_date(d_sell)          # → T+3（多持一日）
         # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
         # 但策略A/B需要真正的T+1卖出日, d_sell被兜底时跳过(否则同日买卖无意义)
         d_sell_fallback = False
@@ -1008,7 +1009,7 @@ def run_tab_backtest(
             'top_n': top_n, 'min_score': min_score, 'capital': capital,
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
-            'strategy': 'T+1 真实 (信号日 → D+1 开盘/尾盘买 → D+2 开盘卖)',
+            'strategy': 'T+1 真实 (信号日 → D+1 开盘/尾盘买 → D+3 开盘卖(持2日))',
         },
         'comparison': {
             'open_buy': {'summary': sum_open, 'trades': records_open},
