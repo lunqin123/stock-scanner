@@ -702,7 +702,8 @@ def run_tab_backtest(
     # ── 整体结果缓存 ──
     if use_cache:
         cache_key = make_key("bt", "result", tab=tab,
-                             start=start, end=end, top_n=top_n, capital=int(capital))
+                             start=start, end=end, top_n=top_n,
+                             min_score=int(min_score), capital=int(capital))
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
@@ -999,7 +1000,7 @@ def run_tab_backtest(
         'generated_at': datetime.now().isoformat(),
         'config': {
             'tab': tab, 'start': start, 'end': end,
-            'top_n': top_n, 'capital': capital,
+            'top_n': top_n, 'min_score': min_score, 'capital': capital,
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
             'strategy': 'T+1 真实 (信号日 → D+1 开盘/尾盘买 → D+2 开盘卖)',
