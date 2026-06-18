@@ -193,6 +193,7 @@ def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
             break
     chg_col = chg_col or df.columns[3]
     df = filter_xr_xd_dr(df)
+    df = filter_non_main_board(df)
     df['_chg'] = df[chg_col].astype(float)
     pullback = df[(df['_chg'] >= -7) & (df['_chg'] <= 1)].copy()
     if not pullback.empty:
@@ -426,8 +427,8 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
 def _score_reversal(df: pd.DataFrame, date_str: str):
     """反转评分: scanner._score_reversal + 可调权 (P5)"""
     try:
-        from weight_manager import load_reversal_weights
-        w = load_reversal_weights()
+        from weight_manager import _load_tab_weights
+        w = _load_tab_weights('reversal')
     except Exception:
         w = None
     return scanner_score_reversal(df, today_str=date_str, weights=w)

@@ -1473,17 +1473,18 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     P5: 4因子可调权, 输出因子分列供IC分析。
 
     因子:
-    - 换手率 (0-40)
-    - 连板位置 (0-35)
-    - 回调深度 (0-15)
-    - 板块支撑 (0-10)
+    - 连板位置 (0-30) — 连板越高，反包势能越强
+    - 换手率 (0-25) — 低换手=惜售=筹码锁定好，高换手=抛压大
+    - 回调深度 (0-25) — 深度回调才有反包空间
+    - 板块支撑 (0-15) — 按板块涨停股数连续分档
+    - 封板留存率 (0-5) — 板块涨停股留存率
 
     返回带因子分列 + '反转评分' 总分的 DataFrame。
     """
     if pullback is None or pullback.empty:
         return pullback
 
-    defaults = {'turnover': 40, 'consecutive': 35, 'pullback': 15, 'sector': 10}
+    defaults = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -1501,20 +1502,19 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     f_lb = pd.Series(0.0, index=pullback.index)
     f_chg = pd.Series(0.0, index=pullback.index)
     f_sector = pd.Series(0.0, index=pullback.index)
+    f_retention = pd.Series(0.5, index=pullback.index)
 
-    # 1. 换手率
+    # 1. 换手率（符号修正：低换手=惜售=好，高换手=派发=差）
     if turnover_col:
         for idx in pullback.index:
             t = float(pullback.loc[idx, turnover_col]) if pd.notna(pullback.loc[idx, turnover_col]) else 0
-            if t > 25:             f_to[idx] = 1.0
-            elif 15 <= t <= 25:    f_to[idx] = 0.8
-            elif 8 <= t < 15:      f_to[idx] = 0.5
-            elif 5 <= t < 8:       f_to[idx] = 0.35
-            elif 3 <= t < 5:       f_to[idx] = 0.2
-            elif 1 <= t < 3:       f_to[idx] = 0.1
-            else:                  f_to[idx] = 0.0
+            if t < 5:                f_to[idx] = 1.0   # 惜售，筹码锁定
+            elif 5 <= t < 8:         f_to[idx] = 0.8
+            elif 8 <= t < 15:        f_to[idx] = 0.5
+            elif 15 <= t < 25:       f_to[idx] = 0.2
+            else:                    f_to[idx] = 0.0   # >25%巨量换手=出货
 
-    # 2. 连板位置
+    # 2. 连板位置（单调递增：连板越高分越高）
     if seal_stat_col:
         for idx in pullback.index:
             raw = str(pullback.loc[idx, seal_stat_col]) if pd.notna(pullback.loc[idx, seal_stat_col]) else ''
@@ -1522,42 +1522,70 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
             if '/' in raw:
                 try: consecutive = int(raw.split('/')[1])
                 except: pass
-            if consecutive == 3:       f_lb[idx] = 1.0
-            elif consecutive == 2:     f_lb[idx] = 0.8
-            elif consecutive >= 4:     f_lb[idx] = 0.43
-            elif consecutive == 1:     f_lb[idx] = 0.29
-            else:                      f_lb[idx] = 0.23
+            if consecutive >= 4:     f_lb[idx] = 1.0   # 高度连板龙头，反包势能最强
+            elif consecutive == 3:   f_lb[idx] = 0.85
+            elif consecutive == 2:   f_lb[idx] = 0.65
+            elif consecutive == 1:   f_lb[idx] = 0.40
+            else:                    f_lb[idx] = 0.20
 
-    # 3. 回调深度
+    # 3. 回调深度（真正跌深了才有反弹空间）
     for idx in pullback.index:
         chg_val = pullback.loc[idx, '今日涨幅']
-        if -3 <= chg_val <= 0.5:   f_chg[idx] = 1.0
-        elif -5 <= chg_val < -3:   f_chg[idx] = 0.8
-        else:                      f_chg[idx] = 0.53
+        if chg_val < -7:         f_chg[idx] = 1.0   # 深度回调
+        elif -7 <= chg_val < -5: f_chg[idx] = 0.8
+        elif -5 <= chg_val < -3: f_chg[idx] = 0.6
+        elif -3 <= chg_val < -1: f_chg[idx] = 0.4
+        else:                    f_chg[idx] = 0.1   # 没跌多少，不叫反转
 
-    # 4. 板块支撑
-    if today_str:
+    # 4. 板块支撑（按板块涨停股数连续分档）
+    industry_counts = {}
+    if today_str and ind_col:
         try:
             lt_today = ak.stock_zt_pool_em(date=today_str)
-            if lt_today is not None and not lt_today.empty and ind_col:
+            if lt_today is not None and not lt_today.empty:
                 lt_ind_col = '所属行业' if '所属行业' in lt_today.columns else (lt_today.columns[15] if len(lt_today.columns) > 15 else None)
                 if lt_ind_col:
-                    hot_inds = set(lt_today[lt_ind_col].value_counts().head(10).index)
+                    industry_counts = lt_today[lt_ind_col].value_counts().to_dict()
+        except Exception:
+            pass
+
+    for idx in pullback.index:
+        ind = str(pullback.loc[idx, ind_col]) if ind_col and pd.notna(pullback.loc[idx, ind_col]) else ''
+        cnt = industry_counts.get(ind, 0) if industry_counts else 0
+        if cnt >= 5:       f_sector[idx] = 1.0
+        elif cnt >= 3:     f_sector[idx] = 0.8
+        elif cnt >= 2:     f_sector[idx] = 0.6
+        elif cnt >= 1:     f_sector[idx] = 0.4
+        else:              f_sector[idx] = 0.2
+
+    # 5. 封板留存率（板块涨停股留存率=持续性）
+    if today_str and ind_col and industry_counts:
+        try:
+            prev_pool = ak.stock_zt_pool_previous_em(date=today_str)
+            if prev_pool is not None and not prev_pool.empty:
+                prev_ind_col = '所属行业' if '所属行业' in prev_pool.columns else (prev_pool.columns[15] if len(prev_pool.columns) > 15 else None)
+                if prev_ind_col:
+                    prev_counts = prev_pool[prev_ind_col].value_counts()
                     for idx in pullback.index:
                         ind = str(pullback.loc[idx, ind_col]) if pd.notna(pullback.loc[idx, ind_col]) else ''
-                        f_sector[idx] = 1.0 if ind in hot_inds else 0.4
-                else:
-                    f_sector = pd.Series(0.6, index=pullback.index)
-            else:
-                f_sector = pd.Series(0.6, index=pullback.index)
+                        today_c = industry_counts.get(ind, 0)
+                        prev_c = prev_counts.get(ind, 0) if prev_counts is not None else 0
+                        if prev_c > 0:
+                            retention = today_c / prev_c
+                            if retention >= 0.8:    f_retention[idx] = 1.0
+                            elif retention >= 0.6:  f_retention[idx] = 0.8
+                            elif retention >= 0.4:  f_retention[idx] = 0.6
+                            elif retention >= 0.2:  f_retention[idx] = 0.4
+                            else:                   f_retention[idx] = 0.2
+                        else:
+                            f_retention[idx] = 0.3  # 新板块，留存率未知
         except Exception:
-            f_sector = pd.Series(0.6, index=pullback.index)
-    else:
-        f_sector = pd.Series(0.6, index=pullback.index)
+            pass
 
-    # 加权总分 (归一化到0-100, 与其他tab可比)
+    # 加权总分 (归一化到0-100)
     total = (f_to * w['turnover'] + f_lb * w['consecutive'] +
-             f_chg * w['pullback'] + f_sector * w['sector'])
+             f_chg * w['pullback'] + f_sector * w['sector'] +
+             f_retention * w['retention'])
     weight_sum = sum(abs(v) for v in w.values())
     normalized = (total / max(weight_sum, 1) * 100) if weight_sum != 0 else total
 
@@ -1567,6 +1595,7 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     pullback['rev_consecutive'] = (f_lb * w['consecutive']).round(1)
     pullback['rev_pullback'] = (f_chg * w['pullback']).round(1)
     pullback['rev_sector'] = (f_sector * w['sector']).round(1)
+    pullback['rev_retention'] = (f_retention * w['retention']).round(1)
     return pullback
 
 
@@ -2389,9 +2418,10 @@ def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
     for idx in df.index:
         if deal_col is not None:
             dv = float(df.loc[idx, deal_col]) if pd.notna(df.loc[idx, deal_col]) else 0
-            if dv > 5000e4: f_deal[idx] = 1.0
+            if dv > 3000e4: f_deal[idx] = 1.0
             elif dv > 1000e4: f_deal[idx] = 0.8
-            elif dv > 100e4: f_deal[idx] = 0.48
+            elif dv > 500e4: f_deal[idx] = 0.6
+            elif dv > 100e4: f_deal[idx] = 0.4
             else: f_deal[idx] = 0.2
         if seal_fund_col is not None:
             sv = float(df.loc[idx, seal_fund_col]) if pd.notna(df.loc[idx, seal_fund_col]) else 0
@@ -2401,16 +2431,20 @@ def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
             else: f_seal[idx] = 0.12
         if cont_dieting_col is not None:
             cv = int(float(df.loc[idx, cont_dieting_col])) if pd.notna(df.loc[idx, cont_dieting_col]) else 0
-            if cv >= 3: f_cont[idx] = 1.0
-            elif cv == 2: f_cont[idx] = 0.72
+            if cv >= 5: f_cont[idx] = 1.0
+            elif cv == 4: f_cont[idx] = 0.9
+            elif cv == 3: f_cont[idx] = 0.8
+            elif cv == 2: f_cont[idx] = 0.6
             elif cv == 1: f_cont[idx] = 0.4
             else: f_cont[idx] = 0.2
         if turnover_col is not None:
             tv = float(df.loc[idx, turnover_col]) if pd.notna(df.loc[idx, turnover_col]) else 0
-            if tv > 10: f_turn[idx] = 1.0
-            elif tv > 5: f_turn[idx] = 0.67
-            elif tv > 1: f_turn[idx] = 0.33
-            else: f_turn[idx] = 0.13
+            if tv > 15: f_turn[idx] = 1.0
+            elif tv > 10: f_turn[idx] = 0.8
+            elif tv > 5: f_turn[idx] = 0.6
+            elif tv > 3: f_turn[idx] = 0.4
+            elif tv > 1: f_turn[idx] = 0.2
+            else: f_turn[idx] = 0.0
         if seal_time_col is not None:
             t = str(df.loc[idx, seal_time_col]).strip()
             if len(t) >= 4:

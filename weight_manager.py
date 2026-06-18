@@ -575,15 +575,23 @@ DEFAULT_WEIGHTS_LIMIT_UP = {
     'principal_score': 5.0,   # 本金适配
 }
 
+# 反转专用权重（连板为王、换手率符号修正）
+REV_DEFAULT_WEIGHTS = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
+REV_FACTOR_NAMES = {'turnover': '换手', 'consecutive': '连板', 'pullback': '回调', 'sector': '板块', 'retention': '留存'}
+
 _WEIGHTS_FILES = {
     'zhaban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "zhaban_weights.json"),
     'dtqiaoban': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "dtqiaoban_weights.json"),
     'limit-up': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "limit_up_weights.json"),
+    'reversal': os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "stock_scanner_cache", "reversal_weights.json"),
 }
 
-DEFAULTS_MAP = {'zhaban': ZB_DEFAULT_WEIGHTS, 'dtqiaoban': DT_DEFAULT_WEIGHTS, 'limit-up': DEFAULT_WEIGHTS_LIMIT_UP}
-NAMES_MAP = {'zhaban': ZB_FACTOR_NAMES, 'dtqiaoban': DT_FACTOR_NAMES}
-PREFIX_MAP = {'zhaban': 'zb', 'dtqiaoban': 'dt'}
+DEFAULTS_MAP = {
+    'zhaban': ZB_DEFAULT_WEIGHTS, 'dtqiaoban': DT_DEFAULT_WEIGHTS,
+    'limit-up': DEFAULT_WEIGHTS_LIMIT_UP, 'reversal': REV_DEFAULT_WEIGHTS,
+}
+NAMES_MAP = {'zhaban': ZB_FACTOR_NAMES, 'dtqiaoban': DT_FACTOR_NAMES, 'reversal': REV_FACTOR_NAMES}
+PREFIX_MAP = {'zhaban': 'zb', 'dtqiaoban': 'dt', 'reversal': 'rev'}
 
 
 def _load_tab_weights(tab: str) -> dict:
