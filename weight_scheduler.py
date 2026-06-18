@@ -22,7 +22,7 @@
 **数据流**:
 - 阶段 1 (plan_a): 跑 5 天回测 → 计算 factor × 收益相关性 → save_daily_correlations → daily_adjust_weights
 - 阶段 2 (trend): 从 archive.db daily_stocks 读 N 天记录 → 调 adjust_trend_weights_from_backtest
-- 阶段 3 (reversal/tab): 待 archive.db 补 rev_xxx 因子分列后启用 (暂搁)
+- 阶段 3 (all tabs): 盘后预缓存炸板/翘板/涨停/反转回测 + 调 tab 权重
 """
 import os
 import sys
@@ -257,7 +257,8 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
     2. 获取互斥锁 (非阻塞 — 已在调则跳过, 不阻塞用户拉数据)
     3. 阶段 1: plan_a 调权
     4. 阶段 2: trend 调权
-    5. 释放锁 + 写状态
+    5. 阶段 3: 预缓存所有 tab 回测 + 调 tab 权重 (炸板/翘板/涨停/反转)
+    6. 释放锁 + 写状态
 
     Args:
         force: 跳过市场状态检查 (CLI 调试用, 默认 False)
@@ -306,6 +307,27 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
         r2 = _adjust_trend()
         results.append(r2)
         print(f"  [weight_scheduler]   阶段2 结果: {r2}", file=sys.stderr)
+
+        # 阶段 3: 预缓存所有 tab 回测 + 调 tab 权重
+        try:
+            from backtest_engine import run_tab_backtest
+            tab_configs = [
+                ('zhaban', 80, '炸板'), ('dtqiaoban', 100, '翘板'),
+                ('limit-up', 80, '涨停'), ('reversal', 0, '反转'),
+            ]
+            for tab, ms, label in tab_configs:
+                res = run_tab_backtest(tab=tab, max_days=30, top_n=1, min_score=ms,
+                                       capital=30000, use_cache=False)
+                trades = res.get('comparison', {}).get('open_buy', {}).get('trades', [])
+                results.append({
+                    'tab': tab, 'status': 'done',
+                    'trades': len(trades),
+                    'msg': f'{label} 回测缓存完成: {len(trades)}笔',
+                })
+                print(f"  [weight_scheduler]   阶段3 {label}: {len(trades)}笔 cached", file=sys.stderr)
+        except Exception as e:
+            results.append({'tab': 'cache_all', 'status': 'failed', 'error': str(e)[:200]})
+            print(f"  [weight_scheduler]   阶段3 失败: {e}", file=sys.stderr)
 
         # 阶段 3: reversal / tab 调权 (archive.db 缺因子分列, 暂搁)
         # TODO: 后续 daily_stocks 加 rev_chg/rev_lb_count/... 列后启用
