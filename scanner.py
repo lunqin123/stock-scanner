@@ -520,9 +520,8 @@ def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> 
         industry = df.loc[idx, industry_col]
         cnt = counts.get(industry, 1)
 
-        # 基础分（0-14，与 consistency_bonus 合并封顶12）：板块涨停数越多越高
-        # 提高饱和度从2只到5只，增强板块间区分度
-        base = min(4 + cnt * 2, 14)
+        # 基础分（0-8）：板块涨停数越多越高
+        base = min(4 + cnt * 2, 8)
 
         # 一致性加分（0-4）
         consistency_bonus = 0
@@ -579,11 +578,8 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
             t = turnover[idx]
             lb = float(df.loc[idx, lb_col]) if lb_col and pd.notna(df.loc[idx, lb_col]) else 1
 
-            # 换手率博弈区间评级（细分5-15%区间，打破所有票都得10分的现状）
-            if 5 <= t <= 15:
-                if t < 8:            base = 10.0  # 健康放量
-                elif t < 12:          base = 8.0   # 充分换手
-                else:                 base = 6.0   # 分歧较大
+            # 换手率博弈区间评级
+            if 5 <= t <= 15:      base = 10.0  # 最佳博弈区间
             elif 3 <= t < 5:      base = 7.0   # 略低但可接受
             elif 15 < t <= 20:    base = 7.0   # 偏高但有承接
             elif 1 <= t < 3:      base = 4.0   # 偏低，动能不足
