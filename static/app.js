@@ -24,6 +24,14 @@ let _btStrategy = localStorage.getItem('btStrategy') || '';
 const _BT_DAYS = 60;
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
 // 各 tab 推荐的最低评分门槛
+var _TAB_DEFAULT_SELL_N = {
+    'trend': 3,
+    'limit-up': 3,
+    'zhaban': 2,
+    'reversal': 3,
+    'dtqiaoban': 3,
+};
+
 var _TAB_DEFAULT_MIN_SCORE = {
     'trend': 55,
     'limit-up': 80,
@@ -31,6 +39,18 @@ var _TAB_DEFAULT_MIN_SCORE = {
     'reversal': 0,
     'dtqiaoban': 100,
 };
+// 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
+var _btSellNs = (function() {
+    var stored;
+    try { stored = JSON.parse(localStorage.getItem('btSellNs') || '{}'); } catch(e) { stored = {}; }
+    for (var k in _TAB_DEFAULT_SELL_N) {
+        if (stored[k] === undefined) stored[k] = _TAB_DEFAULT_SELL_N[k];
+    }
+    return stored;
+})();
+function _getSellN(tab) { return _btSellNs[tab] !== undefined ? _btSellNs[tab] : 3; }
+function _setSellN(tab, val) { _btSellNs[tab] = val; localStorage.setItem('btSellNs', JSON.stringify(_btSellNs)); }
+
 var _btMinScores = (function() {
     var stored;
     try { stored = JSON.parse(localStorage.getItem('btMinScores') || '{}'); } catch(e) { stored = {}; }
@@ -59,6 +79,7 @@ function _resetBacktestParams() {
     localStorage.removeItem('btCapital');
     localStorage.removeItem('btStrategy');
     localStorage.removeItem('btMinScores');
+    localStorage.removeItem('btSellNs');
     _btStrategy = '';
     _btCache = {};
     location.reload();
@@ -72,8 +93,8 @@ window._resetBacktestParams = _resetBacktestParams;
 var _btCache = {};
 var _btLoadToken = 0;
 
-function _btCacheKey(tab, days, topN, capital, strategy, minScore) {
-    return tab + '_' + days + '_' + topN + '_' + capital + '_' + (strategy || '') + '_' + (minScore || 50);
+function _btCacheKey(tab, days, topN, capital, strategy, minScore, sellN) {
+    return tab + '_' + days + '_' + topN + '_' + capital + '_' + (strategy || '') + '_' + (minScore || 0) + '_' + (sellN || 3);
 }
 
 async function loadBacktestTab(tab, days, topN, capital) {
@@ -83,7 +104,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
 
-    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _getMinScore(tab));
+    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _getMinScore(tab), _getSellN(tab));
     if (_btCache[key]) {
         _btCache[key].ts = Date.now();
         contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
@@ -95,7 +116,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&capital=' + capital;
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
@@ -131,9 +152,9 @@ function _prefetchBacktestTabs(currentTab, days, topN, capital) {
     var allTabs = ['trend', 'limit-up', 'zhaban', 'reversal', 'dtqiaoban'];
     allTabs.forEach(function(t) {
         if (t === currentTab) return;
-        var key = _btCacheKey(t, days, topN, capital, _btStrategy, _getMinScore(t));
+        var key = _btCacheKey(t, days, topN, capital, _btStrategy, _getMinScore(t), _getSellN(t));
         if (_btCache[key]) return;
-        var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(t) + '&capital=' + capital;
+        var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(t) + '&sell_n=' + _getSellN(t) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         fetch(url).then(function(r) { return r.json(); }).then(function(d) {
             if (d && typeof d === 'object' && d.ok) {
@@ -175,7 +196,7 @@ function onBacktestParamChange() {
 
     // 如果只改了本金（TOP-N 没变），直接从缓存重算盈亏，不调 API
     if (newTopN === _btTopN && newCap !== _btCapital) {
-        var oldKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
+        var oldKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab), _getSellN(_btTab));
         var cached = _btCache[oldKey];
         if (cached && cached.data && cached.data.ok) {
             var newData = JSON.parse(JSON.stringify(cached.data)); // 深拷贝
@@ -207,7 +228,7 @@ function onBacktestParamChange() {
             // 存入新缓存键
             _btCapital = newCap;
             _saveBacktestParams();
-            var newKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
+            var newKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab), _getSellN(_btTab));
             _btCache[newKey] = { data: newData, ts: Date.now() };
             var el = document.getElementById('btTabContent');
             if (el) el.innerHTML = renderBacktestTabFull(newData);
@@ -232,6 +253,49 @@ function onBacktestMinScoreChange() {
     var inp = document.getElementById('btMinScore');
     var val = parseInt(inp ? inp.value : 0) || 0;
     _setMinScore(_btTab, val);
+    // 尝试从缓存中找一个已有 min_score 的数据，前端直接过滤
+    var hitKey = null;
+    for (var k in _btCache) {
+        if (k.startsWith(_btTab + '_' + _BT_DAYS + '_' + _btTopN + '_' + _btCapital + '_' + (_btStrategy || ''))) {
+            hitKey = k;
+            break;
+        }
+    }
+    if (hitKey) {
+        var cached = _btCache[hitKey];
+        if (cached && cached.data && cached.data.ok) {
+            var newData = JSON.parse(JSON.stringify(cached.data));
+            var bt = newData.backtest;
+            if (bt && bt.comparison) {
+                ['open_buy', 'close_buy', 'stop_loss'].forEach(function(k) {
+                    var grp = bt.comparison[k];
+                    if (grp && grp.trades) {
+                        grp.trades = grp.trades.filter(function(t) { return (t.score || 0) >= val; });
+                    }
+                });
+                // 重算 summary
+                var trades = (bt.comparison.open_buy && bt.comparison.open_buy.trades) || [];
+                var wins = 0, totalPnl = 0, totalRet = 0;
+                trades.forEach(function(t) {
+                    if (t.net_ret_pct > 0) wins++;
+                    totalPnl += (t.pnl || 0);
+                    totalRet += (t.net_ret_pct || 0);
+                });
+                bt.summary = {
+                    trade_count: trades.length, win_count: wins, loss_count: trades.length - wins,
+                    win_rate: trades.length ? Math.round(wins / trades.length * 1000) / 10 : 0,
+                    total_pnl: totalPnl, cumulative_ret: Math.round(totalRet * 100) / 100,
+                };
+                bt.summary_30d = bt.summary;  // 简化为相同值
+                if (bt.config) bt.config.min_score = val;
+            }
+            var newKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, val);
+            _btCache[newKey] = { data: newData, ts: Date.now() };
+            var el = document.getElementById('btTabContent');
+            if (el) el.innerHTML = renderBacktestTabFull(newData);
+            return;
+        }
+    }
     _btCache = {};
     loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }

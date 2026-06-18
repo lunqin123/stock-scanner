@@ -673,6 +673,7 @@ def run_tab_backtest(
     end_date: str = None,
     top_n: int = TOP_N_DEFAULT,
     min_score: float = 50.0,
+    sell_n: int = 3,
     capital: float = CAPITAL_DEFAULT,
     max_days: int = 30,
     use_cache: bool = True,
@@ -684,6 +685,8 @@ def run_tab_backtest(
         tab: TAB_LIMIT_UP / TAB_TREND / TAB_ZHABAN / TAB_DTQIAOBAN / TAB_REVERSAL / TAB_SECTOR
         start_date/end_date: YYYYMMDD, 默认最近 30 个交易日
         top_n: 每个信号日取前 N 名
+        min_score: 最低评分门槛
+        sell_n: 卖出日偏移 (2=T+2, 3=T+3, 4=T+4, 5=T+5)
         capital: 单笔本金
         max_days: 默认 30 天
         use_cache: True 走 daily cache
@@ -737,7 +740,7 @@ def run_tab_backtest(
     if use_cache:
         cache_key = make_key("bt", "result", tab=tab,
                              start=start, end=end, top_n=top_n,
-                             min_score=int(min_score), capital=int(capital))
+                             min_score=int(min_score), sell_n=sell_n, capital=int(capital))
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
@@ -763,11 +766,15 @@ def run_tab_backtest(
         if d_buy is None or d_buy > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
             continue
-        d_sell = _next_trading_date(d_buy)            # T+2
+        # 多时点卖出：T+2~T+5 可调
+        d_sell = d_buy
+        for _si in range(max(1, sell_n - 1)):
+            d_sell = _next_trading_date(d_sell)
+            if d_sell is None:
+                break
         if d_sell is None:
             skipped.append({'signal': d_signal, 'reason': '卖出日无效'})
             continue
-        d_sell = _next_trading_date(d_sell)            # → T+3（多持一日）
         # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
         # 但策略A/B需要真正的T+1卖出日, d_sell被兜底时跳过(否则同日买卖无意义)
         d_sell_fallback = False
@@ -988,7 +995,7 @@ def run_tab_backtest(
             'trades': [],
             'skipped': skipped,
             'generated_at': datetime.now().isoformat(),
-            'config': {'tab': tab, 'start': start, 'end': end, 'top_n': top_n, 'capital': capital},
+            'config': {'tab': tab, 'start': start, 'end': end, 'top_n': top_n, 'sell_n': sell_n, 'capital': capital},
             'error': '无有效交易',
         }
         return result
@@ -1038,7 +1045,7 @@ def run_tab_backtest(
         'generated_at': datetime.now().isoformat(),
         'config': {
             'tab': tab, 'start': start, 'end': end,
-            'top_n': top_n, 'min_score': min_score, 'capital': capital,
+            'top_n': top_n, 'min_score': min_score, 'sell_n': sell_n, 'capital': capital,
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
             'strategy': 'T+1 真实 (信号日 → D+1 开盘/尾盘买 → D+3 开盘卖(持2日))',
