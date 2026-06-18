@@ -1224,7 +1224,7 @@ function renderBacktestTabFull(data) {
             // 表格 (8 列去掉"策略"列, 因为已是分组表)
             html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:0;-webkit-overflow-scrolling:touch">';
             html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:580px">';
-            html += '<thead style="position:sticky;top:0;z-index:1"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + ';background:var(--card-bg)">';
+            html += '<thead style="position:sticky;top:0;z-index:1;background:var(--card-bg)"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + '">';
             html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
             html += '<th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
             html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
