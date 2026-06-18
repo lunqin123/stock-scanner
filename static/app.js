@@ -20,14 +20,21 @@ const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
-let _btMinScore = parseInt(localStorage.getItem('btMinScore')) || 50;
+// 每个 tab 独立的最低评分门槛（评分标准各不相同）
+var _btMinScores = (function() {
+    try { return JSON.parse(localStorage.getItem('btMinScores') || '{}'); } catch(e) { return {}; }
+})();
+function _getMinScore(tab) { return _btMinScores[tab] || 0; }
+function _setMinScore(tab, val) { _btMinScores[tab] = val; localStorage.setItem('btMinScores', JSON.stringify(_btMinScores)); }
+// 当前 tab 的 min_score（向后兼容，从各 tab 独立存储读取）
+function _loadCurMinScore() { return _getMinScore(_btTab); }
 
 function _saveBacktestParams() {
     localStorage.setItem('btTab', _btTab);
     localStorage.setItem('btTopN', _btTopN);
     localStorage.setItem('btCapital', _btCapital);
     localStorage.setItem('btStrategy', _btStrategy);
-    localStorage.setItem('btMinScore', _btMinScore);
+    // btMinScores 已通过 _setMinScore 持久化到 btMinScores
 }
 
 // 重置回默认 (1把梭3万, 全部 TOP1)
@@ -61,7 +68,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
 
-    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _btMinScore);
+    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _getMinScore(tab));
     if (_btCache[key]) {
         _btCache[key].ts = Date.now();
         contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
@@ -73,7 +80,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _btMinScore + '&capital=' + capital;
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
@@ -109,9 +116,9 @@ function _prefetchBacktestTabs(currentTab, days, topN, capital) {
     var allTabs = ['trend', 'limit-up', 'zhaban', 'reversal', 'dtqiaoban'];
     allTabs.forEach(function(t) {
         if (t === currentTab) return;
-        var key = _btCacheKey(t, days, topN, capital, _btStrategy, _btMinScore);
+        var key = _btCacheKey(t, days, topN, capital, _btStrategy, _getMinScore(t));
         if (_btCache[key]) return;
-        var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _btMinScore + '&capital=' + capital;
+        var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(t) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         fetch(url).then(function(r) { return r.json(); }).then(function(d) {
             if (d && typeof d === 'object' && d.ok) {
@@ -127,8 +134,10 @@ async function switchBacktestTab(tab, days) {
     _saveBacktestParams();
     var topSel = document.getElementById('btTopN');
     var capInput = document.getElementById('btCapital');
+    var msInput = document.getElementById('btMinScore');
     if (topSel) topSel.value = _btTopN;
     if (capInput) capInput.value = _btCapital;
+    if (msInput) msInput.value = _getMinScore(tab);
     // 更新 tab 按钮高亮
     var bar = document.getElementById('btTabBar');
     if (bar) {
@@ -151,7 +160,7 @@ function onBacktestParamChange() {
 
     // 如果只改了本金（TOP-N 没变），直接从缓存重算盈亏，不调 API
     if (newTopN === _btTopN && newCap !== _btCapital) {
-        var oldKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _btMinScore);
+        var oldKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
         var cached = _btCache[oldKey];
         if (cached && cached.data && cached.data.ok) {
             var newData = JSON.parse(JSON.stringify(cached.data)); // 深拷贝
@@ -183,7 +192,7 @@ function onBacktestParamChange() {
             // 存入新缓存键
             _btCapital = newCap;
             _saveBacktestParams();
-            var newKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _btMinScore);
+            var newKey = _btCacheKey(_btTab, 30, _btTopN, _btCapital, _btStrategy, _getMinScore(_btTab));
             _btCache[newKey] = { data: newData, ts: Date.now() };
             var el = document.getElementById('btTabContent');
             if (el) el.innerHTML = renderBacktestTabFull(newData);
@@ -206,8 +215,8 @@ function onBacktestStrategyChange() {
 
 function onBacktestMinScoreChange() {
     var inp = document.getElementById('btMinScore');
-    _btMinScore = parseInt(inp ? inp.value : 50) || 50;
-    _saveBacktestParams();
+    var val = parseInt(inp ? inp.value : 0) || 0;
+    _setMinScore(_btTab, val);
     _btCache = {};
     loadBacktestTab(_btTab, 30, _btTopN, _btCapital);
 }
@@ -736,7 +745,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
                     + '</select>'
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
-                    + '<input id="btMinScore" type="number" value="' + _btMinScore + '" onchange="onBacktestMinScoreChange()" style="width:50px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
+                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:50px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '</div>'
