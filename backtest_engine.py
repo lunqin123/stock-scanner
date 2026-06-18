@@ -112,7 +112,7 @@ def _detect_available_days(tab: str) -> int:
         prefix = f'{pool_type}_'
         count = sum(1 for f in _os.listdir(_ARCHIVE_POOL_DIR)
                     if f.startswith(prefix) and f.endswith('.pkl'))
-        return max(5, min(count, 60))  # 至少5天, 最多60天
+        return max(5, min(count, 120))  # 至少5天, 最多120天
     except Exception:
         return 5
 # P1.2.1.2: 重要发现 (2026-06-09 23:15 调试得出):

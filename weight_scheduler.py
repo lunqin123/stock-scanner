@@ -316,7 +316,7 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
                 ('limit-up', 80, '涨停'), ('reversal', 0, '反转'),
             ]
             for tab, ms, label in tab_configs:
-                res = run_tab_backtest(tab=tab, max_days=30, top_n=1, min_score=ms,
+                res = run_tab_backtest(tab=tab, max_days=60, top_n=1, min_score=ms,
                                        capital=30000, use_cache=False)
                 trades = res.get('comparison', {}).get('open_buy', {}).get('trades', [])
                 results.append({
