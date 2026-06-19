@@ -29,8 +29,8 @@ INCLUDE_CHINEXT = False
 # ═══════════════════════════════════════════
 #  缓存配置
 # ═══════════════════════════════════════════
-CACHE_DIR = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
-                        "stock_scanner_cache")
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(_PROJECT_DIR, "data", "cache")
 CACHE_TTL = 7200                # 默认 2 小时 (秒)
 CST = timezone(timedelta(hours=8))
 
