@@ -1036,7 +1036,7 @@ function renderBacktestTabFull(data) {
     html += '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-bottom:14px;font-size:11px;color:var(--text-muted)">';
     html += '<span>📅 数据窗口 <b style="color:var(--text)">' + ti.days_available + '天</b></span>';
     html += '<span>⚖️ 仓位 <b style="color:' + posColor + '">' + (ti.position_label || '--') + ' ' + (ti.position_weight||0).toFixed(1) + 'x</b></span>';
-    html += '<span>📐 TOP' + (cfg.top_n || 3) + ' · 💰 ' + (cfg.capital || 30000) + '元/笔</span>';
+    html += '<span>📐 <b>TOP' + (cfg.top_n || 3) + '</b> · 💰 ' + (cfg.capital || 30000) + '元/笔 · ⏱️ <b style="color:var(--accent)">T+' + (cfg.sell_n || 3) + '卖出</b></span>';
     html += '</div>';
 
     // 双胜率横幅
@@ -1225,14 +1225,14 @@ function renderBacktestTabFull(data) {
             html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:0;-webkit-overflow-scrolling:touch">';
             html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:580px">';
             html += '<thead style="position:sticky;top:0;z-index:1;background:var(--card-bg)"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + '">';
-            html += '<th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:left">股票</th><th style="text-align:right">评分</th>';
+            html += '<th style="text-align:left">股票</th><th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:right">评分</th>';
             html += '<th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
             html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
             trades.forEach(function(t) {
                 var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
                 html += '<tr style="border-bottom:1px solid var(--border)">';
-                html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
                 html += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
+                html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
                 html += '<td style="padding:3px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
                 html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.buy_price||0).toFixed(2) + '</td>';
                 html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.sell_price||0).toFixed(2) + '</td>';

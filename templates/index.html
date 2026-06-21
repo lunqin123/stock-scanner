@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>A股超短线选股扫描器</title>
-<link rel="stylesheet" href="/static/style.css?v=1781422968">
+<link rel="stylesheet" href="/static/style.css?v=1781530581">
 <script>
 // 全局错误捕获：将 JS 错误显示在页面上，避免静默崩溃
 window.addEventListener('error', function(e) {
@@ -40,7 +40,7 @@ window.addEventListener('unhandledrejection', function(e) {
 <nav class="sidebar">
     <div class="logo">
         📈 选股扫描器
-        <small>超短线 · 首板策略</small>
+        <small>超短线 · v0615-2</small>
     </div>
     <div class="nav-item" data-page="scan-trend">
         <span class="icon">📊</span> 趋势扫描
@@ -84,6 +84,7 @@ window.addEventListener('unhandledrejection', function(e) {
     <div class="global-toolbar" style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--card-bg,#1e2233);border-radius:8px;margin-bottom:10px;flex-wrap:wrap">
         <button class="btn btn-orange" onclick="fetchAllRawData()" title="从 akshare 拉取全部原始数据（涨停+炸板+跌停+资金流+情绪）并缓存 — 耗时 15-20 秒" style="font-size:14px;padding:8px 16px">📡 拉取数据</button>
         <button class="btn" onclick="runCurrentFromCache()" title="从缓存重跑当前板块评分（秒出，改代码后用）" style="font-size:14px;padding:8px 16px">▶ 运行</button>
+        <button class="btn" onclick="loadTomorrowSignals()" title="基于回测数据挖掘的明日买入信号" style="font-size:13px;padding:7px 14px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:6px;cursor:pointer;font-weight:600">📡 明日信号</button>
         <span class="principal-group">
             本金 <input type="number" id="principal-input" value="20000" min="1000" step="1000" class="principal-input" title="输入本金金额（元）">
         </span>
@@ -94,6 +95,7 @@ window.addEventListener('unhandledrejection', function(e) {
         </span>
         <span style="font-size:11px;color:var(--text-muted);margin-left:auto" id="cache-status">加载中...</span>
     </div>
+    <div id="tomorrowSignals" style="display:none;margin:0 0 10px;padding:12px 14px;background:var(--card-bg);border:1px solid #f59e0b;border-radius:8px"></div>
 
     <div class="module-page">
         <div class="main-header">
@@ -108,6 +110,7 @@ window.addEventListener('unhandledrejection', function(e) {
     <div class="quick-actions" id="quick-actions">
         <button class="btn btn-sm" onclick="exportOutput()">📋 复制输出</button>
         <button class="btn btn-orange btn-sm" onclick="clearOutput()">🗑️ 清空</button>
+        <span id="tab-score-display" style="margin-left:12px;font-size:11px;color:var(--text-muted)"></span>
     </div>
         <!-- 进度条 -->
         <div class="progress-container" id="progress-bar" style="display:none">
@@ -123,8 +126,8 @@ window.addEventListener('unhandledrejection', function(e) {
     </div> <!-- /module-page -->
 </main>
 
-<script src="/static/cards.js?v=1781422968"></script>
-<script src="/static/dashboard.js?v=1781422968"></script>
-<script src="/static/app.js?v=1781422968"></script>
+<script src="/static/cards.js?v=1781530581"></script>
+<script src="/static/dashboard.js?v=1781530581"></script>
+<script src="/static/app.js?v=1781530581"></script>
 </body>
 </html>

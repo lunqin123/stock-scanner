@@ -253,49 +253,6 @@ function onBacktestMinScoreChange() {
     var inp = document.getElementById('btMinScore');
     var val = parseInt(inp ? inp.value : 0) || 0;
     _setMinScore(_btTab, val);
-    // 尝试从缓存中找一个已有 min_score 的数据，前端直接过滤
-    var hitKey = null;
-    for (var k in _btCache) {
-        if (k.startsWith(_btTab + '_' + _BT_DAYS + '_' + _btTopN + '_' + _btCapital + '_' + (_btStrategy || ''))) {
-            hitKey = k;
-            break;
-        }
-    }
-    if (hitKey) {
-        var cached = _btCache[hitKey];
-        if (cached && cached.data && cached.data.ok) {
-            var newData = JSON.parse(JSON.stringify(cached.data));
-            var bt = newData.backtest;
-            if (bt && bt.comparison) {
-                ['open_buy', 'close_buy', 'stop_loss'].forEach(function(k) {
-                    var grp = bt.comparison[k];
-                    if (grp && grp.trades) {
-                        grp.trades = grp.trades.filter(function(t) { return (t.score || 0) >= val; });
-                    }
-                });
-                // 重算 summary
-                var trades = (bt.comparison.open_buy && bt.comparison.open_buy.trades) || [];
-                var wins = 0, totalPnl = 0, totalRet = 0;
-                trades.forEach(function(t) {
-                    if (t.net_ret_pct > 0) wins++;
-                    totalPnl += (t.pnl || 0);
-                    totalRet += (t.net_ret_pct || 0);
-                });
-                bt.summary = {
-                    trade_count: trades.length, win_count: wins, loss_count: trades.length - wins,
-                    win_rate: trades.length ? Math.round(wins / trades.length * 1000) / 10 : 0,
-                    total_pnl: totalPnl, cumulative_ret: Math.round(totalRet * 100) / 100,
-                };
-                bt.summary_30d = bt.summary;  // 简化为相同值
-                if (bt.config) bt.config.min_score = val;
-            }
-            var newKey = _btCacheKey(_btTab, _BT_DAYS, _btTopN, _btCapital, _btStrategy, val);
-            _btCache[newKey] = { data: newData, ts: Date.now() };
-            var el = document.getElementById('btTabContent');
-            if (el) el.innerHTML = renderBacktestTabFull(newData);
-            return;
-        }
-    }
     _btCache = {};
     loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
@@ -388,6 +345,17 @@ function switchPage(page) {
         const info = PAGES[page];
         if (!info) return;
         _dom.pageTitle().textContent = info.title;
+        // 更新外部 tab 的评分/卖出日显示
+        var scoreEl = document.getElementById('tab-score-display');
+        if (scoreEl) {
+            var tabMap = {'scan-trend':'trend','scan-limit':'limit-up','scan-zhaban':'zhaban','scan-reversal':'reversal','scan-dtqiaoban':'dtqiaoban'};
+            var btTab = tabMap[page] || '';
+            if (btTab && _getMinScore(btTab) !== undefined) {
+                scoreEl.textContent = '最低分 ' + _getMinScore(btTab) + ' · T+' + _getSellN(btTab) + '卖出';
+            } else {
+                scoreEl.textContent = '';
+            }
+        }
         document.body.dataset.page = page;
 
         // 页面切换动画（用 opacity 避免 layout）
@@ -806,7 +774,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                       + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
                 tabs.forEach(t => {
                     const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
-                    html += '<button class="btn" style="font-size:12px;padding:6px 12px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + '</button>';
+                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' <span style="opacity:0.7">(' + _getMinScore(t.key) + '/' + _getSellN(t.key) + ')</span></button>';
                 });
                 // TOP-N 调权 + 本金输入
                 html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px">'
@@ -824,7 +792,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
                     + '</select>'
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
-                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:50px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
+                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '</div>'
