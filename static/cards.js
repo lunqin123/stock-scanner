@@ -1221,33 +1221,31 @@ function renderBacktestTabFull(data) {
             html += '<span style="color:' + pnlColor + '">总盈亏 ' + (sumPnl>=0?'+':'') + sumPnl.toFixed(0) + '元</span>';
             html += '</summary>';
 
-            // 表格 (精简到 5 列: 股票 / 日期 / 评分 / 收益% / 盈亏¥)
-            // 买入/卖出价冗余 → 合并到 title tooltip,关键指标(收益%)突出
-            html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:0;-webkit-overflow-scrolling:touch">';
-            html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:420px">';
-            html += '<thead style="position:sticky;top:0;z-index:1;background:var(--card-bg)"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + '">';
-            html += '<th style="text-align:left;padding:4px 6px">股票</th>';
-            html += '<th style="text-align:left;padding:4px 4px">信号→卖出</th>';
-            html += '<th style="text-align:right;padding:4px 4px">评分</th>';
-            html += '<th style="text-align:right;padding:4px 6px">收益</th>';
-            html += '<th style="text-align:right;padding:4px 6px">盈亏</th>';
-            html += '</tr></thead>';
+            // 卡片行布局 (两大列: 左=识别信息, 右=战绩)
+            // 左: 股票名 + 日期/代码 (副标)
+            // 右: 收益% (大字) + 盈亏/评分 (小字副标)
+            // 列间距由 flex space-between 自动撑开,不再有列间 padding 浪费
+            html += '<div style="max-height:400px;overflow-y:auto;-webkit-overflow-scrolling:touch">';
             trades.forEach(function(t) {
                 var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
                 var sameDate = t.buy_date === t.sell_date;
-                // 紧凑日期: 06-15→06-18 (省略年份)
                 var dateShort = (t.signal_date || '').slice(4) + '→' + (t.sell_date || '').slice(4);
                 var tooltip = '买入 ' + (t.buy_price||0).toFixed(2) + (sameDate ? '' : ' (' + t.buy_date + ')')
                     + ' | 卖出 ' + (t.sell_price||0).toFixed(2) + ' (' + t.sell_date + ')';
-                html += '<tr style="border-bottom:1px solid var(--border)" title="' + tooltip + '">';
-                html += '<td style="padding:3px 6px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
-                html += '<td style="padding:3px 4px;font-size:10px">' + dateShort + '</td>';
-                html += '<td style="padding:3px 4px;text-align:right;color:var(--text-muted)">' + (t.score||0).toFixed(0) + '</td>';
-                html += '<td style="padding:3px 6px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
-                html += '<td style="padding:3px 6px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
-                html += '</tr>';
+                html += '<div title="' + tooltip + '" style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);gap:12px">';
+                // ── 左大列: 识别信息 ──
+                html += '<div style="flex:1;min-width:0;overflow:hidden">';
+                html += '<div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + '</div>';
+                html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + dateShort + ' · ' + t.code + '</div>';
+                html += '</div>';
+                // ── 右大列: 战绩 ──
+                html += '<div style="flex-shrink:0;text-align:right">';
+                html += '<div style="font-weight:700;font-size:15px;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</div>';
+                html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '元 · ' + (t.score||0).toFixed(0) + '分</div>';
+                html += '</div>';
+                html += '</div>';
             });
-            html += '</table></div></details>';
+            html += '</div></details>';
         });
         html += '</div>';
     }
