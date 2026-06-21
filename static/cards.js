@@ -1232,14 +1232,14 @@ function renderBacktestTabFull(data) {
                 var dateShort = (t.signal_date || '').slice(4) + '→' + (t.sell_date || '').slice(4);
                 var tooltip = '买入 ' + (t.buy_price||0).toFixed(2) + (sameDate ? '' : ' (' + t.buy_date + ')')
                     + ' | 卖出 ' + (t.sell_price||0).toFixed(2) + ' (' + t.sell_date + ')';
-                html += '<div title="' + tooltip + '" style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);gap:12px">';
-                // ── 左大列: 识别信息 ──
+                html += '<div title="' + tooltip + '" style="display:flex;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);gap:16px">';
+                // ── 左大列: 识别信息 (占满剩余空间) ──
                 html += '<div style="flex:1;min-width:0;overflow:hidden">';
                 html += '<div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + '</div>';
                 html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + dateShort + ' · ' + t.code + '</div>';
                 html += '</div>';
-                // ── 右大列: 战绩 ──
-                html += '<div style="flex-shrink:0;text-align:right">';
+                // ── 右大列: 战绩 (固定宽度, 不收缩) ──
+                html += '<div style="flex-shrink:0;text-align:right;min-width:90px">';
                 html += '<div style="font-weight:700;font-size:15px;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</div>';
                 html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '元 · ' + (t.score||0).toFixed(0) + '分</div>';
                 html += '</div>';
