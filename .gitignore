@@ -12,7 +12,6 @@ archive.db
 archive.db-shm
 archive.db-wal
 daily_data/
-scanner_factors.py
 verify_*.py
 do_commit*.py
 check_*.py
