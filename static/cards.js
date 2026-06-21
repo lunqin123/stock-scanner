@@ -1221,23 +1221,30 @@ function renderBacktestTabFull(data) {
             html += '<span style="color:' + pnlColor + '">总盈亏 ' + (sumPnl>=0?'+':'') + sumPnl.toFixed(0) + '元</span>';
             html += '</summary>';
 
-            // 表格 (8 列去掉"策略"列, 因为已是分组表)
+            // 表格 (精简到 5 列: 股票 / 日期 / 评分 / 收益% / 盈亏¥)
+            // 买入/卖出价冗余 → 合并到 title tooltip,关键指标(收益%)突出
             html += '<div class="table-wrap" style="max-height:400px;overflow-y:auto;overflow-x:auto;margin-top:0;-webkit-overflow-scrolling:touch">';
-            html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:580px">';
+            html += '<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:420px">';
             html += '<thead style="position:sticky;top:0;z-index:1;background:var(--card-bg)"><tr style="border-bottom:2px solid ' + st.color + ';color:' + st.color + '">';
-            html += '<th style="text-align:left">股票</th><th style="padding:4px;text-align:left">信号→卖出</th><th style="text-align:right">评分</th>';
-            html += '<th style="text-align:right">买入</th><th style="text-align:right">卖出</th>';
-            html += '<th style="text-align:right">收益</th><th style="text-align:right">盈亏</th></tr></thead>';
+            html += '<th style="text-align:left;padding:4px 6px">股票</th>';
+            html += '<th style="text-align:left;padding:4px 4px">信号→卖出</th>';
+            html += '<th style="text-align:right;padding:4px 4px">评分</th>';
+            html += '<th style="text-align:right;padding:4px 6px">收益</th>';
+            html += '<th style="text-align:right;padding:4px 6px">盈亏</th>';
+            html += '</tr></thead>';
             trades.forEach(function(t) {
                 var retColor = t.net_ret_pct > 0 ? '#ef4444' : '#22c55e';
-                html += '<tr style="border-bottom:1px solid var(--border)">';
-                html += '<td style="padding:3px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
-                html += '<td style="padding:3px;font-size:10px">' + t.signal_date + '→' + t.sell_date + '</td>';
-                html += '<td style="padding:3px;text-align:right">' + (t.score||0).toFixed(0) + '</td>';
-                html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.buy_price||0).toFixed(2) + '</td>';
-                html += '<td style="padding:3px;text-align:right;font-size:10px">' + (t.sell_price||0).toFixed(2) + '</td>';
-                html += '<td style="padding:3px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
-                html += '<td style="padding:3px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
+                var sameDate = t.buy_date === t.sell_date;
+                // 紧凑日期: 06-15→06-18 (省略年份)
+                var dateShort = (t.signal_date || '').slice(4) + '→' + (t.sell_date || '').slice(4);
+                var tooltip = '买入 ' + (t.buy_price||0).toFixed(2) + (sameDate ? '' : ' (' + t.buy_date + ')')
+                    + ' | 卖出 ' + (t.sell_price||0).toFixed(2) + ' (' + t.sell_date + ')';
+                html += '<tr style="border-bottom:1px solid var(--border)" title="' + tooltip + '">';
+                html += '<td style="padding:3px 6px;font-weight:600">' + esc(t.name) + '<span style="color:var(--text-muted);font-size:9px"> ' + t.code + '</span></td>';
+                html += '<td style="padding:3px 4px;font-size:10px">' + dateShort + '</td>';
+                html += '<td style="padding:3px 4px;text-align:right;color:var(--text-muted)">' + (t.score||0).toFixed(0) + '</td>';
+                html += '<td style="padding:3px 6px;text-align:right;font-weight:700;color:' + retColor + '">' + (t.net_ret_pct>0?'+':'') + t.net_ret_pct.toFixed(2) + '%</td>';
+                html += '<td style="padding:3px 6px;text-align:right;font-weight:600;color:' + retColor + '">' + (t.pnl>0?'+':'') + (t.pnl||0).toFixed(0) + '</td>';
                 html += '</tr>';
             });
             html += '</table></div></details>';
