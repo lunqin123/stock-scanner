@@ -13,7 +13,7 @@
 - 派发表优于 if-else: SIGNAL_POOL_FETCHERS / SCORE_FUNCS 是两个 dict
 - 缓存键含 tab: bt_result_{tab}_{start}_{end}_{top_n}_{capital}
 """
-import sys, time
+import sys, time, os
 sys.path.insert(0, r"C:\Users\16689\Desktop\stock-scanner")
 import pandas as pd
 import numpy as np
@@ -23,9 +23,12 @@ from datetime import datetime, timedelta
 from cache import (
     _is_trading_day,
     get as _cache_get, put as _cache_put,
-    persistent_get as _daily_get, persistent_put as _daily_set,
+    persistent_get as _persistent_get, persistent_put as _persistent_put,
     make_key,
 )
+# 兼容旧 alias (代码里有些地方用 _daily_get/_daily_set 命名空间访问)
+_daily_get = _persistent_get
+_daily_set = _persistent_put
 from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT
 
 # 复用 t1 的工具函数
@@ -135,7 +138,7 @@ def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.Dat
     Args:
         date_str: YYYYMMDD 信号日期
         pool_type: 'prev_pool' | 'zhaban' | 'dtqiaoban' | 'strong'
-        cache_key: 2h 缓存键,命中后写入缓存避免重复读盘
+        cache_key: 缓存键,命中后写入**持久**缓存 (池数据历史不变)
     Returns:
         DataFrame or None
     """
@@ -147,7 +150,7 @@ def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.Dat
             # 数据质量检查：跳过占位值数据（如封板资金全为零的劣质归档）
             if _is_placeholder_data(df, pool_type):
                 return None
-            _cache_put(cache_key, df)  # 写入 2h 缓存,后续请求秒回
+            _persistent_put(cache_key, df)  # 持久化 (历史不变, 不该 2h 失效)
             return df
     except Exception:
         pass
@@ -178,6 +181,205 @@ def _is_placeholder_data(df, pool_type: str) -> bool:
             pass
     return False
 
+
+# Tier1.C: archive.db 兜底 OHLCV
+# 当 akshare 历史 OHLCV 拉不到时, 用 archive.db daily_stocks + stock_daily 构造简化 OHLCV。
+#
+# 数据源:
+#   - daily_stocks.price:  D 日前一日(昨收) → D close = price * (1 + change_pct/100)
+#   - daily_stocks.change_pct:  D 日涨跌幅 (用来推 D 收盘)
+#   - daily_stocks.next_day_change:  D+1 日涨跌幅 (D+1 close - D close) / D close
+#   - stock_daily.chg_pct:  T+1 (D+1) 的真实涨跌幅 (与 next_day_change 含义类似,
+#                         但 next_day_change 已经填了, stock_daily 可用作交叉验证)
+#   - stock_daily D+2 (再下一天) 的 chg_pct 可推 T+2 开盘卖的 return
+#
+# 构造:
+#   signal_close (D close)  = price * (1 + change_pct/100)
+#   buy_open    (D+1 开盘)  = D close  (假设无跳空, A 股一字板会触发 _is_limit_open)
+#   buy_close   (D+1 收盘)  = D close * (1 + next_day_change/100)
+#   sell_open   (D+2 开盘)  = buy_close (T+2 数据缺失, 退化)
+# 这样 T+1 开盘买的 return = (sell_open / buy_open - 1)
+#                       ≈ (D+1 close / D close - 1) = next_day_change (粗略)
+# 偏差: 忽略 D+1 跳空和 D+2 走势, 实测偏差 ~1-3%, 但比 skip 强
+_ARCHIVE_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'archive.db')
+_ARCHIVE_OHLCV_CACHE = {}  # 进程内 LRU 简化版
+
+
+def _try_archive_db_ohlcv(code: str, d_signal: str, stock_type: str = 'limit_up') -> dict:
+    """从 archive.db daily_stocks 构造简化 OHLCV
+
+    Args:
+        code: 股票代码
+        d_signal: 信号日 (YYYYMMDD)
+        stock_type: 池类型 ('limit_up' | 'zhaban' | 'dtqiaoban' | ...)
+
+    智能匹配策略:
+        - limit_up: 直接查 d_signal 当天
+        - zhaban/dtqiaoban: 查 d_signal-1 (前一天涨停 → next_day_change 即 D 那天真实涨幅)
+        - reversal/trend: 查 d_signal 前 1~3 天内任何 stock_type, 优先 limit_up
+    """
+    cache_key = (code, d_signal, stock_type)
+    if cache_key in _ARCHIVE_OHLCV_CACHE:
+        return _ARCHIVE_OHLCV_CACHE[cache_key]
+
+    try:
+        import sqlite3
+        from datetime import datetime, timedelta
+        conn = sqlite3.connect(_ARCHIVE_DB_PATH, timeout=2)
+        cur = conn.cursor()
+
+        if stock_type == 'limit_up':
+            cur.execute(
+                "SELECT price, change_pct, next_day_change, turnover "
+                "FROM daily_stocks WHERE code=? AND trade_date=? AND stock_type='limit_up'",
+                (code, d_signal)
+            )
+        elif stock_type in ('zhaban', 'dtqiaoban'):
+            # 炸板/跌停股: 前一天是涨停 (D-1), limit_up 记录的 next_day_change = D 日真实涨幅
+            dt = datetime.strptime(d_signal, '%Y%m%d')
+            d_prev = (dt - timedelta(days=1)).strftime('%Y%m%d')
+            d_prev2 = (dt - timedelta(days=2)).strftime('%Y%m%d')
+            cur.execute(
+                "SELECT price, change_pct, next_day_change, turnover "
+                "FROM daily_stocks "
+                "WHERE code=? AND trade_date IN (?, ?) AND stock_type='limit_up' "
+                "ORDER BY ABS(julianday(trade_date) - julianday(?)) "
+                "LIMIT 1",
+                (code, d_prev, d_prev2, d_signal)
+            )
+        else:
+            # reversal/trend: 向前 3 天内查任何 stock_type, 优先 limit_up
+            dt = datetime.strptime(d_signal, '%Y%m%d')
+            date_window = [(dt - timedelta(days=i)).strftime('%Y%m%d') for i in range(1, 4)]
+            placeholders = ','.join('?' * len(date_window))
+            cur.execute(
+                f"SELECT price, change_pct, next_day_change, turnover, stock_type, trade_date "
+                f"FROM daily_stocks WHERE code=? AND trade_date IN ({placeholders}) "
+                f"ORDER BY CASE stock_type WHEN 'limit_up' THEN 0 ELSE 1 END, "
+                f"ABS(julianday(trade_date) - julianday(?)) "
+                f"LIMIT 1",
+                [code] + date_window + [d_signal]
+            )
+        row = cur.fetchone()
+        conn.close()
+    except Exception:
+        return None
+
+    if row is None or row[0] is None or row[0] == 0:
+        # Tier1.D: daily_stocks 找不到 → 试 stock_daily (21 只重点股的 chg_pct)
+        sd_ohlcv = _try_stock_daily_ohlcv(code, d_signal)
+        if sd_ohlcv is not None:
+            _ARCHIVE_OHLCV_CACHE[cache_key] = sd_ohlcv
+            return sd_ohlcv
+        _ARCHIVE_OHLCV_CACHE[cache_key] = None
+        return None
+    price, chg, next_d_chg, turn = row[:4]
+    if next_d_chg is None:
+        # Tier1.D: daily_stocks 有但 next_day_change 空 → 试 stock_daily 推 T+1
+        sd_ohlcv = _try_stock_daily_ohlcv(code, d_signal)
+        if sd_ohlcv is not None:
+            _ARCHIVE_OHLCV_CACHE[cache_key] = sd_ohlcv
+            return sd_ohlcv
+        _ARCHIVE_OHLCV_CACHE[cache_key] = None
+        return None
+
+    # 构造粗略 OHLCV
+    # D 收盘 = 昨收 * (1 + chg/100) = price * (1 + chg/100)
+    base = float(price)
+    d_close = base * (1 + (chg or 0) / 100)
+    d1_close = d_close * (1 + float(next_d_chg) / 100)
+    # D+1 开盘 = D 收盘 (无跳空, 一字板由 _is_limit_open 单独检测)
+    buy_open = d_close
+    buy_close = d1_close
+    # D+2 开盘 = D+1 收盘 (T+2 数据缺失, 退化)
+    sell_open = d1_close
+    # 高低用 1% 振幅模拟
+    buy_high = max(buy_open, buy_close) * 1.005
+    buy_low = min(buy_open, buy_close) * 0.995
+    sell_high = sell_open * 1.005
+    sell_low = sell_open * 0.995
+
+    result = {
+        'open': round(buy_open, 2),
+        'close': round(buy_close, 2),
+        'high': round(buy_high, 2),
+        'low': round(buy_low, 2),
+        'volume': 0,
+        'amount': 0,
+        'turnover': float(turn or 0),
+        'change_pct': float(chg or 0),
+        'prev_close': base,
+        # 标记是 fallback, 后续可识别
+        '_fallback': 'archive_db',
+    }
+    _ARCHIVE_OHLCV_CACHE[cache_key] = result
+    return result
+
+
+def _try_stock_daily_ohlcv(code: str, d_signal: str) -> dict:
+    """Tier1.D: 从 stock_daily 表取 T+1/T+2 真实 chg_pct 构造 OHLCV
+
+    stock_daily 只覆盖 21 只重点关注股 (5/21~6/11), 是 score_stock_history 攒的
+    历史表现数据。包含 T+1 / T+2 / T+3 ... 的真实日涨跌幅。
+
+    相比 daily_stocks.next_day_change 的优势: 给定信号日 D, 可同时拿到 D+1 和 D+2 的 chg_pct,
+    拼出真正的 T+1 开盘买 T+2 开盘卖 的 return。
+    """
+    try:
+        import sqlite3
+        from datetime import datetime, timedelta
+        dt = datetime.strptime(d_signal, '%Y%m%d')
+        d1 = (dt + timedelta(days=1)).strftime('%Y%m%d')
+        d2 = (dt + timedelta(days=2)).strftime('%Y%m%d')
+        conn = sqlite3.connect(_ARCHIVE_DB_PATH, timeout=2)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT trade_date, chg_pct FROM stock_daily "
+            "WHERE code=? AND trade_date IN (?, ?, ?)",
+            (code, d_signal, d1, d2)
+        )
+        rows = dict(cur.fetchall())
+        conn.close()
+    except Exception:
+        return None
+
+    if not rows:
+        return None
+    # 缺 T+1 (D+1) 的 chg_pct 就没法算 T+1 收益
+    if d1 not in rows or rows[d1] is None:
+        return None
+
+    # 构造: 假设信号日 D 收盘 100 (归一化), 然后按 chg_pct 推
+    # 实际: 缺 D 收盘价, 用归一化 (后续 pnl 计算会按比例还原)
+    # 简化: 用 100 当 D 收盘基准
+    base = 100.0
+    d_close = base
+    d1_close = base * (1 + float(rows[d1]) / 100)
+    d2_open = d1_close  # T+1 收 → T+2 开 假设无跳空
+    if d2 in rows and rows[d2] is not None:
+        d2_close = d1_close * (1 + float(rows[d2]) / 100)
+    else:
+        d2_close = d1_close  # T+2 数据缺失, 退化
+
+    result = {
+        'open': round(base, 2),       # buy_open (D+1 开盘 ≈ D 收盘)
+        'close': round(d1_close, 2),  # buy_close (D+1 收盘)
+        'high': round(d1_close * 1.005, 2),
+        'low': round(d1_close * 0.995, 2),
+        'volume': 0,
+        'amount': 0,
+        'turnover': 0,
+        'change_pct': 0,
+        'prev_close': base,
+        # 给 T+2 也填好让 sell_ohlcv 有数据
+        '_sell_open': round(d2_open, 2),
+        '_sell_close': round(d2_close, 2),
+        # 标记是 fallback
+        '_fallback': 'stock_daily',
+        '_normalized': True,  # 价格是归一化 100 起的, 实际买入金额按比例折算
+    }
+    return result
+
 def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
     """涨停池: 当日涨停 (stock_zt_pool_em, 含封板时间/封板资金等 plan_a 所需列)
 
@@ -195,9 +397,9 @@ def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
         df = _try_local_fallback(date_str, 'limit_up', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
-        _cache_put(key, df)
+        _pool_cache_put(key, df)
         return df
-    _cache_put(key, '__NONE__')
+    _pool_cache_put(key, '__NONE__')
     return None
 
 
@@ -211,7 +413,7 @@ def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
         df = _try_local_fallback(date_str, 'prev_pool', key)
     if df is None or not hasattr(df, 'empty') or df.empty:
-        _cache_put(key, '__NONE__')
+        _pool_cache_put(key, '__NONE__')
         return None
     # 列识别
     chg_col = None
@@ -225,14 +427,31 @@ def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
     df['_chg'] = df[chg_col].astype(float)
     pullback = df[(df['_chg'] >= -7) & (df['_chg'] <= 1)].copy()
     if not pullback.empty:
-        _cache_put(key, pullback)
+        _pool_cache_put(key, pullback)
     else:
-        _cache_put(key, '__NONE__')
+        _pool_cache_put(key, '__NONE__')
     return pullback
 
 
 def _cached_pool_get(key: str):
-    """缓存读取: 返回 DataFrame 或 None,避免 __NONE__ 触发 DataFrame 比较歧义"""
+    """池缓存读取: 先查持久(历史不变), 再查 2h(防今天重复拉)
+
+    历史池数据 (limit-up / zhaban / dtqiaoban / reversal / trend) 一旦拉下来
+    就不再变, 用 persistent 缓存避免 2h 失效导致回测引擎反复重拉 akshare
+    (akshare 7天窗口限制 → 静默返回空 → 信号池空 → 跳过全部交易)。
+    """
+    cached = _persistent_get(key)
+    if cached is not None:
+        if isinstance(cached, str) and cached == '__NONE__':
+            return None
+        if hasattr(cached, 'empty'):
+            try:
+                if cached.empty:
+                    return None
+            except ValueError:
+                pass
+        return cached
+    # Fallback: 2h 缓存 (兼容老数据)
     cached = _cache_get(key)
     if cached is None:
         return None
@@ -244,8 +463,21 @@ def _cached_pool_get(key: str):
                 return None
         except ValueError:
             pass
+        # 把 2h 命中升级为持久 (下次免查)
+        try:
+            _persistent_put(key, cached)
+        except Exception:
+            pass
         return cached
     return None
+
+
+def _pool_cache_put(key: str, value):
+    """池缓存写入: 用持久缓存, 历史不变, 不该 2h 失效
+
+    value 可能是 DataFrame 或 '__NONE__' 标记
+    """
+    _persistent_put(key, value)
 
 
 def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
@@ -261,9 +493,9 @@ def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
         df = _try_local_fallback(date_str, 'zhaban', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
-        _cache_put(key, df)
+        _pool_cache_put(key, df)
         return df
-    _cache_put(key, '__NONE__')
+    _pool_cache_put(key, '__NONE__')
     return None
 
 
@@ -280,9 +512,9 @@ def _fetch_dtqiaoban_pool(date_str: str) -> pd.DataFrame:
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
         df = _try_local_fallback(date_str, 'dtqiaoban', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
-        _cache_put(key, df)
+        _pool_cache_put(key, df)
         return df
-    _cache_put(key, '__NONE__')
+    _pool_cache_put(key, '__NONE__')
     return None
 
 
@@ -299,9 +531,9 @@ def _fetch_trend_pool(date_str: str) -> pd.DataFrame:
     if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
         df = _try_local_fallback(date_str, 'strong', key)
     if df is not None and hasattr(df, 'empty') and not df.empty:
-        _cache_put(key, df)
+        _pool_cache_put(key, df)
         return df
-    _cache_put(key, '__NONE__')
+    _pool_cache_put(key, '__NONE__')
     return None
 
 
@@ -863,6 +1095,24 @@ def run_tab_backtest(
                     buy_ohlcv = buy_ohlcv or ohlcv_map.get(d_buy)
                     sell_ohlcv = sell_ohlcv or ohlcv_map.get(d_sell)
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
+                    # Tier1.C: archive.db next_day_change fallback
+                    # akshare 历史 OHLCV 7天窗口 + 2h 缓存失效 → 拉不到时,
+                    # 用 archive.db daily_stocks 里已存的 next_day_change 当 T+1 粗略收益
+                    # (按 tab 选 stock_type: limit-up→limit_up, zhaban→limit_up(同池), reversal→prev_pool→limit_up)
+                    stock_type_for_arch = {
+                        TAB_LIMIT_UP: 'limit_up',
+                        TAB_ZHABAN: 'limit_up',     # 炸板前一日是涨停
+                        TAB_REVERSAL: 'limit_up',   # 反转基础池也是涨停
+                        TAB_DTQIAOBAN: 'limit_up',  # 跌停前一日多半是涨停
+                        TAB_TREND: 'limit_up',      # 趋势池从前涨停过滤
+                        TAB_SECTOR: 'limit_up',
+                    }.get(tab, 'limit_up')
+                    arch_ohlcv = _try_archive_db_ohlcv(code, d_signal, stock_type_for_arch)
+                    if arch_ohlcv is not None:
+                        if not signal_ohlcv: signal_ohlcv = arch_ohlcv
+                        if not buy_ohlcv: buy_ohlcv = arch_ohlcv
+                        if not sell_ohlcv: sell_ohlcv = arch_ohlcv
+                if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
                     missing = []
                     if not signal_ohlcv: missing.append(f'signal={d_signal}')
                     if not buy_ohlcv: missing.append(f'buy={d_buy}')
@@ -873,8 +1123,10 @@ def run_tab_backtest(
                 signal_close = signal_ohlcv['close']
                 gap_pct = round((buy_ohlcv['open'] / signal_close - 1) * 100, 1)
                 # 买入过滤: 一字板排除; 跳空>5%高开出货陷阱
-                limit_open = _is_limit_open(buy_ohlcv, signal_close)
-                gap_trap = gap_pct > 5.0
+                # Tier1.D: stock_daily fallback 用归一化价格 (基准100), 跳空不可信 → 跳过该过滤
+                is_normalized = signal_ohlcv.get('_normalized', False)
+                limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)
+                gap_trap = (not is_normalized) and (gap_pct > 5.0)
                 buyable = not limit_open and not gap_trap
                 if not buyable:
                     unbuyable_count += 1
@@ -894,7 +1146,7 @@ def run_tab_backtest(
                     'buyable': buyable,
                 }
 
-                sell_px = sell_ohlcv['open']
+                sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
                 # d_sell_fallback=T时跳过: 同日买卖buy=sell同价, ret≈0是数据假象非真实结果

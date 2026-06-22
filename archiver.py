@@ -373,6 +373,28 @@ def archive_day_t(trade_date: str = None):
             _log(conn, trade_date, 'day_t_trend', 0, 'error', e)
             print(f"    趋势候选错误: {e}")
 
+        # ── Tier2.D: 补齐 zhaban/dtqiaoban/strong 三池归档 ──
+        # 之前只归档 limit_up+prev_pool, 其他 3 池 (炸板/跌停/强势) 拉不到 → 回测缺数据
+        print("  [2.5/4] 归档炸板/跌停/强势池...")
+        for stage, pool_type, api_name in [
+            ('day_t_zhaban', 'zhaban', 'stock_zt_pool_zbgc_em'),
+            ('day_t_dtqiaoban', 'dtqiaoban', 'stock_zt_pool_dtgc_em'),
+            ('day_t_strong', 'strong', 'stock_zt_pool_strong_em'),
+        ]:
+            try:
+                api = getattr(ak, api_name)
+                df = api(date=trade_date)
+                if df is not None and not df.empty:
+                    _save_pool_pickle(trade_date, pool_type, df)  # 归档原始 DF
+                    _log(conn, trade_date, stage, len(df), 'success')
+                    print(f"    {pool_type} 池: {len(df)} 只")
+                else:
+                    _log(conn, trade_date, stage, 0, 'empty')
+                    print(f"    {pool_type} 池: 空")
+            except Exception as e:
+                _log(conn, trade_date, stage, 0, 'error', e)
+                print(f"    {pool_type} 池错误: {e}")
+
         # ── 3. 市场快照 ──
         print("  [3/4] 拉取市场快照...")
         try:

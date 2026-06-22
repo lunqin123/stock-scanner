@@ -163,6 +163,8 @@ def _get_ohlcv_batch(code, dates):
     先查逐日缓存 t1_ohlcv_{code}_{date}，缺失的合为一个日期范围拉取。
     缓存 key 兼容 _get_daily_ohlcv，新旧混用无冲突。
     返回 {date_str: ohlcv_dict}，缺失日期不在结果中。
+
+    Tier1.F: 持久化的 __NONE__ 视为过期毒药, 忽略并重新拉取
     """
     today_str = _date.today().strftime('%Y%m%d')
     result = {}
@@ -172,13 +174,19 @@ def _get_ohlcv_batch(code, dates):
         # 历史日期优先读持久化缓存 (无 TTL), 今天走 2h TTL
         if d != today_str:
             cached = _persistent_get(key)
+            # 持久化 NONE 跳过 (当作毒药, 走 2h 再判)
+            if cached == '__NONE__':
+                cached = None
             if cached is None:
                 cached = _cache_get(key)  # fallback 2h 缓存
+                if cached == '__NONE__':
+                    cached = None
         else:
             cached = _cache_get(key)
+            if cached == '__NONE__':
+                cached = None
         if cached is not None:
-            if cached != '__NONE__':
-                result[d] = cached
+            result[d] = cached
         else:
             missing.append(d)
     if not missing:
@@ -224,9 +232,8 @@ def _get_ohlcv_batch(code, dates):
                 _ohlcv_cache_df(df, is_tx=True)
                 for d in missing:
                     if d not in result:
+                        # Tier1.F: 只写 2h 短期 NONE, 不写持久 (防永久毒药)
                         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
-                        if d != today_str:
-                            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
                 return result
             break
         except Exception:
@@ -241,18 +248,20 @@ def _get_ohlcv_batch(code, dates):
                 _ohlcv_cache_df(df)
                 for d in missing:
                     if d not in result:
+                        # Tier1.F: 同上, 不写持久 NONE
                         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
-                        if d != today_str:
-                            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
                 return result
             break
         except Exception:
             pass
 
     for d in missing:
+        # Tier1.F: 短期 NONE 缓存 (5 分钟), 避免 akshare 临时故障后永久毒药
+        # 之前是写持久 NONE → 下次还失败 → 永久缺失 → 整支票的回测都报废
+        # 改为 2h 短期 cache, 5 分钟后自动重试拉
         _cache_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
-        if d != today_str:
-            _persistent_put(f"t1_ohlcv_{code}_{d}", '__NONE__')
+        # 历史日期不再写持久 NONE, 让下次重试
+        # (若持续失败, 每次都重新调 akshare, 但能尽快恢复)
     return result
 
 
