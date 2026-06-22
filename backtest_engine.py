@@ -780,12 +780,12 @@ def _smart_sell_decision(
         }
     """
     peak_pnl = 0.0  # 持仓期峰值浮盈
-    # 强制止损阈值
-    STOP_LOSS_PCT = -3.0
+    # 强制止损阈值 (放宽到 -5% 让强势股能挺过短期回踩)
+    STOP_LOSS_PCT = -5.0
     # 一字板阈值
     LIMIT_PCT = 9.5
-    # 止盈阈值
-    TAKE_PROFIT_PCT = 5.0
+    # 止盈阈值 (peak ≥ 7% 锁利, 比之前 5% 更严)
+    TAKE_PROFIT_PCT = 7.0
     # 量能枯竭阈值
     LOW_VOLUME_TURNOVER = 3.0
     # 板块退潮阈值
