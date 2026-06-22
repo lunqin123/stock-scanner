@@ -1258,7 +1258,16 @@ function renderBacktestTabFull(data) {
                 }
                 html += '<div style="flex:1;min-width:0;text-align:center;padding:0 6px">';
                 html += '<div style="font-size:12px;font-weight:500"><span style="color:var(--text-muted)">' + buyPx + '</span> → <span>' + sellPx + '</span>' + gapHtml + '</div>';
-                html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + dateShort + ' · 持仓 ' + holdDays + ' 天</div>';
+                // P2.0: 显示 SmartExit 决策标签
+                var exitTag = '';
+                if (t.exit_type && t.smart_mode) {
+                    var exitColors = { '止损': '#ef4444', '止盈': '#22c55e', '一字板陷阱': '#f59e0b',
+                                       '板块退潮': '#8b5cf6', '量能枯竭': '#06b6d4', '时间到期': 'var(--text-muted)' };
+                    var exitColor = exitColors[t.exit_type] || 'var(--text-muted)';
+                    var peakTxt = (t.peak_pnl != null && t.peak_pnl !== 0) ? ' 峰' + (t.peak_pnl>0?'+':'') + t.peak_pnl.toFixed(1) + '%' : '';
+                    exitTag = ' <span style="font-size:9px;font-weight:600;padding:1px 4px;border-radius:3px;background:' + exitColor + '22;color:' + exitColor + ';border:1px solid ' + exitColor + '44">' + t.exit_type + peakTxt + '</span>';
+                }
+                html += '<div style="font-size:10px;color:var(--text-muted);margin-top:1px">' + dateShort + ' · 持仓 ' + holdDays + ' 天' + exitTag + '</div>';
                 html += '</div>';
                 // ── 右列: 战绩 (固定宽度) ──
                 html += '<div style="flex:0 0 auto;text-align:right;min-width:90px">';
