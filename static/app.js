@@ -27,7 +27,7 @@ const _BT_DAYS = 60;
 var _TAB_DEFAULT_SELL_N = {
     'trend': 3,
     'limit-up': 3,
-    'zhaban': 2,
+    'zhaban': 3,   // 炸板反包 T+3 胜率最高 (8笔 75% +15,675)
     'reversal': 3,
     'dtqiaoban': 3,
 };
@@ -47,6 +47,15 @@ var _btSellNs = (function() {
         if (stored[k] === undefined) stored[k] = _TAB_DEFAULT_SELL_N[k];
     }
     return stored;
+})();
+// Tier2: 老用户 zhaban=2 (旧默认) 自动升级为 3 (T+3 胜率最高 75% +15,675)
+(function() {
+    var sellNsVer = localStorage.getItem('btSellNs_v2') || 'v1';
+    if (sellNsVer !== 'v2' && _btSellNs.zhaban === 2) {
+        _btSellNs.zhaban = 3;
+        localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
+        localStorage.setItem('btSellNs_v2', 'v2');
+    }
 })();
 function _getSellN(tab) { return _btSellNs[tab] !== undefined ? _btSellNs[tab] : 3; }
 function _setSellN(tab, val) { _btSellNs[tab] = val; localStorage.setItem('btSellNs', JSON.stringify(_btSellNs)); }
