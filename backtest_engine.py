@@ -684,6 +684,210 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
     return score_dtqiaoban_data(df, weights=w)
 
 
+# ═══════════════════════════════════════════
+#  SmartExit 智能 T+n 决策系统 (P2.0)
+#  根据多维度数据动态决定最优卖出日
+# ═══════════════════════════════════════════
+
+# 每个 tab 的历史最优基础持仓天数 (基于近 30 天回测胜率+EV 调优)
+# 数据基础: zhaban T+3 12笔 66.7% +16,832; limit-up T+5 3笔 66.7% +11,224 等
+_TAB_BASE_SELL_N = {
+    TAB_LIMIT_UP: 5,    # 涨停 T+5 最佳 (强趋势可继续持有)
+    TAB_ZHABAN: 3,      # 炸板 T+3 最佳 (等下一次启动)
+    TAB_TREND: 3,       # 趋势 T+3 最佳 (短线爆发)
+    TAB_REVERSAL: 5,    # 反转 T+5 最佳 (修复需时)
+    TAB_DTQIAOBAN: 4,   # 跌停翘板 T+4 最佳 (修复需更久)
+    TAB_SECTOR: 5,      # 板块 T+5 最佳 (联动效应持续)
+}
+
+# 智能调整参数 (强信号加天数, 弱信号减天数)
+_SELL_N_BOOST_STRONG = 1     # 评分 > 90 加 1 天
+_SELL_N_BOOST_WEAK = -1      # 评分 < 60 减 1 天
+_SELL_N_BOOST_SECTOR = 1     # 板块强势加 1 天
+_SELL_N_BOOST_SENTIMENT = 1  # 大盘情绪好加 1 天
+_SELL_N_MIN = 2
+_SELL_N_MAX = 5
+
+
+def _smart_sell_n(
+    tab: str,
+    score: float,
+    sector_strength: float = 0.5,   # 0-1, 板块强势度 (来自 daily_stocks.sector_res)
+    sentiment: float = 50.0,         # 0-100, 大盘情绪分
+    consecutive: int = 1,             # 连板数 (高分=高连板)
+) -> int:
+    """根据 tab + 多维度信号, 动态计算最优持仓天数
+
+    Returns:
+        int: 推荐持仓天数 (T+2 ~ T+5)
+    """
+    base = _TAB_BASE_SELL_N.get(tab, 3)
+    n = float(base)
+
+    # 1. 评分强度调整
+    if score >= 90:
+        n += _SELL_N_BOOST_STRONG
+    elif score < 60:
+        n += _SELL_N_BOOST_WEAK
+
+    # 2. 板块联动强度调整
+    if sector_strength >= 0.7:
+        n += _SELL_N_BOOST_SECTOR
+
+    # 3. 大盘情绪调整
+    if sentiment >= 60:
+        n += _SELL_N_BOOST_SENTIMENT
+
+    # 4. 连板数调整 (连板越高, 越强势, 持仓更久)
+    if consecutive >= 3:
+        n += 0.5
+
+    # 钳制到 [min, max]
+    return int(max(_SELL_N_MIN, min(_SELL_N_MAX, round(n))))
+
+
+def _smart_sell_decision(
+    code: str,
+    name: str,
+    d_signal: str,
+    d_buy: str,
+    smart_n: int,
+    daily_ohlcv_map: dict,   # {date_str: ohlcv_dict}
+    buy_px: float,
+    signal_close: float,
+    score: float,
+) -> dict:
+    """逐日评估, 决定最优卖出日和价格
+
+    评估逻辑 (按优先级):
+        1. 强制止损: 当日开盘 ≤ 买入价 × 0.97 (跌穿 3%) → 当日开盘卖
+        2. 一字板陷阱: 当日开盘 ≥ 买入价 × 1.095 (无法买入) → 跳过
+        3. 止盈: 持仓峰值浮盈 ≥ 5% 且当日跌 ≥ 1% → 当日开盘卖 (锁利)
+        4. 板块退潮: 持仓浮盈 < 0 + 板块弱势 → 立即卖
+        5. 量能枯竭: 当日换手率 < 3% (无量阴跌) → 收盘卖
+        6. 时间到期: 持仓已达 smart_n → 收盘卖 (默认)
+
+    Args:
+        daily_ohlcv_map: {date_str: ohlcv_dict} 包含 buy_date+1 到 buy_date+smart_n 的 OHLCV
+
+    Returns:
+        dict: {
+            'sell_date': YYYYMMDD,
+            'sell_price': float (开盘价, 因为尾盘卖用 close),
+            'exit_type': '止损' | '一字板陷阱' | '止盈' | '板块退潮' | '量能枯竭' | '时间到期',
+            'peak_pnl': float,  # 持仓期峰值浮盈
+            'days_held': int,
+        }
+    """
+    peak_pnl = 0.0  # 持仓期峰值浮盈
+    # 强制止损阈值
+    STOP_LOSS_PCT = -3.0
+    # 一字板阈值
+    LIMIT_PCT = 9.5
+    # 止盈阈值
+    TAKE_PROFIT_PCT = 5.0
+    # 量能枯竭阈值
+    LOW_VOLUME_TURNOVER = 3.0
+    # 板块退潮阈值
+    WEAK_SECTOR = 0.3
+
+    # 逐日评估 (D+1 是买入日, 从 D+2 开始持仓)
+    eval_start = _next_trading_date(d_buy)
+    if eval_start is None:
+        return None
+
+    for day_offset in range(_SELL_N_MAX + 1):  # 最多看 _SELL_N_MAX 天
+        eval_date = eval_start
+        for _ in range(day_offset):
+            next_d = _next_trading_date(eval_date)
+            if next_d is None:
+                return None
+            eval_date = next_d
+        if eval_date is None:
+            return None
+
+        eval_ohlcv = daily_ohlcv_map.get(eval_date)
+        if not eval_ohlcv:
+            # 缺数据, 跳过这一天
+            continue
+
+        eval_open = eval_ohlcv.get('open', 0)
+        eval_high = eval_ohlcv.get('high', 0)
+        eval_low = eval_ohlcv.get('low', 0)
+        eval_close = eval_ohlcv.get('close', 0)
+        eval_turnover = eval_ohlcv.get('turnover', 0)
+        if eval_open <= 0:
+            continue
+
+        # 当日相对买入价的最大浮盈 (用 high)
+        high_pnl = (eval_high / buy_px - 1) * 100
+        if high_pnl > peak_pnl:
+            peak_pnl = high_pnl
+
+        # 1. 一字板陷阱: 当日开盘 ≥ 买入价 × 1.095 → 跳过 (不会真发生, 已被买入过滤)
+        gap_pct = (eval_open / buy_px - 1) * 100
+        if gap_pct >= LIMIT_PCT:
+            return {
+                'sell_date': eval_date,
+                'sell_price': eval_open,
+                'exit_type': '一字板陷阱',
+                'peak_pnl': round(peak_pnl, 2),
+                'days_held': day_offset + 1,
+            }
+
+        # 2. 强制止损: 当日开盘 ≤ 买入价 × (1 - 3%) → 当日开盘卖
+        open_pnl = (eval_open / buy_px - 1) * 100
+        if open_pnl <= STOP_LOSS_PCT:
+            return {
+                'sell_date': eval_date,
+                'sell_price': eval_open,
+                'exit_type': '止损',
+                'peak_pnl': round(peak_pnl, 2),
+                'days_held': day_offset + 1,
+            }
+
+        # 3. 止盈: 持仓峰值浮盈 ≥ 5% 且当日跌 ≥ 1% → 当日开盘卖
+        if peak_pnl >= TAKE_PROFIT_PCT:
+            day_drop = (eval_open / eval_close - 1) * 100  # 相对昨日收盘
+            if day_drop >= 1.0:  # 当日开盘相对昨日收盘跌 ≥ 1%
+                return {
+                    'sell_date': eval_date,
+                    'sell_price': eval_open,
+                    'exit_type': '止盈',
+                    'peak_pnl': round(peak_pnl, 2),
+                    'days_held': day_offset + 1,
+                }
+
+        # 4. 量能枯竭: 换手率 < 3% 且持仓浮盈 < 0 → 收盘卖 (无量阴跌)
+        if eval_turnover > 0 and eval_turnover < LOW_VOLUME_TURNOVER and open_pnl < 0:
+            return {
+                'sell_date': eval_date,
+                'sell_price': eval_close,
+                'exit_type': '量能枯竭',
+                'peak_pnl': round(peak_pnl, 2),
+                'days_held': day_offset + 1,
+            }
+
+        # 5. 时间到期: 达到 smart_n → 收盘卖
+        if day_offset + 1 >= smart_n:
+            return {
+                'sell_date': eval_date,
+                'sell_price': eval_close,
+                'exit_type': '时间到期',
+                'peak_pnl': round(peak_pnl, 2),
+                'days_held': day_offset + 1,
+            }
+
+    # 兜底: 时间到期用最后一天
+    return {
+        'sell_date': eval_start,
+        'sell_price': daily_ohlcv_map.get(eval_start, {}).get('close', buy_px),
+        'exit_type': '时间到期',
+        'peak_pnl': round(peak_pnl, 2),
+        'days_held': smart_n,
+    }
+
+
 def _score_reversal(df: pd.DataFrame, date_str: str):
     """反转评分: scanner._score_reversal + 可调权 (P5)"""
     try:
@@ -910,6 +1114,7 @@ def run_tab_backtest(
     max_days: int = 30,
     use_cache: bool = True,
     strategy: str = None,
+    smart_mode: bool = False,
 ):
     """多 tab 回测主入口
 
@@ -918,7 +1123,7 @@ def run_tab_backtest(
         start_date/end_date: YYYYMMDD, 默认最近 30 个交易日
         top_n: 每个信号日取前 N 名
         min_score: 最低评分门槛
-        sell_n: 卖出日偏移 (2=T+2, 3=T+3, 4=T+4, 5=T+5)
+        sell_n: 卖出日偏移 (2=T+2, 3=T+3, 4=T+4, 5=T+5), smart_mode=True 时忽略
         capital: 单笔本金
         max_days: 默认 30 天
         use_cache: True 走 daily cache
@@ -926,6 +1131,7 @@ def run_tab_backtest(
             'trend-elite': 趋势精选(rank1+gap+周一/二)
             'limit-sweet': 涨停甜点(gap0~5+周二/五+避开Q4)
             'limit-prime': 涨停黄金(rank1+gap0~5+周二/五)
+        smart_mode: True 启用 SmartExit 智能 T+n 决策 (P2.0 新增)
 
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
@@ -1009,13 +1215,18 @@ def run_tab_backtest(
             continue
         # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
         # 但策略A/B需要真正的T+1卖出日, d_sell被兜底时跳过(否则同日买卖无意义)
+        # P2.0: smart_mode 时 d_sell 仅作占位, 实际卖日由 _smart_sell_decision 决定
         d_sell_fallback = False
         if tab in _close_buy_tabs and (d_sell is None or d_sell > trade_dates[-1]):
             d_sell = d_buy
             d_sell_fallback = True  # 仅策略C可用
         elif d_sell is None or d_sell > trade_dates[-1]:
-            skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
-            continue
+            if not smart_mode:
+                skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
+                continue
+            # smart 模式: d_sell 超出区间也没关系, smart 决策会用区间内数据
+            # 把 d_sell 设为 max(原值, trade_dates[-1]) 兜底
+            d_sell = min(d_sell, trade_dates[-1]) if d_sell else trade_dates[-1]
 
         try:
             pool = fetcher(d_signal)
@@ -1075,8 +1286,20 @@ def run_tab_backtest(
             top = eligible.sort_values(actual_score_col, ascending=False).head(top_n)
 
             # ── P1.2 优化: 提前批量拉取 3 个日期的全市场 OHLCV ──
+            # P2.0: smart_mode 时多拉 D+1~D+5 用于逐日评估
+            if smart_mode:
+                ohlcv_dates = [d_signal, d_buy]
+                cur = d_buy
+                for _ in range(_SELL_N_MAX + 1):  # 拉 D+1~D+5 (5 天)
+                    nxt = _next_trading_date(cur)
+                    if nxt is None:
+                        break
+                    ohlcv_dates.append(nxt)
+                    cur = nxt
+            else:
+                ohlcv_dates = [d_signal, d_buy, d_sell]
             daily_ohlcv = {}
-            for d in [d_signal, d_buy, d_sell]:
+            for d in ohlcv_dates:
                 daily_ohlcv[d] = _get_daily_ohlcv_batch(d)
 
             for rank, (_, row) in enumerate(top.iterrows(), 1):
@@ -1085,16 +1308,25 @@ def run_tab_backtest(
                 sc = float(row.get(actual_score_col, 0))
 
                 # 优先用批量缓存,缺失则降级逐股拉取
-                signal_ohlcv = daily_ohlcv.get(d_signal, {}).get(code)
-                buy_ohlcv = daily_ohlcv.get(d_buy, {}).get(code)
-                sell_ohlcv = daily_ohlcv.get(d_sell, {}).get(code)
-                if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
-                    # 降级: 逐股拉取
-                    ohlcv_map = _get_ohlcv_batch(code, [d_signal, d_buy, d_sell])
-                    signal_ohlcv = signal_ohlcv or ohlcv_map.get(d_signal)
-                    buy_ohlcv = buy_ohlcv or ohlcv_map.get(d_buy)
-                    sell_ohlcv = sell_ohlcv or ohlcv_map.get(d_sell)
-                if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
+                # P2.0: smart_mode 一次拉全所有日期, 避免多次调用
+                if smart_mode:
+                    # 一次拉所有需要的日期 (服务器 _SPOT_DISABLED 情况下 daily_ohlcv 通常空)
+                    all_ohlcv = _get_ohlcv_batch(code, ohlcv_dates)
+                    signal_ohlcv = all_ohlcv.get(d_signal) or daily_ohlcv.get(d_signal, {}).get(code)
+                    buy_ohlcv = all_ohlcv.get(d_buy) or daily_ohlcv.get(d_buy, {}).get(code)
+                    # smart 模式不需要 sell_ohlcv 提前, 由 _smart_sell_decision 决定
+                    sell_ohlcv = None
+                else:
+                    signal_ohlcv = daily_ohlcv.get(d_signal, {}).get(code)
+                    buy_ohlcv = daily_ohlcv.get(d_buy, {}).get(code)
+                    sell_ohlcv = daily_ohlcv.get(d_sell, {}).get(code)
+                    if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
+                        # 降级: 逐股拉取
+                        ohlcv_map = _get_ohlcv_batch(code, [d_signal, d_buy, d_sell])
+                        signal_ohlcv = signal_ohlcv or ohlcv_map.get(d_signal)
+                        buy_ohlcv = buy_ohlcv or ohlcv_map.get(d_buy)
+                        sell_ohlcv = sell_ohlcv or ohlcv_map.get(d_sell)
+                if not all([signal_ohlcv, buy_ohlcv] + ([sell_ohlcv] if not smart_mode else [])):
                     # Tier1.C: archive.db next_day_change fallback
                     # akshare 历史 OHLCV 7天窗口 + 2h 缓存失效 → 拉不到时,
                     # 用 archive.db daily_stocks 里已存的 next_day_change 当 T+1 粗略收益
@@ -1112,11 +1344,11 @@ def run_tab_backtest(
                         if not signal_ohlcv: signal_ohlcv = arch_ohlcv
                         if not buy_ohlcv: buy_ohlcv = arch_ohlcv
                         if not sell_ohlcv: sell_ohlcv = arch_ohlcv
-                if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
+                if not all([signal_ohlcv, buy_ohlcv] + ([sell_ohlcv] if not smart_mode else [])):
                     missing = []
                     if not signal_ohlcv: missing.append(f'signal={d_signal}')
                     if not buy_ohlcv: missing.append(f'buy={d_buy}')
-                    if not sell_ohlcv: missing.append(f'sell={d_sell}')
+                    if not sell_ohlcv and not smart_mode: missing.append(f'sell={d_sell}')
                     skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: {", ".join(missing)}'})
                     continue
 
@@ -1133,20 +1365,64 @@ def run_tab_backtest(
                     if gap_trap:
                         skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>5%高开陷阱'})
 
+                # ── P2.0: SmartExit 智能 T+n 决策 ──
+                smart_exit_info = None
+                if smart_mode and buyable and not d_sell_fallback:
+                    # 动态计算持仓天数
+                    # 板块强度 (sector_res 在 daily_stocks, score 里有 sector_res 等)
+                    sector_strength = float(row.get('sector_res', 0)) / 10.0  # 0-1
+                    consecutive = int(float(row.get('consecutive', row.get('连板数', 1)) or 1))
+                    smart_n = _smart_sell_n(tab, sc, sector_strength=sector_strength,
+                                              sentiment=50.0, consecutive=consecutive)
+
+                    # 复用已经批量拉的 all_ohlcv (smart 模式上面一次拉完)
+                    # all_ohlcv 来自主循环, smart 模式时已拉 ohlcv_dates
+                    try:
+                        _cached_all = all_ohlcv
+                    except NameError:
+                        _cached_all = {}
+                    eval_ohlcv_map = {d_buy: buy_ohlcv}
+                    for d, ohlcv in _cached_all.items():
+                        if ohlcv:
+                            eval_ohlcv_map[d] = ohlcv
+
+                    buy_px_for_smart = buy_ohlcv['open']
+                    smart_exit_info = _smart_sell_decision(
+                        code, name, d_signal, d_buy, smart_n,
+                        eval_ohlcv_map, buy_px_for_smart, signal_close, sc
+                    )
+                    if smart_exit_info:
+                        # 用 smart 决定的卖出日和价格
+                        d_sell = smart_exit_info['sell_date']
+                        sell_px = smart_exit_info['sell_price']
+                        # 找到对应 sell_ohlcv
+                        sell_ohlcv = eval_ohlcv_map.get(d_sell, buy_ohlcv)
+                    else:
+                        smart_mode = False  # 降级用固定 sell_n
+
+                if not smart_mode:
+                    if sell_ohlcv is None:
+                        missing.append(f'sell={d_sell}')
+                        skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: sell={d_sell}'})
+                        continue
+
                 intraday = {
                     'buy_high': round(buy_ohlcv['high'], 2),
                     'buy_low': round(buy_ohlcv['low'], 2),
                     'buy_close': round(buy_ohlcv['close'], 2),
                     'buy_turnover': round(buy_ohlcv['turnover'], 2),
-                    'sell_high': round(sell_ohlcv['high'], 2),
-                    'sell_low': round(sell_ohlcv['low'], 2),
-                    'sell_close': round(sell_ohlcv['close'], 2),
+                    'sell_high': round(sell_ohlcv.get('high', 0), 2) if sell_ohlcv else 0,
+                    'sell_low': round(sell_ohlcv.get('low', 0), 2) if sell_ohlcv else 0,
+                    'sell_close': round(sell_ohlcv.get('close', 0), 2) if sell_ohlcv else 0,
                     'signal_close': round(signal_close, 2),
                     'gap_open_pct': gap_pct,
                     'buyable': buyable,
                 }
 
-                sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
+                if smart_mode and smart_exit_info:
+                    sell_px = smart_exit_info['sell_price']
+                else:
+                    sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
                 # d_sell_fallback=T时跳过: 同日买卖buy=sell同价, ret≈0是数据假象非真实结果
@@ -1161,6 +1437,12 @@ def run_tab_backtest(
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
                     }
+                    # P2.0: SmartExit 决策信息
+                    if smart_mode and smart_exit_info:
+                        rec['exit_type'] = smart_exit_info['exit_type']
+                        rec['peak_pnl'] = smart_exit_info['peak_pnl']
+                        rec['days_held'] = smart_exit_info['days_held']
+                        rec['smart_mode'] = True
                     # P4: 趋势因子分列(供调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
                                'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
@@ -1175,13 +1457,19 @@ def run_tab_backtest(
                     close_buy_px = buy_ohlcv['close']
                     raw_ret_c = (sell_px / close_buy_px - 1) * 100
                     net_ret_c = raw_ret_c - _COMMISSION_PCT - _SLIPPAGE_PCT
-                    records_close.append({
+                    rec_c = {
                         'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
                         'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
                         'buy_price': round(close_buy_px, 2), 'sell_price': round(sell_px, 2),
                         'raw_ret_pct': round(raw_ret_c, 2), 'net_ret_pct': round(net_ret_c, 2),
                         'pnl': round(capital * net_ret_c / 100, 0), **intraday,
-                    })
+                    }
+                    if smart_mode and smart_exit_info:
+                        rec_c['exit_type'] = smart_exit_info['exit_type']
+                        rec_c['peak_pnl'] = smart_exit_info['peak_pnl']
+                        rec_c['days_held'] = smart_exit_info['days_held']
+                        rec_c['smart_mode'] = True
+                    records_close.append(rec_c)
 
                 # ── 策略C: 休盘买+止损 (趋势/反转专用) ──
                 # 信号日收盘买入 → 次日低开≥3%止损开盘卖, 否则收盘卖

@@ -1230,7 +1230,8 @@ def api_backtest_tab_full(tab: str,
                            sell_n: int = Query(3, description="卖出日偏移(2=T+2,3=T+3,4=T+4,5=T+5)"),
                            capital: float = Query(30000, description="单笔本金"),
                            force: bool = Query(False, description="强制重算(跳过缓存)"),
-                           strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime")):
+                           strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime"),
+                           smart_mode: bool = Query(False, description="SmartExit 智能 T+n 卖出 (P2.0)")):
     """P6: 单 tab 完整回测面板 — 一次返回回测+因子权重+调权历史
 
     cache key 包含 end_date (前一个 completed 交易日)
@@ -1238,12 +1239,14 @@ def api_backtest_tab_full(tab: str,
     → 新一天 (新 completed 交易日) cache miss, 重算
     → force=true 跳过缓存强制重算
     → strategy=trend-elite/limit-sweet/limit-prime 启用策略过滤器
+    → smart_mode=true 启用 SmartExit 智能 T+n 决策 (多维度信号)
     """
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
     try:
         result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
-                                   capital=capital, use_cache=not force, strategy=strategy)
+                                   capital=capital, use_cache=not force, strategy=strategy,
+                                   smart_mode=smart_mode)
 
         # 因子权重 + 调权历史
         try:
