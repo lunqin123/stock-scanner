@@ -29,7 +29,7 @@ from cache import (
 # 兼容旧 alias (代码里有些地方用 _daily_get/_daily_set 命名空间访问)
 _daily_get = _persistent_get
 _daily_set = _persistent_put
-from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT, MAX_PRICE
+from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT, MAX_PRICE, MAX_MARKET_CAP
 
 # 复用 t1 的工具函数
 from t1_real_backtest import (
@@ -657,6 +657,9 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
     if df.empty:
         return None
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+    if cap_col and cap_col in df.columns:
+        df = df[df[cap_col].astype(float) <= MAX_MARKET_CAP * 1e8]
     df = df[df[price_col].astype(float) <= MAX_PRICE]
     if df.empty:
         return None
@@ -674,6 +677,13 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
         return None
     df = filter_non_main_board(df)
     df = filter_xr_xd_dr(df)
+    if df.empty:
+        return None
+    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+    if cap_col and cap_col in df.columns:
+        df = df[df[cap_col].astype(float) <= MAX_MARKET_CAP * 1e8]
+    df = df[df[price_col].astype(float) <= MAX_PRICE]
     if df.empty:
         return None
     try:
