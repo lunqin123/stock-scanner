@@ -81,17 +81,20 @@ def get_north_flow_signal(verbose: bool = False) -> dict:
     """
     market_status = get_market_status()
 
-    # 非交易时段返回空信号
-    if market_status not in ('trading', 'lunch'):
+    # 周末/节假日 → 返回空信号 (盘后/盘中/午休都可以查数据)
+    if market_status in ('weekend', 'holiday'):
         return {
             'cumulative_net': 0, 'hgt_net': 0, 'sgt_net': 0,
             'direction': '无数据',
             'direction_score': 0, 'trend_30min': '无数据',
             'signal': '中性',
-            't0_advice': '非交易时段',
-            'summary': f'当前{market_status}, 北向资金暂停交易',
+            't0_advice': '非交易日',
+            'summary': f'当前{market_status}, 北向资金无交易',
             'sentiment_bonus': 0.0,
         }
+
+    # 盘后: 允许查数据, 但标记为盘后快照 (不做日内趋势判断)
+    is_post_market = (market_status == 'closed')
 
     df = _fetch_north_flow_minute()
     if df is None or df.empty:
@@ -174,7 +177,9 @@ def get_north_flow_signal(verbose: bool = False) -> dict:
         signal = '中性'
 
     # ── 做T建议 ──
-    if signal == '偏多':
+    if is_post_market:
+        t0_advice = f'盘后快照: 今日北向{direction}({cumulative:+.1f}亿)，明日参考此方向'
+    elif signal == '偏多':
         if trend_30 and '流入' in str(trend_30):
             t0_advice = '北向持续流入+30分钟加速 → 适合做多T，回调低吸不追高'
         else:
@@ -188,30 +193,34 @@ def get_north_flow_signal(verbose: bool = False) -> dict:
         t0_advice = '北向震荡 → 个股为主，不做方向性博弈'
 
     # ── 情绪加成 (用于 Plan A scoring) ──
-    # 映射 direction_score (-5~+5) → sentiment_bonus (-2~+2)
+    # 盘后: 使用今日最终值 (仍然有效, 反映全天外资态度)
     sentiment_bonus = round(direction_score / 5.0 * 2.0, 1)
 
+    time_tag = '盘后(全日累计)' if is_post_market else f'30分钟{trend_30}'
     result = {
         'cumulative_net': round(cumulative, 1),
         'hgt_net': round(hgt_latest, 1),
         'sgt_net': round(sgt_latest, 1),
         'direction': direction,
         'direction_score': direction_score,
-        'trend_30min': trend_30,
+        'trend_30min': trend_30 if not is_post_market else '盘后(全日累计)',
         'signal': signal,
         't0_advice': t0_advice,
         'sentiment_bonus': sentiment_bonus,
-        'summary': f"北向{direction}({cumulative:+.1f}亿) | 30分钟{trend_30} | {signal} | {t0_advice}",
+        'summary': f"北向{direction}({cumulative:+.1f}亿) | {time_tag} | {signal}",
+        'is_post_market': is_post_market,
     }
 
     if verbose:
         print(f"\n{'='*50}", file=sys.stderr)
-        print(f"  北向资金实时追踪 | {datetime.now(_CST).strftime('%H:%M')}", file=sys.stderr)
+        time_label = '盘后快照' if is_post_market else '实时追踪'
+        print(f"  北向资金{time_label} | {datetime.now(_CST).strftime('%H:%M')}", file=sys.stderr)
         print(f"{'='*50}", file=sys.stderr)
         print(f"  累计净流入: {cumulative:+.1f}亿 (沪{hgt_latest:+.1f} / 深{sgt_latest:+.1f})", file=sys.stderr)
         print(f"  方向: {direction} | 信号: {signal} | 情绪加成: {sentiment_bonus:+.1f}", file=sys.stderr)
-        print(f"  30分钟趋势: {trend_30}", file=sys.stderr)
-        print(f"  做T建议: {t0_advice}", file=sys.stderr)
+        if not is_post_market:
+            print(f"  30分钟趋势: {trend_30}", file=sys.stderr)
+        print(f"  {'次日参考' if is_post_market else '做T建议'}: {t0_advice}", file=sys.stderr)
 
     return result
 

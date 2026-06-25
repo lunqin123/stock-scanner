@@ -170,15 +170,30 @@ def get_sector_score(df: pd.DataFrame, money_series: pd.Series = None,
     return scores
 
 
-def _get_sector_etf_resonance() -> dict:
+# 模块级缓存: ETF共振数据在一次扫描中只需获取一次
+_etf_resonance_cache = None
+_etf_resonance_cache_time = None
+
+
+def _get_sector_etf_resonance(force_refresh: bool = False) -> dict:
     """
     获取板块ETF资金共振信号 (v2.0新增)。
 
-    理论: 当龙头涨停 + 板块ETF成交额环比>2倍 + 板块资金净流入时，
+    理论: 当龙头涨停 + 板块ETF成交额环比放大 + 板块资金净流入时，
     AP会申购ETF → 买入一篮子成分股 → 整个板块跟涨。
 
+    缓存: 单次扫描中只获取一次 (force_refresh=True 强制刷新)
     返回: {行业名: etf_bonus(0-3)} 字典
     """
+    global _etf_resonance_cache, _etf_resonance_cache_time
+    from datetime import datetime as _dt
+    now = _dt.now(_CST)
+    if (not force_refresh and _etf_resonance_cache is not None
+            and _etf_resonance_cache_time is not None):
+        age = (now - _etf_resonance_cache_time).total_seconds()
+        if age < 300:  # 5分钟内复用
+            return _etf_resonance_cache
+
     resonance = {}
     try:
         import akshare as ak
@@ -186,6 +201,8 @@ def _get_sector_etf_resonance() -> dict:
         df = ak.stock_sector_fund_flow_rank(indicator="今日",
                                              sector_type="行业资金流向")
         if df is None or df.empty:
+            _etf_resonance_cache = resonance
+            _etf_resonance_cache_time = now
             return resonance
 
         name_col = None
@@ -198,6 +215,8 @@ def _get_sector_etf_resonance() -> dict:
                 net_col = c
 
         if name_col is None or net_col is None:
+            _etf_resonance_cache = resonance
+            _etf_resonance_cache_time = now
             return resonance
 
         for _, row in df.iterrows():
@@ -215,17 +234,25 @@ def _get_sector_etf_resonance() -> dict:
     except Exception:
         pass
 
+    _etf_resonance_cache = resonance
+    _etf_resonance_cache_time = now
     return resonance
 
 
 # DEPRECATED: 已合并到 get_sector_score，保留向后兼容
-def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> pd.Series:
+def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None,
+                            etf_resonance: dict = None) -> pd.Series:
     """
-    板块热度评分（满分12分）：
+    板块热度评分（满分15分，v2.0增强: +3 ETF资金共振）：
     - 基础分(0-8): 基于板块内涨停个股数量
     - 一致性加分(0-4): 基于板块内资金净流入正向个股占比（避免虚假繁荣）
+    - ETF共振加分(0-3): 板块资金净流入强度 (v2.0新增)
     money_series: 个股主力净流入 Series（元），用于计算一致性
     """
+    # ETF资金共振数据 (降级安全)
+    if etf_resonance is None:
+        etf_resonance = _get_sector_etf_resonance()
+
     industry_col = '所属行业' if '所属行业' in df.columns else '行业'
     if industry_col not in df.columns:
         return pd.Series(7.0, index=df.index)
@@ -265,7 +292,10 @@ def get_sector_heat_scores(df: pd.DataFrame, money_series: pd.Series = None) -> 
         else:
             consistency_bonus = 2  # 无资金数据时给保守加分
 
-        scores[idx] = min(12, base + consistency_bonus)
+        # ETF共振加分 (0-3): 主力资金理论——ETF申赎是板块联动核心驱动
+        etf_bonus = etf_resonance.get(industry, 0) if etf_resonance else 0
+
+        scores[idx] = min(15, base + consistency_bonus + etf_bonus)
     return scores
 
 
