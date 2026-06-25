@@ -1040,7 +1040,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
         if zb_times >= 2: auction_parts.append(f'炸板{zb_times}次分歧')
 
         items.append({
-            'code': code, 'name': name, 'score': int(total), 'price': price,
+            'code': code, 'name': name, 'score': round(total), 'price': price,
             'seal_time': seal_time, 'turnover': turnover, 'seal_fund': seal_fund,
             'zhaban_times': zb_times, 'industry': industry, 'net_money': round(net, 0),
             'signals': sigs, 'advice': advice, 'auction_check': '；'.join(auction_parts),
@@ -1126,7 +1126,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
-            total = int(row.get('翘板评分', 0))
+            total = round(row.get('翘板评分', 0))
             turn_val = float(row.iloc[9]) if len(row) > 9 and pd.notna(row.iloc[9]) else 0
             seal_val = float(row.iloc[10]) if len(row) > 10 and pd.notna(row.iloc[10]) else 0
             cont_val = int(float(row.iloc[13])) if len(row) > 13 and pd.notna(row.iloc[13]) else 0
@@ -2183,7 +2183,7 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
             elif total >= 50: advice = '竞价观察，高开放量可博弈反包'
             elif total >= 35: advice = '仅观望，需竞价放量确认'
             else: advice = '不参与'
-            items.append({'code': code, 'name': name, 'score': int(total), 'price': price,
+            items.append({'code': code, 'name': name, 'score': round(total), 'price': price,
                           'seal_time': seal_time, 'turnover': turnover, 'seal_fund': seal_fund,
                           'zhaban_times': zb_times, 'industry': industry, 'net_money': round(net, 0),
                           'signals': sigs, 'advice': advice,
@@ -2230,7 +2230,7 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
-            total = int(row.get('翘板评分', 0))
+            total = round(row.get('翘板评分', 0))
             turn_val = float(row.iloc[9]) if len(row) > 9 and pd.notna(row.iloc[9]) else 0
             seal_val = float(row.iloc[10]) if len(row) > 10 and pd.notna(row.iloc[10]) else 0
             cont_val = int(float(row.iloc[13])) if len(row) > 13 and pd.notna(row.iloc[13]) else 0
