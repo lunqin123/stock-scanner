@@ -984,9 +984,14 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
     if df.empty:
         return {"ok": True, "items": []}
 
-    # 评分 (炸板反包评分函数)
+    # 评分 (炸板反包评分函数, 与回测权重对齐)
     from scanner import score_zhaban_data
-    scored = score_zhaban_data(df, today)
+    try:
+        from weight_manager import _load_tab_weights
+        w = _load_tab_weights('zhaban')
+    except Exception:
+        w = None
+    scored = score_zhaban_data(df, today, weights=w)
 
     # 列识别 (与 /api/scan/zhaban/stream 共享逻辑)
     zc = _zhaban_columns(scored)
@@ -1112,7 +1117,12 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         elif len(df.columns) > 6:
             df = df[df.iloc[:, 6].astype(float) <= 200 * 1e8]
         if df.empty: return [], {}
-        scored = score_dtqiaoban_data(df)
+        try:
+            from weight_manager import _load_tab_weights
+            w = _load_tab_weights('dtqiaoban')
+        except Exception:
+            w = None
+        scored = score_dtqiaoban_data(df, weights=w)
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
@@ -2138,7 +2148,12 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
         if df.empty: return [], {}
         print(f"  [炸板] 共 {len(df)} 只, 评分中...", file=sys.stderr)
         from scanner import score_zhaban_data
-        scored = score_zhaban_data(df, today)
+        try:
+            from weight_manager import _load_tab_weights
+            w = _load_tab_weights('zhaban')
+        except Exception:
+            w = None
+        scored = score_zhaban_data(df, today, weights=w)
         items = []
         zc = _zhaban_columns(scored)
         for _, row in scored.iterrows():
@@ -2206,7 +2221,12 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
         elif len(df.columns) > 6:
             df = df[df.iloc[:, 6].astype(float) <= 200 * 1e8]
         if df.empty: return [], {}
-        scored = score_dtqiaoban_data(df)
+        try:
+            from weight_manager import _load_tab_weights
+            w = _load_tab_weights('dtqiaoban')
+        except Exception:
+            w = None
+        scored = score_dtqiaoban_data(df, weights=w)
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)

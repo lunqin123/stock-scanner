@@ -134,8 +134,13 @@ def scan_zhaban(today_str: str, table_mode: bool = False, top_n: int = None):
     print(f"  → 过滤后 {after}/{before} 只", file=sys.stderr)
     if df.empty: print("no_data"); return
 
-    # 统一评分
-    out_df = score_zhaban_data(df, today_str)
+    # 统一评分 (加载调权后的权重, 与回测/信号系统对齐)
+    try:
+        from weight_manager import _load_tab_weights
+        w = _load_tab_weights('zhaban')
+    except Exception:
+        w = None
+    out_df = score_zhaban_data(df, today_str, weights=w)
     if n < TOP_N: out_df = out_df.head(n)
 
     from datetime import date
