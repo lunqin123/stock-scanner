@@ -107,21 +107,34 @@ detect_market_sentiment(today_str):
 
 ## 5. 回测系统
 
-### 5.1 评分对齐
+### 5.1 数据存储 (两层，容易踩坑)
 
-`backtest_score_prev()` 使用与实盘完全相同的 `apply_weights` 7 因子模型。
+| 存储位置 | 格式 | 用途 | 查看方式 |
+|---------|------|------|---------|
+| `data/cache/tab_performance.json` | JSON | **Web Dashboard 回测面板的权威数据源** | `GET /api/backtest/dashboard` |
+| `data/cache/bt_result_*.pkl` | Pickle | 单次回测的完整交易明细（含每笔因子分） | 仅供调试，**Dashboard 不读这个** |
+| `data/cache/engine_*.pkl` | Pickle | 回测引擎中间缓存（池+评分） | 加速回测，不包含结果 |
+
+**关键规则**: 看回测排名 → 读 `tab_performance.json`，不要读 pickle 缓存。pickle 文件可能几天前的、不同参数的、不同代码版本的，不能反映当前状态。
+
+`tab_performance.json` 由 `weight_manager.save_tab_performance()` 写入，每次回测完成自动追加。`compute_tab_weights()` 取近5天滚动加权，前端面板直接调用。
+
+### 5.2 评分对齐
+
+`backtest_score_prev()` 使用与实盘完全相同的 `apply_weights` 8 因子模型（含 north_flow）。
 
 历史不可用的因子用默认值：
 - money: 10.0（中性）
 - sentiment: 5.0（中性）
+- north_flow: 5.0（中性）
 
-### 5.2 模拟交易
+### 5.3 模拟交易
 
-`_simulate_trades()` 模拟 TOP10 买入次日卖出：
+`_simulate_trades()` 模拟 TOP-N 买入次日卖出：
 - 扣除佣金（万2.5双向）+ 滑点（0.1%）
 - 输出：均收益、胜率、盈亏比、最大回撤
 
-### 5.3 自动调权
+### 5.4 自动调权
 
 每次扫描后后台线程运行 `auto_verify_backtest`：
 - 周一至周四：保存因子相关性到 `rolling_correlations.json`
