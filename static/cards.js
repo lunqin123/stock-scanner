@@ -53,6 +53,7 @@ function renderStockCards(stocks, data) {
             [s.sector_mom, 12, '板块热度'],
             [s.money_score, 20, '资金驱动'],
             [s.principal_score || 5, 10, '本金适配'],
+            [s.north_flow_score || 5, 10, '北向资金'],
         ];
 
         let barsHTML = '';

@@ -112,8 +112,6 @@ def main():
     parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
     parser.add_argument('--dtqiaoban', action='store_true', help='跌停翘板信号扫描')
     parser.add_argument('--reversal', action='store_true', help='涨停回调反转扫描(上交易日涨停今回调→明日反包)')
-    parser.add_argument('--premarket', action='store_true', help='盘前多空信号聚合')
-    parser.add_argument('--regime', action='store_true', help='市场状态分类')
     parser.add_argument('--date', type=str, default='', help='指定日期 YYYYMMDD（默认: 今天）')
     parser.add_argument('--top', type=int, default=0, help=f'输出数量（默认: {TOP_N}）')
     args = parser.parse_args()
@@ -145,16 +143,6 @@ def main():
 
     if args.dtqiaoban:
         scan_dtqiaoban(today_raw, table_mode, top_n=TOP_N)
-        return
-
-    if args.premarket:
-        from premarket import get_premarket_signal
-        get_premarket_signal(verbose=True)
-        return
-
-    if args.regime:
-        from market_regime import classify_regime
-        classify_regime(verbose=True)
         return
 
     # 无显式模式 → 自动检测盘中/盘后
@@ -291,17 +279,8 @@ def main():
     s_principal = score_by_principal(filtered, 20000)
     sector_merged_cli = (sector_res_scores + sector_raw) / 2.0
 
-    # v2.0: 北向资金因子
     s_north_flow = pd.Series(5.0, index=filtered.index)
-    try:
-        from north_flow_tracker import score_north_flow_factor
-        nf_scores, nf_meta = score_north_flow_factor(filtered)
-        s_north_flow = nf_scores
-        print(f"  [评分] 北向因子: {nf_meta.get('north_direction', 'N/A')}, 累计{nf_meta.get('north_cumulative_net', 0):+.1f}亿", file=sys.stderr)
-    except Exception as e:
-        print(f"  [评分] 北向因子获取异常: {e}", file=sys.stderr)
-
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_merged_cli, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, north_flow_scores=s_north_flow, weights=weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_merged_cli, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
@@ -367,17 +346,6 @@ def main():
     # ── 情绪自适应策略建议 ──
     zhaban_rate = (sentiment_detail or {}).get('zhaban_rate', 0.5)
 
-    # v2.0: 市场状态分类
-    try:
-        from market_regime import classify_regime
-        regime = classify_regime()
-        if regime:
-            print(f"\n  [市场状态] {regime['label']} (置信{regime['confidence']:.0%}) | 仓位建议: {regime['position_advice']*100:.0f}%", file=sys.stderr)
-            print(f"  [策略] {regime['summary']}", file=sys.stderr)
-    except Exception as e:
-        print(f"  [市场状态] 分类失败: {e}", file=sys.stderr)
-        regime = None
-
     if zhaban_rate < 0.30:
         emotion_zone = "活跃"
         strategy_advice = "主力策略：涨停超短线，可积极打首板/连板"
@@ -390,10 +358,6 @@ def main():
     else:
         emotion_zone = "低迷"
         strategy_advice = "建议炸板反包+趋势动量为主，涨停缩小仓位"
-
-    # v2.0: 市场状态覆盖策略建议
-    if regime and regime.get('regime') != 'unknown':
-        strategy_advice = f"[{regime['label']}] {regime['summary']}"
 
     # ── 全维度综合榜单 ──
     all_dimension_stocks = []

@@ -275,8 +275,15 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
 
     # ── 权重调整 ──
     new_weights = {}
+    # 非回测因子保持当前值 (如 north_flow, stock_sentiment, principal_score 等)
     for k in defaults:
-        new_weights[k] = 0.0
+        if k in current_weights:
+            new_weights[k] = current_weights[k]
+        else:
+            new_weights[k] = defaults[k]
+    # 回测因子初始化为 0，等待 IC 驱动调整
+    for f in factor_list:
+        new_weights[f] = 0.0
 
     if plan_name.upper() == 'B':
         # Plan B: ICIR 按比例重分配 (14因子, 保持正权)
@@ -301,15 +308,17 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
             if f in current_weights:
                 new_weights[f] = current_weights[f]
 
-    # 保存: Plan A 保留零值 (防止下次加载回退默认), Plan B 过滤零值
+    # 保存: 只保存回测可调权因子 (避免污染非回测因子如 money/stock_sentiment/principal_score/north_flow)
     save_data = {}
-    for k, v in new_weights.items():
+    for f in factor_list:
         if plan_name.upper() == 'B':
-            if v > 0:
-                save_data[k] = v
+            if new_weights.get(f, 0) > 0:
+                save_data[f] = new_weights[f]
         else:
-            if v != 0 or k in current_weights:
-                save_data[k] = v
+            # Plan A: 保存非零值或当前权重中存在的值
+            v = new_weights.get(f, 0)
+            if v != 0 or f in current_weights:
+                save_data[f] = v
     save_weights(save_data, plan_name=plan_name)
 
     # 摘要

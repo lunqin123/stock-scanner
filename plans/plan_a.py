@@ -136,11 +136,23 @@ def compute_factors(filtered, fund_df, principal):
         print(f"  [舆情] 不可用: {e}", file=sys.stderr)  # 舆情不可用时不改变 stock_sent
     pr = score_by_principal(filtered, principal)
 
+    # v2.0: 北向资金因子 (市场级，所有标的统一分)
+    north_flow = pd.Series(5.0, index=filtered.index)
+    try:
+        from north_flow_tracker import score_north_flow_factor
+        nf_scores, nf_meta = score_north_flow_factor(filtered)
+        north_flow = nf_scores
+        print(f"  [Plan A] 北向因子: {nf_meta.get('north_direction', 'N/A')}, "
+              f"累计{nf_meta.get('north_cumulative_net', 0):+.1f}亿", file=sys.stderr)
+    except Exception as e:
+        print(f"  [Plan A] 北向因子获取异常: {e}", file=sys.stderr)
+
     return {
         'seal': seal, 'money': money, 'raw_money': raw_money,
         'sector_mom': sector_mom, 'sector_res': sector_res,
         'tech': tech, 'buyability': buyability,
         'stock_sentiment': stock_sent, 'principal': pr,
+        'north_flow': north_flow,
     }
 
 
@@ -182,6 +194,7 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
         sentiment_series,
         stock_sentiment_scores=factors['stock_sentiment'],
         principal_scores=factors['principal'],
+        north_flow_scores=factors.get('north_flow'),
         weights=weights)
 
     from scanner import score_danger_signals
@@ -231,6 +244,7 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
             'buyability_score': round(float(factors['buyability'].get(idx, 5)), 1),
             'stock_sentiment_score': round(float(factors['stock_sentiment'].get(idx, 5)), 1),
             'principal_score': round(float(factors['principal'].get(idx, 5)), 1),
+            'north_flow_score': round(float(factors.get('north_flow', pd.Series(5.0, index=factors['seal'].index)).get(idx, 5)), 1),
             'danger_flags': danger_flags.get(idx, []),
             'auction_check': _gen_auction_check(row, idx, factors['sector_mom'], factors['money'], filtered, pool),
             'net_money': net,

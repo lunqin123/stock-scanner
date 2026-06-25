@@ -31,6 +31,20 @@ async function loadDashboard() {
         const weekdays = ['日','一','二','三','四','五','六'];
         const wd = weekdays[new Date().getDay()];
 
+        // v2.0 新增数据
+        const pm = d.premarket || {};
+        const nf = d.north_flow || {};
+        const rg = d.regime || {};
+
+        // 盘前方向颜色
+        const pmColor = pm.direction === '偏多' ? '#ef4444' : (pm.direction === '偏空' ? '#22c55e' : '#94a3b8');
+        // 北向方向
+        const nfNet = nf.cumulative_net || 0;
+        const nfColor = nf.signal === '偏多' ? '#ef4444' : (nf.signal === '偏空' ? '#22c55e' : '#94a3b8');
+        const nfSign = nfNet >= 0 ? '+' : '';
+        // 市场状态颜色
+        const rgColor = rg.position_advice > 1 ? '#ef4444' : (rg.position_advice >= 0.8 ? '#f59e0b' : (rg.position_advice >= 0.5 ? '#94a3b8' : '#22c55e'));
+
         bar.innerHTML = `
             <div class="dash-stat-card animate-fade-up stagger-1" onclick="location.hash=\'#scan-limit\'" title="点击查看涨停扫描">
                 <div class="dash-stat-icon">📅</div>
@@ -68,6 +82,28 @@ async function loadDashboard() {
                     <div class="dash-sectors-wrap">
                         ${sectors.map(s => `<a href="${esc(s.url||'#')}" target="_blank" class="sector-tag" title="点击查看同花顺板块详情">${s.name} <em>${s.count}</em></a>`).join('')}
                     </div>
+                </div>
+            </div>
+            <!-- v2.0 第二行: 盘前信号 + 北向资金 + 市场状态 -->
+            <div class="dash-stat-card animate-fade-up stagger-6" title="盘前多空信号 (A50+美股+汇率+流动性)">
+                <div class="dash-stat-icon">🌅</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="color:${pmColor};font-size:18px">${pm.direction||'—'} <span style="font-size:12px;opacity:0.7">${pm.score||'—'}分</span></div>
+                    <div class="dash-stat-sub" style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pm.summary||'')}">${pm.confidence||''}置信 · 盘前信号</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-7" title="北向资金实时追踪 (点击查看详情)" onclick="location.hash=\'#scan-sector\'">
+                <div class="dash-stat-icon">🌊</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="color:${nfColor};font-size:18px">${nf.direction||'—'} <span style="font-size:12px;opacity:0.7">${nfSign}${nfNet.toFixed(0)}亿</span></div>
+                    <div class="dash-stat-sub">${nf.signal||'—'} · 北向资金</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-8" title="市场状态分类 (北向/游资/机构/量化/防御)">
+                <div class="dash-stat-icon">🎯</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="color:${rgColor};font-size:18px">${rg.label||'—'}</div>
+                    <div class="dash-stat-sub">仓位 ${rg.position_advice ? Math.round(rg.position_advice*100)+'%' : '—'} · 市场状态</div>
                 </div>
             </div>
         `;
