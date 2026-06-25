@@ -76,7 +76,7 @@ async function loadDashboard() {
                     <div class="dash-stat-sub">溢价 ${d.avg_premium != null ? d.avg_premium + '%' : '?'} · 晋级 ${d.promotion_rate != null ? Math.round(d.promotion_rate*100) + '%' : '?'}</div>
                 </div>
             </div>
-            <div class="dash-stat-card sectors-card animate-fade-up stagger-5" onclick="location.hash=\'#scan-sector\'" title="点击查看板块热度">
+            <div class="dash-stat-card sectors-card animate-fade-up stagger-5" onclick="location.hash=\'#scan-sector\'" title="今日板块概览">
                 <div class="dash-stat-icon" style="font-size:18px">🔥</div>
                 <div class="dash-stat-body" style="flex:1">
                     <div class="dash-sectors-wrap">

@@ -109,7 +109,7 @@ def main():
     parser.add_argument('--days', type=int, default=5, help='回测天数 (默认 5,akshare 实际可用窗口限制)')
     parser.add_argument('--zhaban', action='store_true', help='炸板股反包潜力扫描')
     parser.add_argument('--trend', action='store_true', help='趋势动量股扫描')
-    parser.add_argument('--sector', action='store_true', help='板块联动强度分析')
+    parser.add_argument('--sector', action='store_true', help='今日板块概览(信息面板)')
     parser.add_argument('--dtqiaoban', action='store_true', help='跌停翘板信号扫描')
     parser.add_argument('--reversal', action='store_true', help='涨停回调反转扫描(上交易日涨停今回调→明日反包)')
     parser.add_argument('--date', type=str, default='', help='指定日期 YYYYMMDD（默认: 今天）')

@@ -331,7 +331,7 @@ let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验�
 const PAGES = {
     'scan-limit':   { title: '🛡️ 涨停扫描',   api: '/api/scan/limit-up/cards', textApi: '/api/scan/limit-up' },
     'scan-trend':   { title: '📊 趋势扫描',   api: '/api/scan/trend/cards',   textApi: '/api/scan/trend' },
-    'scan-sector':  { title: '🧩 板块热度',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
+    'scan-sector':  { title: '🧩 板块概览',   api: '/api/scan/sector/cards',  textApi: '/api/scan/sector' },
     'scan-zhaban':  { title: '💥 炸板分析',   api: '/api/scan/zhaban/cards',  textApi: '/api/scan/zhaban' },
     'scan-reversal':{title:'🔄 反转扫描',   api: '/api/scan/reversal/cards',textApi: '/api/scan/reversal' },
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },

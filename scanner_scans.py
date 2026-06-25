@@ -473,7 +473,7 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
 
     from datetime import date
     today_display = date.today().strftime('%Y-%m-%d')
-    lines = [f"板块联动强度 TOP{n} ({today_display})", "=" * 80]
+    lines = [f"今日板块概览 TOP{n} ({today_display})", "=" * 80]
     lines.append(f"{'排名':<4} {'板块名称':<14} {'联动分':<8} {'涨停':<6} {'炸板':<6} {'跌停':<6} {'赚钱效应':<10} {'封板率':<8} {'资金净流':<12} {'ETF共振'}")
 
     # ── ETF资金共振标记 (v2.0新增) ──
@@ -508,10 +508,9 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
         lines.append(f" #{rank:<2} {s['industry']:<12} {s['link_strength']:<6.1f}  {s['limit_cnt']:<4}  {s['zhaban_cnt']:<4}  {s['dieting_cnt']:<4}  {s['profit_effect']:<5.0f}%   {s['seal_rate']:<5.0f}%  {fund_str:<12} {etf_signal}")
 
     lines.append(f"\n{'=' * 80}")
-    lines.append("联动强度说明: 涨停数多+炸板/跌停少 = 强联动(板块合力)")
+    lines.append("此面板为今日市场概览，描述已发生的事实，不作为明日交易信号。")
     lines.append("ETF共振: 板块资金净流入>1亿★, >5亿★★, >10亿★★★ (真金白银验证)")
-    lines.append("打分基于涨停-炸板×0.3-跌停×0.5")
-    lines.append("策略: 聚焦联动强度TOP3 + ETF共振★★以上的板块龙头股")
+    lines.append("联动分 = 涨停数 - 炸板×0.3 - 跌停×0.5 (基于今日数据)")
     print("\n".join(lines))
 
 
