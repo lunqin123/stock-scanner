@@ -125,7 +125,7 @@ def generate_signals(today_str: str = None) -> dict:
     signals = []
     alerts = []
 
-    # ── 涨停信号: 复用 backtest_engine 的 fetcher + scorer ──
+    # ── 涨停信号: 周二/三/五, top-3, 评分38~72 ──
     try:
         from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_LIMIT_UP
         fetcher = SIGNAL_POOL_FETCHERS[TAB_LIMIT_UP]
@@ -139,34 +139,33 @@ def generate_signals(today_str: str = None) -> dict:
                 col = score_col if score_col in df.columns else df.columns[-1]
                 df = df.sort_values(col, ascending=False)
 
-                for rank, (_, row) in enumerate(df.iterrows(), 1):
-                    if rank > 1: break
-                    code = str(row.get('代码', '')).strip().zfill(6)
-                    name = str(row.get('名称', ''))
-                    score = float(row.get(col, 0))
+                if w not in [1, 2, 4]:  # 周二/三/五
+                    alerts.append(f'涨停 — {weekday_name}非周二/三/五, 跳过')
+                else:
+                    for rank, (_, row) in enumerate(df.iterrows(), 1):
+                        if rank > 3: break  # top-3
+                        code = str(row.get('代码', '')).strip().zfill(6)
+                        name = str(row.get('名称', ''))
+                        score = float(row.get(col, 0))
 
-                    if w not in [1, 4]:
-                        alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — {weekday_name}非周二/五, 跳过')
-                        break
-                    if score > 72:
-                        alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — Q4陷阱(>72, 历史EV-0.29%)')
-                        break
-                    if score < 38:
-                        alerts.append(f'涨停 {name}({code}) rank1 评分{score:.0f} — 评分偏低(<38)')
-                        break
+                        if score > 72:
+                            alerts.append(f'涨停 {name}({code}) 评分{score:.0f} — Q4陷阱(>72), 跳过')
+                            continue
+                        if score < 38:
+                            alerts.append(f'涨停 {name}({code}) 评分{score:.0f} — 偏低(<38), 跳过')
+                            continue
 
-                    signals.append({
-                        'tab': 'limit-up', 'tab_cn': '涨停板', 'strategy': 'A开盘买',
-                        'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
-                        'signal_date': today_str, 'buy_date': next_td,
-                        'reason': '周二/五+rank1+评分38~72(历史EV+2.12%)',
-                    })
+                        signals.append({
+                            'tab': 'limit-up', 'tab_cn': '涨停板', 'strategy': 'A开盘买',
+                            'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
+                            'signal_date': today_str, 'buy_date': next_td,
+                            'reason': f'周二/三/五+top3+38~72 (rank{rank})',
+                        })
     except Exception as e:
         alerts.append(f'涨停扫描: {e}')
 
-    # ── 趋势信号 ──
+    # ── 趋势信号: 周一/二, top-1, 评分45~69 ──
     try:
-        # 先拉炸板名单，趋势池中排除炸板股（历史 EV -0.77%）
         import akshare as ak
         try:
             zb_raw = ak.stock_zt_pool_zbgc_em(date=today_str)
@@ -183,7 +182,6 @@ def generate_signals(today_str: str = None) -> dict:
         score_col = SCORE_COLUMNS[TAB_TREND]
 
         pool = fetcher(today_str)
-        # 排除炸板股
         if pool is not None and not pool.empty and zb_codes:
             code_col_t = next((c for c in pool.columns if '代码' in str(c)), None)
             if code_col_t:
@@ -194,27 +192,63 @@ def generate_signals(today_str: str = None) -> dict:
                 col = score_col if score_col in df.columns else df.columns[-1]
                 df = df.sort_values(col, ascending=False)
 
+                if w not in [0, 1]:  # 周一/二
+                    alerts.append(f'趋势 — {weekday_name}非周一/二, 跳过')
+                else:
+                    for rank, (_, row) in enumerate(df.iterrows(), 1):
+                        if rank > 1: break  # top-1
+                        code = str(row.get('代码', '')).strip().zfill(6)
+                        name = str(row.get('名称', ''))
+                        score = float(row.get(col, 0))
+
+                        if score > 69:
+                            alerts.append(f'趋势 {name}({code}) 评分{score:.0f} — Q4陷阱(>69), 跳过')
+                            break
+                        if score < 45:
+                            alerts.append(f'趋势 {name}({code}) 评分{score:.0f} — 偏低(<45), 跳过')
+                            break
+
+                        signals.append({
+                            'tab': 'trend', 'tab_cn': '趋势股', 'strategy': 'A开盘买',
+                            'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
+                            'signal_date': today_str, 'buy_date': next_td,
+                            'reason': '周一/二+rank1+45~69(历史EV+4.86%)',
+                        })
+    except Exception as e:
+        alerts.append(f'趋势扫描: {e}')
+
+    # ── v2.0 炸板信号: 任意交易日, top-1, 评分≥80 ──
+    try:
+        from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_ZHABAN
+        fetcher = SIGNAL_POOL_FETCHERS[TAB_ZHABAN]
+        score_fn = SCORE_FUNCS[TAB_ZHABAN]
+        score_col = SCORE_COLUMNS[TAB_ZHABAN]
+
+        pool = fetcher(today_str)
+        if pool is not None and not (hasattr(pool, 'empty') and pool.empty):
+            df = score_fn(pool, today_str)
+            if df is not None and not (hasattr(df, 'empty') and df.empty):
+                col = score_col if score_col in df.columns else df.columns[-1]
+                df = df.sort_values(col, ascending=False)
+
                 for rank, (_, row) in enumerate(df.iterrows(), 1):
-                    if rank > 1: break
+                    if rank > 1: break  # top-1
                     code = str(row.get('代码', '')).strip().zfill(6)
                     name = str(row.get('名称', ''))
                     score = float(row.get(col, 0))
 
-                    if w not in [0, 1]:
-                        alerts.append(f'趋势 {name}({code}) rank1 评分{score:.0f} — {weekday_name}非周一/二, 跳过')
-                        break
-                    if score > 69:
-                        alerts.append(f'趋势 {name}({code}) rank1 评分{score:.0f} — Q4陷阱')
+                    if score < 80:
+                        alerts.append(f'炸板 {name}({code}) 评分{score:.0f} — 未达80门槛, 跳过')
                         break
 
                     signals.append({
-                        'tab': 'trend', 'tab_cn': '趋势股', 'strategy': 'A开盘买',
+                        'tab': 'zhaban', 'tab_cn': '炸板反包', 'strategy': 'B竞价确认',
                         'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
                         'signal_date': today_str, 'buy_date': next_td,
-                        'reason': '周一/二+rank1(历史EV+3.76%)',
+                        'reason': f'min80+rank1 (历史EV+5.52%)',
                     })
     except Exception as e:
-        alerts.append(f'趋势扫描: {e}')
+        alerts.append(f'炸板扫描: {e}')
 
     # ── 可转债/风险事件过滤 ──
     try:
