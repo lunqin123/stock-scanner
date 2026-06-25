@@ -30,7 +30,7 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None) ->
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
-    max_raw = sum(defaults.values())
+    max_raw = sum(w.values())  # 用实际权重和归一化，防止权重膨胀导致分数溢出
 
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
     seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
@@ -585,6 +585,7 @@ def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
+    max_raw = sum(w.values())  # 用实际权重和归一化，防止权重膨胀导致分数溢出
     # 列识别
     deal_col = df.columns[12] if len(df.columns) > 12 else None
     seal_fund_col = df.columns[10] if len(df.columns) > 10 else None
@@ -635,7 +636,6 @@ def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
                 elif minutes >= 750: f_time[idx] = 0.5
                 else: f_time[idx] = 0.2
     total = (f_deal*w['deal'] + f_seal*w['seal'] + f_cont*w['cont'] + f_turn*w['turnover'] + f_time*w['time'])
-    max_raw = sum(defaults.values())
     df['翘板评分'] = (total / max_raw * 100).clip(lower=0).round(1)
     df['dt_deal'] = (f_deal*w['deal']).round(1)
     df['dt_seal'] = (f_seal*w['seal']).round(1)
