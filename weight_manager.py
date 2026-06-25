@@ -133,15 +133,15 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
     # 8因子加权 (v2.0: +north_flow)
     non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
                      'stock_sentiment', 'principal_score', 'north_flow']
-    actual_sum = sum(w[k] for k in non_sentiment)
-    weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
-                money_scores * (w['money'] / _RAW_MAX['money']) +
-                sector_scores * (w['sector'] / _RAW_MAX['sector']) +
-                tech_scores * (w['tech'] / _RAW_MAX['tech']) +
-                history_scores * (w['history'] / _RAW_MAX['history']) +
-                stock_sentiment_scores * (w['stock_sentiment'] / _RAW_MAX['stock_sentiment']) +
-                principal_scores * (w['principal_score'] / _RAW_MAX['principal_score']) +
-                north_flow_scores * (w['north_flow'] / _RAW_MAX['north_flow']))
+    actual_sum = sum(w.get(k, 0) for k in non_sentiment)
+    weighted = (seal_scores * (w.get('seal', 0) / _RAW_MAX['seal']) +
+                money_scores * (w.get('money', 0) / _RAW_MAX['money']) +
+                sector_scores * (w.get('sector', 0) / _RAW_MAX['sector']) +
+                tech_scores * (w.get('tech', 0) / _RAW_MAX['tech']) +
+                history_scores * (w.get('history', 0) / _RAW_MAX['history']) +
+                stock_sentiment_scores * (w.get('stock_sentiment', 0) / _RAW_MAX['stock_sentiment']) +
+                principal_scores * (w.get('principal_score', 0) / _RAW_MAX['principal_score']) +
+                north_flow_scores * (w.get('north_flow', 0) / _RAW_MAX['north_flow']))
     base_scores = weighted / max(1, actual_sum) * 100
 
     # 大盘情绪温和系数 (×0.85 ~ ×1.15, 缩小到±15%)
@@ -588,6 +588,7 @@ DEFAULT_WEIGHTS_LIMIT_UP = {
     'history': 10.0,    # 历史股性
     'stock_sentiment': 15.0,  # 个股情绪（板块龙头溢价）
     'principal_score': 5.0,   # 本金适配
+    'north_flow': 5.0,   # v2.0: 北向资金市场级因子
 }
 
 # 反转专用权重（连板为王、换手率符号修正）
