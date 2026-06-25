@@ -29,7 +29,7 @@ from cache import (
 # 兼容旧 alias (代码里有些地方用 _daily_get/_daily_set 命名空间访问)
 _daily_get = _persistent_get
 _daily_set = _persistent_put
-from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT
+from config import COMMISSION_ROUNDTRIP_PCT as _COMMISSION_PCT, SLIPPAGE_PCT as _SLIPPAGE_PCT, MAX_PRICE
 
 # 复用 t1 的工具函数
 from t1_real_backtest import (
@@ -582,7 +582,7 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
         scoring_base = scoring_base[scoring_base[cap_col].astype(float) <= 200 * 1e8]
     price_col = '最新价' if '最新价' in scoring_base.columns else (scoring_base.columns[4] if len(scoring_base.columns) > 4 else None)
     if price_col and price_col in scoring_base.columns:
-        scoring_base = scoring_base[scoring_base[price_col].astype(float) <= 200]
+        scoring_base = scoring_base[scoring_base[price_col].astype(float) <= MAX_PRICE]
     if scoring_base.empty:
         return None
 
@@ -657,7 +657,7 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
     if df.empty:
         return None
     price_col = '最新价' if '最新价' in df.columns else df.columns[4]
-    df = df[df[price_col].astype(float) <= 200]
+    df = df[df[price_col].astype(float) <= MAX_PRICE]
     if df.empty:
         return None
     try:
@@ -756,6 +756,7 @@ def _smart_sell_decision(
     buy_px: float,
     signal_close: float,
     score: float,
+    tab: str = None,            # P2.1: 用于查 tab-specific 阈值
 ) -> dict:
     """逐日评估, 决定最优卖出日和价格
 
@@ -917,7 +918,7 @@ def _score_trend(df: pd.DataFrame, date_str: str):
 
     price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
     if price_col and price_col in df.columns:
-        df = df[df[price_col].astype(float) <= 200]
+        df = df[df[price_col].astype(float) <= MAX_PRICE]
 
     change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
     changes = df[change_col].astype(float)
