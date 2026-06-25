@@ -13,9 +13,9 @@ import pandas as pd
 import numpy as np
 
 DEFAULT_WEIGHTS = {
-    'seal': 31.0,      # 封板强度（回测r=+0.126，唯一显著预测因子，seal20+黄金区均涨+5.9%）
+    'seal': 28.0,      # 封板强度（回测r=+0.126，唯一显著预测因子，seal20+黄金区均涨+5.9%）
     'tech': 8.0,       # 量价结构（简化为换手率评级，回测r=+0.027）
-    'sector': 17.0,    # 板块合力（合并原sector_res+sector_mom，消除重复计算）
+    'sector': 17.0,    # 板块合力（合并原sector_res+sector_mom，含ETF资金共振）
     'sentiment': 25.0, # DEPRECATED 占位: 大盘情绪（系数调节，不参与加权和）
     'sector_res': 0.0, # DEPRECATED: 已合并到sector
     'sector_mom': 0.0, # DEPRECATED: 已合并到sector
@@ -24,12 +24,13 @@ DEFAULT_WEIGHTS = {
     'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
     'stock_sentiment': 13.0,  # 个股情绪（资金态度+确定性+板块领先度）
     'principal_score': 8.0,   # 本金适配（提权，增强低价小市值标的区分度）
+    'north_flow': 5.0, # v2.0: 北向资金市场级因子（聪明钱方向，盘中实时可追踪）
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 100
-# 注: 实际"加权和"是 100 (7 个非零因子: seal+money+sector+tech+history+stock_sentiment+principal_score
-# = 31+17+17+8+6+13+8 = 100; sentiment/buyability/sector_res/sector_mom 不参与加权 — sentiment 是
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 105
+# 注: 实际"加权和"是 102 (8 个非零因子: seal+money+sector+tech+history+stock_sentiment+principal_score+north_flow
+# = 28+17+17+8+6+13+8+5 = 102; sentiment/buyability/sector_res/sector_mom 不参与加权 — sentiment 是
 # 乘法系数 [×0.85~1.15], sector_res/mom 已合并到 sector, buyability 降为纯过滤器)。
-# 历史: 22+6+12+12+4+9+6=71  →  v1.24.1: 31+8+17+17+6+13+8=100 (按比例 ×1.408 拉满, 因子相对关系不变)
+# 历史: 22+6+12+12+4+9+6=71  →  v1.24.1: 31+8+17+17+6+13+8=100 →  v2.0: +north_flow=5, seal 28
 
 # 回测中可调权的因子
 BACKTEST_FACTORS = ['seal', 'tech', 'sector', 'history']
@@ -94,25 +95,29 @@ def save_weights(weights: dict, plan_name: str = 'A'):
 
 
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
-_RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 12.0, 'sentiment': 10.0,
+_RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 15.0, 'sentiment': 10.0,
             'sector_res': 8.0, 'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
-            'stock_sentiment': 10.0, 'principal_score': 10.0}
+            'stock_sentiment': 10.0, 'principal_score': 10.0, 'north_flow': 10.0}
 
 
 def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                   history_scores, sentiment_score,
                   stock_sentiment_scores=None, principal_scores=None,
+                  north_flow_scores=None,  # v2.0: 北向资金因子
                   sector_res=None, sector_mom=None,  # DEPRECATED: 向后兼容
                   buyability_scores=None, weights=None):
     """
-    7因子加权 + 大盘情绪温和系数。
+    8因子加权(v2.0) + 大盘情绪温和系数。
     sector_res/sector_mom 已合并为 sector_scores，旧参数仅向后兼容。
     大盘情绪(sentiment)温和系数调节(×0.85~×1.15)。
+    北向资金(north_flow)市场级因子，所有标的统一分。
     """
     if stock_sentiment_scores is None:
         stock_sentiment_scores = pd.Series(5.0, index=seal_scores.index)
     if principal_scores is None:
         principal_scores = pd.Series(5.0, index=seal_scores.index)
+    if north_flow_scores is None:
+        north_flow_scores = pd.Series(5.0, index=seal_scores.index)
     # 向后兼容：如果传了sector_res/sector_mom但没传sector_scores，自动合并
     if sector_scores is None:
         if sector_res is not None and sector_mom is not None:
@@ -125,9 +130,9 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
             sector_scores = pd.Series(6.0, index=seal_scores.index)
     w = weights if weights else DEFAULT_WEIGHTS
 
-    # 7因子加权（sector_res/sector_mom已合并为sector）
+    # 8因子加权 (v2.0: +north_flow)
     non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
-                     'stock_sentiment', 'principal_score']
+                     'stock_sentiment', 'principal_score', 'north_flow']
     actual_sum = sum(w[k] for k in non_sentiment)
     weighted = (seal_scores * (w['seal'] / _RAW_MAX['seal']) +
                 money_scores * (w['money'] / _RAW_MAX['money']) +
@@ -135,7 +140,8 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                 tech_scores * (w['tech'] / _RAW_MAX['tech']) +
                 history_scores * (w['history'] / _RAW_MAX['history']) +
                 stock_sentiment_scores * (w['stock_sentiment'] / _RAW_MAX['stock_sentiment']) +
-                principal_scores * (w['principal_score'] / _RAW_MAX['principal_score']))
+                principal_scores * (w['principal_score'] / _RAW_MAX['principal_score']) +
+                north_flow_scores * (w['north_flow'] / _RAW_MAX['north_flow']))
     base_scores = weighted / max(1, actual_sum) * 100
 
     # 大盘情绪温和系数 (×0.85 ~ ×1.15, 缩小到±15%)

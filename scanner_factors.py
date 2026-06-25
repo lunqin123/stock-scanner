@@ -120,16 +120,21 @@ def get_money_flow_scores(df: pd.DataFrame, fund_df=None):
 #  板块合力评分 (合并 sector_res + sector_mom)
 # ═══════════════════════════════════════════
 
-def get_sector_score(df: pd.DataFrame, money_series: pd.Series = None) -> pd.Series:
+def get_sector_score(df: pd.DataFrame, money_series: pd.Series = None,
+                     etf_resonance: dict = None) -> pd.Series:
     """
-    板块合力评分（满分12分），合并原 sector_resonance + sector_heat：
+    板块合力评分（满分15分，v2.0增强: +3 ETF资金共振）:
     - 基础分(0-8): 基于板块内涨停个股数量（板块共振）
     - 一致性加分(0-4): 基于板块内资金净流入正向个股占比（避免虚假繁荣）
-    消除sector双因子重复计算问题（回测显示两者r完全相同）。
+    - ETF共振加分(0-3): 板块ETF成交额环比放量 → 真金白银验证 (v2.0新增)
     """
     industry_col = '所属行业' if '所属行业' in df.columns else '行业'
     if industry_col not in df.columns:
         return pd.Series(6.0, index=df.index)
+
+    # ETF资金共振数据 (降级安全)
+    if etf_resonance is None:
+        etf_resonance = _get_sector_etf_resonance()
 
     counts = df[industry_col].value_counts()
     scores = pd.Series(0.0, index=df.index)
@@ -158,8 +163,59 @@ def get_sector_score(df: pd.DataFrame, money_series: pd.Series = None) -> pd.Ser
         else:
             consistency_bonus = 2  # 无资金数据保守加分
 
-        scores[idx] = min(12, base + consistency_bonus)
+        # ETF共振加分 (0-3): 主力资金理论——ETF申赎是板块联动核心驱动
+        etf_bonus = etf_resonance.get(industry, 0) if etf_resonance else 0
+
+        scores[idx] = min(15, base + consistency_bonus + etf_bonus)
     return scores
+
+
+def _get_sector_etf_resonance() -> dict:
+    """
+    获取板块ETF资金共振信号 (v2.0新增)。
+
+    理论: 当龙头涨停 + 板块ETF成交额环比>2倍 + 板块资金净流入时，
+    AP会申购ETF → 买入一篮子成分股 → 整个板块跟涨。
+
+    返回: {行业名: etf_bonus(0-3)} 字典
+    """
+    resonance = {}
+    try:
+        import akshare as ak
+        # 获取行业资金流向 (已有数据源)
+        df = ak.stock_sector_fund_flow_rank(indicator="今日",
+                                             sector_type="行业资金流向")
+        if df is None or df.empty:
+            return resonance
+
+        name_col = None
+        net_col = None
+        for c in df.columns:
+            c_str = str(c)
+            if '名称' in c_str:
+                name_col = c
+            if '净流入' in c_str:
+                net_col = c
+
+        if name_col is None or net_col is None:
+            return resonance
+
+        for _, row in df.iterrows():
+            industry = str(row[name_col])
+            net_val = float(row[net_col]) if pd.notna(row[net_col]) else 0
+
+            # 资金强势流入 → ETF共振信号
+            if net_val > 10e8:      # >10亿
+                resonance[industry] = 3
+            elif net_val > 5e8:     # >5亿
+                resonance[industry] = 2
+            elif net_val > 1e8:     # >1亿
+                resonance[industry] = 1
+
+    except Exception:
+        pass
+
+    return resonance
 
 
 # DEPRECATED: 已合并到 get_sector_score，保留向后兼容
@@ -702,6 +758,48 @@ def detect_market_sentiment(today_str: str):
         score = prev_score + breadth_bonus + limit_bonus + zhaban_penalty
         score = max(0, min(10, score))
 
+        # ── 5. 盘前信号融入 (v2.0新增) ──
+        premarket_bonus = 0
+        premarket_detail = {}
+        try:
+            from premarket import get_premarket_signal
+            pm = get_premarket_signal()
+            if pm and pm.get('score') is not None:
+                # 盘前信号5=中性, 偏离中性时修正
+                pm_score = pm['score']
+                premarket_bonus = round((pm_score - 5.0) * 0.4, 1)  # 最大±2
+                premarket_detail = {
+                    'premarket_score': pm_score,
+                    'premarket_direction': pm['direction'],
+                    'premarket_confidence': pm['confidence'],
+                    'premarket_summary': pm['summary'],
+                }
+                if premarket_bonus != 0:
+                    print(f"  [情绪] 盘前信号修正: {premarket_bonus:+.1f} ({pm['direction']}, {pm['summary'][:40]}...)", file=sys.stderr)
+        except Exception as e:
+            print(f"  [情绪] 盘前信号获取异常: {e}", file=sys.stderr)
+
+        # ── 6. 北向资金修正 (v2.0新增) ──
+        north_bonus = 0
+        north_detail = {}
+        try:
+            from north_flow_tracker import get_north_flow_signal
+            nf = get_north_flow_signal()
+            if nf and nf.get('sentiment_bonus') is not None:
+                north_bonus = nf['sentiment_bonus']  # -2~+2
+                north_detail = {
+                    'north_direction': nf['direction'],
+                    'north_cumulative_net': nf['cumulative_net'],
+                    'north_sentiment_bonus': north_bonus,
+                }
+                if abs(north_bonus) > 0.5:
+                    print(f"  [情绪] 北向资金修正: {north_bonus:+.1f} ({nf['direction']}, 累计{nf['cumulative_net']:+.1f}亿)", file=sys.stderr)
+        except Exception as e:
+            print(f"  [情绪] 北向信号获取异常: {e}", file=sys.stderr)
+
+        score = score + premarket_bonus + north_bonus
+        score = max(0, min(10, score))
+
         # 最终等级
         if score >= 8:
             level = "高潮"
@@ -726,6 +824,8 @@ def detect_market_sentiment(today_str: str):
             'today_breadth': round(today_market_breadth, 2),
             'all_up': all_up,
             'all_down': all_down,
+            'premarket': premarket_detail,
+            'north_flow': north_detail,
         }
         return round(score, 1), level, details
 

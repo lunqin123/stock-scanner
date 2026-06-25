@@ -474,8 +474,15 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
     from datetime import date
     today_display = date.today().strftime('%Y-%m-%d')
     lines = [f"板块联动强度 TOP{n} ({today_display})", "=" * 80]
-    lines.append(f"{'排名':<4} {'板块名称':<14} {'联动分':<8} {'涨停':<6} {'炸板':<6} {'跌停':<6} {'赚钱效应':<10} {'封板率':<8} {'资金净流'}")
-    lines.append("-" * 80)
+    lines.append(f"{'排名':<4} {'板块名称':<14} {'联动分':<8} {'涨停':<6} {'炸板':<6} {'跌停':<6} {'赚钱效应':<10} {'封板率':<8} {'资金净流':<12} {'ETF共振'}")
+
+    # ── ETF资金共振标记 (v2.0新增) ──
+    etf_resonance = {}
+    try:
+        from scanner_factors import _get_sector_etf_resonance
+        etf_resonance = _get_sector_etf_resonance()
+    except Exception:
+        pass
 
     for rank, s in enumerate(top_sectors, 1):
         fund_str = ""
@@ -486,12 +493,25 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
             else:
                 fund_str = f"{fv/1e8:.1f}亿" if abs(fv) >= 1e8 else f"{fv/1e4:.0f}万"
 
-        lines.append(f" #{rank:<2} {s['industry']:<12} {s['link_strength']:<6.1f}  {s['limit_cnt']:<4}  {s['zhaban_cnt']:<4}  {s['dieting_cnt']:<4}  {s['profit_effect']:<5.0f}%   {s['seal_rate']:<5.0f}%  {fund_str}")
+        # ETF共振信号
+        etf_signal = ""
+        etf_score = etf_resonance.get(s['industry'], 0) if etf_resonance else 0
+        if etf_score >= 3:
+            etf_signal = "★★★ 强共振"
+        elif etf_score >= 2:
+            etf_signal = "★★ 中等共振"
+        elif etf_score >= 1:
+            etf_signal = "★ 弱共振"
+        else:
+            etf_signal = "—"
+
+        lines.append(f" #{rank:<2} {s['industry']:<12} {s['link_strength']:<6.1f}  {s['limit_cnt']:<4}  {s['zhaban_cnt']:<4}  {s['dieting_cnt']:<4}  {s['profit_effect']:<5.0f}%   {s['seal_rate']:<5.0f}%  {fund_str:<12} {etf_signal}")
 
     lines.append(f"\n{'=' * 80}")
     lines.append("联动强度说明: 涨停数多+炸板/跌停少 = 强联动(板块合力)")
+    lines.append("ETF共振: 板块资金净流入>1亿★, >5亿★★, >10亿★★★ (真金白银验证)")
     lines.append("打分基于涨停-炸板×0.3-跌停×0.5")
-    lines.append("策略: 聚焦联动强度TOP3板块的龙头股")
+    lines.append("策略: 聚焦联动强度TOP3 + ETF共振★★以上的板块龙头股")
     print("\n".join(lines))
 
 

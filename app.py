@@ -1434,6 +1434,54 @@ def api_sentiment():
 
 
 # ═══════════════════════════════════════════
+#  v2.0: 盘前多空信号 + 北向资金 + 市场状态
+# ═══════════════════════════════════════════
+
+@app.get("/api/premarket/signal")
+def api_premarket_signal():
+    """盘前多空信号聚合 (A50+美股+汇率+流动性)"""
+    try:
+        from premarket import get_premarket_signal
+        signal = get_premarket_signal()
+        return {"ok": True, **signal}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/north-flow/realtime")
+def api_north_flow_realtime():
+    """北向资金实时追踪 (盘中方向+做T建议)"""
+    try:
+        from north_flow_tracker import get_north_flow_signal
+        signal = get_north_flow_signal()
+        return {"ok": True, **signal}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/north-flow/history")
+def api_north_flow_history(days: int = Query(5, ge=1, le=30)):
+    """北向资金历史流向 (近N日)"""
+    try:
+        from north_flow_tracker import get_north_flow_history
+        history = get_north_flow_history(days)
+        return {"ok": True, "history": history}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/market/regime")
+def api_market_regime():
+    """市场状态分类 (北向驱动/游资情绪/机构调仓/量化主导/防御避险)"""
+    try:
+        from market_regime import classify_regime
+        regime = classify_regime()
+        return {"ok": True, **regime}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════
 #  市场概览 Dashboard
 # ═══════════════════════════════════════════
 
@@ -1495,6 +1543,44 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         except Exception as _e:
             print(f"  [dashboard] {api_name} 拉取失败: {_e}", file=sys.stderr)
             result[key] = 0
+
+    # v2.0: 盘前信号 + 北向资金 + 市场状态
+    try:
+        from premarket import get_premarket_signal
+        pm = get_premarket_signal()
+        result["premarket"] = {
+            "direction": pm.get("direction", ""),
+            "score": pm.get("score", 5),
+            "confidence": pm.get("confidence", "低"),
+            "summary": pm.get("summary", ""),
+        }
+    except Exception as _e:
+        print(f"  [dashboard] 盘前信号失败: {_e}", file=sys.stderr)
+        result["premarket"] = {"direction": "无数据", "score": 5}
+
+    try:
+        from north_flow_tracker import get_north_flow_signal
+        nf = get_north_flow_signal()
+        result["north_flow"] = {
+            "direction": nf.get("direction", ""),
+            "cumulative_net": nf.get("cumulative_net", 0),
+            "signal": nf.get("signal", "中性"),
+        }
+    except Exception as _e:
+        print(f"  [dashboard] 北向资金失败: {_e}", file=sys.stderr)
+        result["north_flow"] = {"direction": "无数据", "cumulative_net": 0}
+
+    try:
+        from market_regime import classify_regime
+        regime = classify_regime()
+        result["regime"] = {
+            "label": regime.get("label", ""),
+            "position_advice": regime.get("position_advice", 1.0),
+            "summary": regime.get("summary", ""),
+        }
+    except Exception as _e:
+        print(f"  [dashboard] 市场状态失败: {_e}", file=sys.stderr)
+        result["regime"] = {"label": "未知", "position_advice": 1.0}
 
     result["fetched_at"] = _fetched_at()
     daily_set("dashboard_latest", result, force=refresh)

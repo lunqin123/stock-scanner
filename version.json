@@ -1,13 +1,17 @@
 {
-  "version": "1.24.5",
-  "date": "2026-06-14",
+  "version": "2.0.0",
+  "date": "2026-06-25",
   "changes": [
-    "🐛 回测end_date回退逻辑导致卖出日期错误 (神剑股份 sell_date=6/11应为6/12)",
-    "🐛 d_sell兜底时A/B策略同日买卖数据假象 (合锻智能 signal=6/11→buy=sell=6/12)",
-    "🐛 加d_sell_fallback标记, 兜底时跳过策略A/B仅保留策略C",
-    "🐛 移除冗余的end回退一天, 改用_trading_date()直接取当前交易日",
-    "🐛 未来函数防护由_get_daily_ohlcv_batch的today拦截负责, end不需要额外回退",
-    "🔧 /api/bt/{tab}/full 新增 force=true 参数跳过缓存"
+    "策略理论升级: 主力资金分层生态+板块联动ETF套利机制+盘前多空信号体系",
+    "新增 premarket.py: 盘前多空信号聚合器 (A50+美股+人民币+流动性)",
+    "新增 north_flow_tracker.py: 北向资金日内追踪+做T方向信号+PlanA北向因子",
+    "新增 market_regime.py: 5种市场状态分类器 (北向/游资/机构/量化/防御)",
+    "增强 scanner_factors: detect_market_sentiment融入盘前信号+北向修正",
+    "增强 scanner_factors: get_sector_score增加ETF资金共振 (真金白银验证板块)",
+    "增强 weight_manager: 新增north_flow因子(权重5%), 8因子体系",
+    "增强 scanner_scans: scan_sector增加ETF共振★★★标记",
+    "增强 scanner.py CLI: --premarket/--regime新参数",
+    "增强 app.py: 4个新API端点 + Dashboard集成预开盘/北向/市场状态"
   ],
   "history": [
     {
