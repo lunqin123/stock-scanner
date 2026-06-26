@@ -35,6 +35,7 @@ async function loadDashboard(force) {
         // v2.0 新增数据
         const pm = d.premarket || {};
         const nf = d.north_flow || {};
+        const mf = d.market_fund_flow || {};
         const rg = d.regime || {};
 
         // 盘前方向颜色
@@ -93,14 +94,21 @@ async function loadDashboard(force) {
                     <div class="dash-stat-sub" style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pm.summary||'')}">${pm.confidence||''}置信 · 盘前信号</div>
                 </div>
             </div>
-            <div class="dash-stat-card animate-fade-up stagger-7" title="北向资金实时追踪 (点击查看详情)" onclick="location.hash=\'#scan-sector\'">
+            <div class="dash-stat-card animate-fade-up stagger-7" title="北向资金(外资通过沪/深股通)">
                 <div class="dash-stat-icon">🌊</div>
                 <div class="dash-stat-body">
                     <div class="dash-stat-value" style="color:${nfColor};font-size:18px">${nf.direction||'—'} <span style="font-size:12px;opacity:0.7">${nfSign}${nfNet.toFixed(0)}亿</span></div>
-                    <div class="dash-stat-sub">${nf.signal||'—'} · 北向资金</div>
+                    <div class="dash-stat-sub">${nf.signal||'—'} · 北向外资</div>
                 </div>
             </div>
-            <div class="dash-stat-card animate-fade-up stagger-8" title="市场状态分类 (北向/游资/机构/量化/防御)">
+            <div class="dash-stat-card animate-fade-up stagger-8" title="全市场主力资金(主力+超大单+大单净流入合计)">
+                <div class="dash-stat-icon">💰</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="color:${mf.total_net > 0 ? '#ef4444' : mf.total_net < 0 ? '#22c55e' : '#94a3b8'};font-size:18px">${mf.direction||'—'} <span style="font-size:12px;opacity:0.7">${mf.total_net > 0 ? '+' : ''}${(mf.total_net||0).toFixed(0)}亿</span></div>
+                    <div class="dash-stat-sub">全市场主力</div>
+                </div>
+            </div>
+            <div class="dash-stat-card animate-fade-up stagger-9" title="市场状态分类 (北向/游资/机构/量化/防御)">
                 <div class="dash-stat-icon">🎯</div>
                 <div class="dash-stat-body">
                     <div class="dash-stat-value" style="color:${rgColor};font-size:18px">${rg.label||'—'}</div>

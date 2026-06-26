@@ -1554,7 +1554,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             print(f"  [dashboard] {api_name} 拉取失败: {_e}", file=sys.stderr)
             result[key] = 0
 
-    # v2.0: 盘前信号 + 北向资金 + 市场状态
+    # v2.0: 盘前信号 + 北向资金 + 市场状态 + 全市场资金流
     try:
         from premarket import get_premarket_signal
         pm = get_premarket_signal()
@@ -1579,6 +1579,24 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
     except Exception as _e:
         print(f"  [dashboard] 北向资金失败: {_e}", file=sys.stderr)
         result["north_flow"] = {"direction": "无数据", "cumulative_net": 0}
+
+    # 全市场主力资金净流入 (从同花顺个股资金流聚合)
+    try:
+        from scanner_data import fetch_fund_flow_data
+        fund_df, _ = fetch_fund_flow_data()
+        if fund_df is not None and not fund_df.empty and '_net' in fund_df.columns:
+            total_net = fund_df['_net'].apply(
+                lambda x: float(x) if isinstance(x, (int, float)) and x != '--' else 0
+            ).sum()
+            result["market_fund_flow"] = {
+                "total_net": round(total_net / 1e8, 1),  # 亿
+                "direction": "流入" if total_net > 0 else "流出",
+            }
+        else:
+            result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
+    except Exception as _e:
+        print(f"  [dashboard] 全市场资金流失败: {_e}", file=sys.stderr)
+        result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
 
     try:
         from market_regime import classify_regime
