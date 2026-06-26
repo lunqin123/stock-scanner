@@ -78,6 +78,9 @@ window.addEventListener('unhandledrejection', function(e) {
     <div class="dashboard-bar" id="dashboard">
         <div class="dash-loading">📊 加载今日市场数据...</div>
     </div>
+    <div style="text-align:right;padding:2px 8px;margin-top:-4px">
+        <button onclick="loadDashboard(true)" title="强制刷新(重新拉取数据)" style="background:none;border:1px solid rgba(255,255,255,0.1);color:#94a3b8;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">🔄 刷新</button>
+    </div>
 
     <!-- ═══ 当前模块 ═══ -->
     <!-- ═══ 全局工具栏（所有板块共享） ═══ -->

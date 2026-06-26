@@ -9,10 +9,11 @@ function animateCount(el, target, duration) {
     requestAnimationFrame(step);
 }
 
-async function loadDashboard() {
+async function loadDashboard(force) {
     const bar = document.getElementById('dashboard');
     try {
-        const resp = await fetch('/api/dashboard?refresh=1');
+        const url = '/api/dashboard' + (force ? '?refresh=1' : '');
+        const resp = await fetch(url);
         const d = await resp.json();
         if (!d.ok) throw new Error('no data');
 
@@ -114,6 +115,6 @@ async function loadDashboard() {
         });
 
     } catch (e) {
-        bar.innerHTML = '<div class="dash-loading" style="cursor:pointer" onclick="location.reload()">⚠️ 数据加载失败 · 点击重试</div>';
+        bar.innerHTML = '<div class="dash-loading" style="cursor:pointer" onclick="loadDashboard(true)">⚠️ 数据加载失败 · 点击重试</div>';
     }
 }
