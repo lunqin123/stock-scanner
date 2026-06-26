@@ -1585,9 +1585,15 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
         from scanner_data import fetch_fund_flow_data
         fund_df, _ = fetch_fund_flow_data()
         if fund_df is not None and not fund_df.empty and '_net' in fund_df.columns:
-            total_net = fund_df['_net'].apply(
-                lambda x: float(x) if isinstance(x, (int, float)) and x != '--' else 0
-            ).sum()
+            def _parse_net(val):
+                s = str(val).replace('--', '0').strip()
+                try:
+                    if '亿' in s: return float(s.replace('亿', '')) * 1e8
+                    if '万' in s: return float(s.replace('万', '')) * 1e4
+                    return float(s)
+                except (ValueError, TypeError):
+                    return 0.0
+            total_net = fund_df['_net'].apply(_parse_net).sum()
             result["market_fund_flow"] = {
                 "total_net": round(total_net / 1e8, 1),  # 亿
                 "direction": "流入" if total_net > 0 else "流出",
