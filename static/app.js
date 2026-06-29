@@ -16,7 +16,7 @@ const _dom = {
 // P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
 let _btTab = localStorage.getItem('btTab') || 'trend';  // 默认趋势(52.2%胜率)
 // 各 tab 推荐 TOP-N (用户1把梭3万, 全 tab 统一 TOP1 + 3万本金)
-const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
+const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 3, 'trend': 1, 'dtqiaoban': 3, 'reversal': 1 };
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
@@ -37,9 +37,9 @@ var _TAB_DEFAULT_SELL_N = {
 var _TAB_DEFAULT_MIN_SCORE = {
     'trend': 55,
     'limit-up': 80,
-    'zhaban': 80,
+    'zhaban': 50,
     'reversal': 0,
-    'dtqiaoban': 100,
+    'dtqiaoban': 70,
 };
 // 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {
