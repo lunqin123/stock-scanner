@@ -298,15 +298,17 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
 
     results = []
     try:
-        # 阶段 1: plan_a
-        r1 = _adjust_plan_a()
+        # 阶段 1: plan_a 调权 — ⛔ 已禁用，权重已手动优化锁定
+        # r1 = _adjust_plan_a()
+        # results.append(r1)
+        r1 = {'tab': 'plan_a', 'status': 'skipped', 'msg': '手动优化锁定，自动调权已禁用'}
         results.append(r1)
-        print(f"  [weight_scheduler]   阶段1 结果: {r1}", file=sys.stderr)
 
-        # 阶段 2: trend
-        r2 = _adjust_trend()
+        # 阶段 2: trend 调权 — ⛔ 已禁用
+        # r2 = _adjust_trend()
+        # results.append(r2)
+        r2 = {'tab': 'trend', 'status': 'skipped', 'msg': '手动优化锁定，自动调权已禁用'}
         results.append(r2)
-        print(f"  [weight_scheduler]   阶段2 结果: {r2}", file=sys.stderr)
 
         # 阶段 3: 预缓存所有 tab 回测 + 调 tab 权重
         try:

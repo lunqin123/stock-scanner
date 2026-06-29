@@ -1632,42 +1632,26 @@ def run_tab_backtest(
     except Exception as _e:
         print(f"  [引擎持久化] 写入失败: {_e}", file=sys.stderr)
 
-    # 保存 tab 表现 → 自动调权
+    # 保存 tab 表现 → 供 tab 仓位权重参考 (不做因子调权)
     try:
         from weight_manager import save_tab_performance
         save_tab_performance(tab, result.get('summary', {}))
     except Exception:
         pass
 
-    # 因子级自动调权 (仅盘后, 盘中数据不完整)
-    from scanner import get_market_status
-    if get_market_status() == 'trading':
-        return result
-
-    if tab == TAB_TREND and records_open:
-        try:
-            from weight_manager import adjust_trend_weights_from_backtest
-            new_w, msg = adjust_trend_weights_from_backtest(records_open)
-            if msg:
-                print(f"  [趋势调权] {msg}", file=sys.stderr)
-        except Exception:
-            pass
-    if tab == TAB_REVERSAL and records_open:
-        try:
-            from weight_manager import adjust_reversal_weights_from_backtest
-            new_w, msg = adjust_reversal_weights_from_backtest(records_open)
-            if msg:
-                print(f"  [反转调权] {msg}", file=sys.stderr)
-        except Exception:
-            pass
-    if tab in (TAB_ZHABAN, TAB_DTQIAOBAN) and records_open:
-        try:
-            from weight_manager import adjust_tab_weights_from_backtest
-            new_w, msg = adjust_tab_weights_from_backtest(tab, records_open)
-            if msg:
-                print(f"  [{tab}调权] {msg}", file=sys.stderr)
-        except Exception:
-            pass
+    # 因子级自动调权 — ⛔ 已禁用，权重已手动优化锁定
+    # from scanner import get_market_status
+    # if get_market_status() == 'trading':
+    #     return result
+    # if tab == TAB_TREND and records_open:
+    #     from weight_manager import adjust_trend_weights_from_backtest
+    #     new_w, msg = adjust_trend_weights_from_backtest(records_open)
+    # if tab == TAB_REVERSAL and records_open:
+    #     from weight_manager import adjust_reversal_weights_from_backtest
+    #     new_w, msg = adjust_reversal_weights_from_backtest(records_open)
+    # if tab in (TAB_ZHABAN, TAB_DTQIAOBAN) and records_open:
+    #     from weight_manager import adjust_tab_weights_from_backtest
+    #     new_w, msg = adjust_tab_weights_from_backtest(tab, records_open)
 
     return result
 
