@@ -1308,11 +1308,25 @@ def api_backtest_tab_full(tab: str,
 
 
 @app.get("/api/signal/tomorrow")
-def api_signal_tomorrow():
-    """明日买入信号 — 盘前已知信息过滤 (rank+星期+评分)."""
+def api_signal_tomorrow(
+    zhaban_top_n: int = Query(3, description="炸板TOP-N"),
+    zhaban_min_score: float = Query(50, description="炸板最低评分"),
+    zhaban_sell_n: int = Query(5, description="炸板持仓天数"),
+    limit_up_top_n: int = Query(3, description="涨停TOP-N"),
+    limit_up_min_score: float = Query(38, description="涨停最低评分"),
+    trend_top_n: int = Query(1, description="趋势TOP-N"),
+    trend_min_score: float = Query(45, description="趋势最低评分"),
+):
+    """明日买入信号 — 接受回测面板参数覆盖默认值"""
     try:
         from signal_tomorrow import generate_signals
-        result = generate_signals()
+        settings = {
+            'zhaban': {'top_n': zhaban_top_n, 'min_score': zhaban_min_score,
+                       'sell_n': zhaban_sell_n},
+            'limit-up': {'top_n': limit_up_top_n, 'min_score': limit_up_min_score},
+            'trend': {'top_n': trend_top_n, 'min_score': trend_min_score},
+        }
+        result = generate_signals(settings=settings)
         return {"ok": True, **result}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]})

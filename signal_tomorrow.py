@@ -111,26 +111,32 @@ def _get_warning_codes(today_str: str) -> dict:
     return warnings
 
 
-def generate_signals(today_str: str = None) -> dict:
+def generate_signals(today_str: str = None, settings: dict = None) -> dict:
+    """生成明日买入信号
+
+    Args:
+        today_str: YYYYMMDD, 默认今天
+        settings: 可选参数覆盖, 格式:
+            {'limit-up': {'top_n': 3, 'min_score': 50},
+             'zhaban': {'top_n': 3, 'min_score': 50, 'sell_n': 5},
+             'trend': {'top_n': 1, 'min_score': 55}}
+            不传则用函数内部默认值
+    """
     if today_str is None:
         today_str = _trading_date().replace('-', '')
 
-    next_td = _next_trading_date(today_str)
-    if next_td is None:
-        return {'date': today_str, 'next_trade_day': None,
-                'signals': [], 'alerts': [], 'summary': '明日非交易日, 无信号'}
-
-    w = datetime.strptime(today_str, '%Y%m%d').weekday()
-    weekday_name = ['周一','周二','周三','周四','周五','周六','周日'][w]
-    signals = []
-    alerts = []
-
-    # ── 涨停信号: 周二/三/五, top-3, 评分38~72 ──
-    try:
-        from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_LIMIT_UP
-        fetcher = SIGNAL_POOL_FETCHERS[TAB_LIMIT_UP]
-        score_fn = SCORE_FUNCS[TAB_LIMIT_UP]
-        score_col = SCORE_COLUMNS[TAB_LIMIT_UP]
+    settings = settings or {}
+    lu_set = settings.get('limit-up', {})
+    zb_set = settings.get('zhaban', {})
+    tr_set = settings.get('trend', {})
+    lu_top_n = lu_set.get('top_n', 3)
+    lu_min = lu_set.get('min_score', 38)
+    zb_top_n = zb_set.get('top_n', 3)
+    zb_min = zb_set.get('min_score', 50)
+    zb_sell_n = zb_set.get('sell_n', 5)
+    tr_top_n = tr_set.get('top_n', 1)
+    tr_min = tr_set.get('min_score', 45)
+    _seller = 'T+5' if zb_sell_n >= 5 else f'T+{zb_sell_n}'
 
         pool = fetcher(today_str)
         if pool is not None and not (hasattr(pool, 'empty') and pool.empty):
@@ -143,7 +149,7 @@ def generate_signals(today_str: str = None) -> dict:
                     alerts.append(f'涨停 — {weekday_name}非周二/三/五, 跳过')
                 else:
                     for rank, (_, row) in enumerate(df.iterrows(), 1):
-                        if rank > 3: break  # top-3
+                        if rank > lu_top_n: break
                         code = str(row.get('代码', '')).strip().zfill(6)
                         name = str(row.get('名称', ''))
                         score = float(row.get(col, 0))
@@ -151,15 +157,15 @@ def generate_signals(today_str: str = None) -> dict:
                         if score > 72:
                             alerts.append(f'涨停 {name}({code}) 评分{score:.0f} — Q4陷阱(>72), 跳过')
                             continue
-                        if score < 38:
-                            alerts.append(f'涨停 {name}({code}) 评分{score:.0f} — 偏低(<38), 跳过')
+                        if score < lu_min:
+                            alerts.append(f'涨停 {name}({code}) 评分{score:.0f} — 偏低(<{lu_min:.0f}), 跳过')
                             continue
 
                         signals.append({
                             'tab': 'limit-up', 'tab_cn': '涨停板', 'strategy': 'A开盘买',
                             'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
                             'signal_date': today_str, 'buy_date': next_td,
-                            'reason': f'周二/三/五+top3+38~72 (rank{rank})',
+                            'reason': f'周二/三/五+top{lu_top_n}+{lu_min:.0f}~72 (rank{rank})',
                         })
     except Exception as e:
         alerts.append(f'涨停扫描: {e}')
@@ -232,20 +238,20 @@ def generate_signals(today_str: str = None) -> dict:
                 df = df.sort_values(col, ascending=False)
 
                 for rank, (_, row) in enumerate(df.iterrows(), 1):
-                    if rank > 3: break  # top-3
+                    if rank > zb_top_n: break
                     code = str(row.get('代码', '')).strip().zfill(6)
                     name = str(row.get('名称', ''))
                     score = float(row.get(col, 0))
 
-                    if score < 50:
-                        alerts.append(f'炸板 {name}({code}) 评分{score:.0f} — 未达50门槛, 跳过')
+                    if score < zb_min:
+                        alerts.append(f'炸板 {name}({code}) 评分{score:.0f} — 未达{zb_min:.0f}门槛, 跳过')
                         continue
 
                     signals.append({
-                        'tab': 'zhaban', 'tab_cn': '炸板反包', 'strategy': 'A开盘买+T+5',
+                        'tab': 'zhaban', 'tab_cn': '炸板反包', 'strategy': f'A开盘买+{_seller}',
                         'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
                         'signal_date': today_str, 'buy_date': next_td,
-                        'reason': f'min50+top{rank} (回测56.2%胜率+15568)',
+                        'reason': f'min{zb_min:.0f}+top{rank} (回测56.2%胜率+15568)',
                     })
     except Exception as e:
         alerts.append(f'炸板扫描: {e}')

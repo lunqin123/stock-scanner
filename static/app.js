@@ -283,7 +283,17 @@ async function loadTomorrowSignals() {
     el.style.display = 'block';
     el.innerHTML = '<div class="loading">⏳ 正在分析明日信号...</div>';
     try {
-        var resp = await fetch('/api/signal/tomorrow');
+        var _sigTopN = _btTopN || 3;
+        var _sigCap = _btCapital || 30000;
+        var url = '/api/signal/tomorrow'
+            + '?zhaban_top_n=' + _btTopN
+            + '&zhaban_min_score=' + _getMinScore('zhaban')
+            + '&zhaban_sell_n=' + _getSellN('zhaban')
+            + '&limit_up_top_n=' + _btTopN
+            + '&limit_up_min_score=' + _getMinScore('limit-up')
+            + '&trend_top_n=' + _btTopN
+            + '&trend_min_score=' + _getMinScore('trend');
+        var resp = await fetch(url);
         var data = await resp.json();
         if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
         var h = '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📡 明日买入信号 (' + data.date + ' ' + data.weekday + ')</div>';
