@@ -1,17 +1,12 @@
 {
-  "version": "2.0.0",
-  "date": "2026-06-25",
+  "version": "2.0.1",
+  "date": "2026-06-29",
   "changes": [
-    "策略理论升级: 主力资金分层生态+板块联动ETF套利机制+盘前多空信号体系",
-    "新增 premarket.py: 盘前多空信号聚合器 (A50+美股+人民币+流动性)",
-    "新增 north_flow_tracker.py: 北向资金日内追踪+做T方向信号+PlanA北向因子",
-    "新增 market_regime.py: 5种市场状态分类器 (北向/游资/机构/量化/防御)",
-    "增强 scanner_factors: detect_market_sentiment融入盘前信号+北向修正",
-    "增强 scanner_factors: get_sector_score增加ETF资金共振 (真金白银验证板块)",
-    "增强 weight_manager: 新增north_flow因子(权重5%), 8因子体系",
-    "增强 scanner_scans: scan_sector增加ETF共振★★★标记",
-    "增强 scanner.py CLI: --premarket/--regime新参数",
-    "增强 app.py: 4个新API端点 + Dashboard集成预开盘/北向/市场状态"
+    "修复: 炸板回测 min_score 80→50, top_n 1→3, 翘板 100→70",
+    "修复: _detect_available_days fallback 5→10 匹配 akshare 窗口",
+    "修复: 炸板评分传入存档 fund_df 避免未来数据偏差",
+    "修复: 炸板 gap_trap 放松至 8% (反包高开非陷阱)",
+    "修复: score_zhaban_data 新增可选 fund_df 参数供回测使用"
   ],
   "history": [
     {
