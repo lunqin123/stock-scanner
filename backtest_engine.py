@@ -714,7 +714,7 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
 # 数据基础: zhaban T+3 12笔 66.7% +16,832; limit-up T+5 3笔 66.7% +11,224 等
 _TAB_BASE_SELL_N = {
     TAB_LIMIT_UP: 5,    # 涨停 T+5 最佳 (强趋势可继续持有)
-    TAB_ZHABAN: 5,      # 炸板 T+5 最佳 (48笔 56.2% +15,568, 需更久时间充分反弹)
+    TAB_ZHABAN: 5,      # 炸板持仓5天最佳 (48笔 56.2% +15,568)
     TAB_TREND: 3,       # 趋势 T+3 最佳 (短线爆发)
     TAB_REVERSAL: 5,    # 反转 T+5 最佳 (修复需时)
     TAB_DTQIAOBAN: 4,   # 跌停翘板 T+4 最佳 (修复需更久)
@@ -1226,9 +1226,9 @@ def run_tab_backtest(
         if d_buy is None or d_buy > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
             continue
-        # 多时点卖出：T+2~T+5 可调
+        # 多时点卖出：sell_n=持仓天数（信号日后 N 交易日卖出）
         d_sell = d_buy
-        for _si in range(max(1, sell_n - 1)):
+        for _si in range(max(1, sell_n)):
             d_sell = _next_trading_date(d_sell)
             if d_sell is None:
                 break

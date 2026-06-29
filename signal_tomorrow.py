@@ -136,7 +136,14 @@ def generate_signals(today_str: str = None, settings: dict = None) -> dict:
     zb_sell_n = zb_set.get('sell_n', 5)
     tr_top_n = tr_set.get('top_n', 1)
     tr_min = tr_set.get('min_score', 45)
-    _seller = 'T+5' if zb_sell_n >= 5 else f'T+{zb_sell_n}'
+    _seller = f'持{zb_sell_n}天'
+
+    # ── 涨停信号: 周二/三/五, top-3, 评分38~72 ──
+    try:
+        from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_LIMIT_UP
+        fetcher = SIGNAL_POOL_FETCHERS[TAB_LIMIT_UP]
+        score_fn = SCORE_FUNCS[TAB_LIMIT_UP]
+        score_col = SCORE_COLUMNS[TAB_LIMIT_UP]
 
         pool = fetcher(today_str)
         if pool is not None and not (hasattr(pool, 'empty') and pool.empty):

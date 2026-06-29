@@ -29,7 +29,7 @@ const _BT_DAYS = 60;
 var _TAB_DEFAULT_SELL_N = {
     'trend': 3,
     'limit-up': 3,
-    'zhaban': 5,   // 炸板反包 T+5 胜率最高 (48笔 56.2% +15,568)
+    'zhaban': 5,   // 炸板持仓5天最佳 (48笔 56.2% +15,568)
     'reversal': 3,
     'dtqiaoban': 3,
 };
