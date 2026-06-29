@@ -103,26 +103,25 @@ def _detect_available_days(tab: str) -> int:
     """扫描本地归档目录, 返回该 tab 实际可用的历史天数。
 
     优先用本地 pickle 数量 (自动增长),
-    无归档时回退到 akshare 保守值 5。
+    无归档时回退到 akshare 可用窗口 (10天, P8 从 5 放宽)。
     """
     try:
         import os as _os
         from archiver import _ARCHIVE_POOL_DIR
         pool_type = _TAB_POOL_TYPE.get(tab, 'limit_up')
         if not _os.path.exists(_ARCHIVE_POOL_DIR):
-            return 5
+            return 10
         # 统计该 pool_type 的 pickle 文件数
         prefix = f'{pool_type}_'
         count = sum(1 for f in _os.listdir(_ARCHIVE_POOL_DIR)
                     if f.startswith(prefix) and f.endswith('.pkl'))
-        return max(5, min(count, 120))  # 至少5天, 最多120天
+        return max(10, min(count, 120))  # 至少10天 (匹配 akshare 窗口), 最多120天
     except Exception:
-        return 5
-# P1.2.1.2: 重要发现 (2026-06-09 23:15 调试得出):
-# akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天), stock_zt_pool_zbgc_em/dtgc_em (~7-10天)
-# 实测 7 天前的 date 参数返回 0 行,不是抛异常而是"静默返回空"
-# → 默认 max_days 全部从 30 改为 5,确保至少有 D/D+1/D+2 三个交易日可交易
-# → 如需更长回测,等 akshare 数据范围扩大或换数据源
+        return 10
+# P1.2.1.2: akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天),
+#             stock_zt_pool_zbgc_em/dtgc_em (~7-10天)
+# P8: fallback 从 5→10, 让有数据的天数充分参与回测。
+#     超出窗口的日期 akshare 返回空 → 自然 skip, 不影响结果质量。
 
 # ═══════════════════════════════════════════
 #  信号池获取函数 (P1.1 骨架: limit-up 和 reversal 可用,其他 TBD 待 P2)
@@ -649,7 +648,10 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
-    """炸板评分: score_zhaban_data + 可调权 (P5)"""
+    """炸板评分: score_zhaban_data + 可调权 (P5)
+
+    P8 修复: 尝试加载历史存档的资金流数据，避免评分使用实时数据产生未来偏差。
+    """
     if df is None or df.empty:
         return None
     df = filter_non_main_board(df)
@@ -668,7 +670,16 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
         w = _load_tab_weights('zhaban')
     except Exception:
         w = None
-    return score_zhaban_data(df, date_str, weights=w)
+    # 尝试加载存档资金流数据（回测时信号日的历史数据）
+    fund_df = None
+    try:
+        from archiver import load_scan_inputs
+        archived = load_scan_inputs(date_str)
+        if archived is not None:
+            fund_df = archived.get('fund_df')
+    except Exception:
+        pass
+    return score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
 
 
 def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
@@ -1365,16 +1376,18 @@ def run_tab_backtest(
 
                 signal_close = signal_ohlcv['close']
                 gap_pct = round((buy_ohlcv['open'] / signal_close - 1) * 100, 1)
-                # 买入过滤: 一字板排除; 跳空>5%高开出货陷阱
+                # 买入过滤: 一字板排除; 跳空高开出货陷阱
                 # Tier1.D: stock_daily fallback 用归一化价格 (基准100), 跳空不可信 → 跳过该过滤
                 is_normalized = signal_ohlcv.get('_normalized', False)
                 limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)
-                gap_trap = (not is_normalized) and (gap_pct > 5.0)
+                # 炸板次日跳空高开>8%才视为陷阱(可能是反包起跳)，其他tab >5%视为陷阱
+                _gap_trap_threshold = 8.0 if tab == TAB_ZHABAN else 5.0
+                gap_trap = (not is_normalized) and (gap_pct > _gap_trap_threshold)
                 buyable = not limit_open and not gap_trap
                 if not buyable:
                     unbuyable_count += 1
                     if gap_trap:
-                        skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>5%高开陷阱'})
+                        skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>{_gap_trap_threshold:.0f}%高开陷阱'})
 
                 # ── P2.0: SmartExit 智能 T+n 决策 ──
                 smart_exit_info = None

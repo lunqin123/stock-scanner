@@ -22,8 +22,13 @@ from scanner_data import fetch_fund_flow_data
 #  炸板反包评分 (5 因子可调权)
 # ═══════════════════════════════════════════
 
-def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None) -> pd.DataFrame:
-    """炸板反包评分 (P5: 5因子可调权)。"""
+def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
+                      fund_df: pd.DataFrame = None) -> pd.DataFrame:
+    """炸板反包评分 (P5: 5因子可调权)。
+
+    支持传入历史存档的 fund_df（回测引擎从 archive 加载），
+    避免回测时使用实时资金流数据产生未来偏差。
+    """
     df = df.copy()
 
     defaults = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
@@ -50,7 +55,11 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None) ->
     f_seal = (seal_scores / 20).clip(0, 1)
 
     # 2. 资金承接 (0-20)
-    fund_df_zb, _ = fetch_fund_flow_data()
+    # 优先用传入的历史 fund_df（回测时由引擎加载存档），避免未来数据偏差
+    if fund_df is not None:
+        fund_df_zb = fund_df
+    else:
+        fund_df_zb, _ = fetch_fund_flow_data()
     raw_money = pd.Series(0.0, index=df.index)
     if fund_df_zb is not None:
         money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df_zb)
