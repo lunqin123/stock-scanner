@@ -714,7 +714,7 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
 # 数据基础: zhaban T+3 12笔 66.7% +16,832; limit-up T+5 3笔 66.7% +11,224 等
 _TAB_BASE_SELL_N = {
     TAB_LIMIT_UP: 5,    # 涨停 T+5 最佳 (强趋势可继续持有)
-    TAB_ZHABAN: 3,      # 炸板 T+3 最佳 (等下一次启动)
+    TAB_ZHABAN: 5,      # 炸板 T+5 最佳 (48笔 56.2% +15,568, 需更久时间充分反弹)
     TAB_TREND: 3,       # 趋势 T+3 最佳 (短线爆发)
     TAB_REVERSAL: 5,    # 反转 T+5 最佳 (修复需时)
     TAB_DTQIAOBAN: 4,   # 跌停翘板 T+4 最佳 (修复需更久)

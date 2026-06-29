@@ -314,12 +314,12 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
         try:
             from backtest_engine import run_tab_backtest
             tab_configs = [
-                ('zhaban', 50, '炸板', 3), ('dtqiaoban', 70, '翘板', 3),
-                ('limit-up', 80, '涨停', 1), ('reversal', 0, '反转', 1),
+                ('zhaban', 50, '炸板', 3, 5), ('dtqiaoban', 70, '翘板', 3, 3),
+                ('limit-up', 80, '涨停', 1, 3), ('reversal', 0, '反转', 1, 3),
             ]
-            for tab, ms, label, tn in tab_configs:
+            for tab, ms, label, tn, sn in tab_configs:
                 res = run_tab_backtest(tab=tab, max_days=60, top_n=tn, min_score=ms,
-                                       capital=30000, use_cache=False)
+                                       sell_n=sn, capital=30000, use_cache=False)
                 trades = res.get('comparison', {}).get('open_buy', {}).get('trades', [])
                 results.append({
                     'tab': tab, 'status': 'done',
