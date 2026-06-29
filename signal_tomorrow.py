@@ -217,7 +217,7 @@ def generate_signals(today_str: str = None) -> dict:
     except Exception as e:
         alerts.append(f'趋势扫描: {e}')
 
-    # ── v2.0 炸板信号: 任意交易日, top-1, 评分≥80 ──
+    # ── P8 炸板信号: 任意交易日, top-3, 评分≥50, T+5持仓 ──
     try:
         from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_ZHABAN
         fetcher = SIGNAL_POOL_FETCHERS[TAB_ZHABAN]
@@ -232,20 +232,20 @@ def generate_signals(today_str: str = None) -> dict:
                 df = df.sort_values(col, ascending=False)
 
                 for rank, (_, row) in enumerate(df.iterrows(), 1):
-                    if rank > 1: break  # top-1
+                    if rank > 3: break  # top-3
                     code = str(row.get('代码', '')).strip().zfill(6)
                     name = str(row.get('名称', ''))
                     score = float(row.get(col, 0))
 
-                    if score < 80:
-                        alerts.append(f'炸板 {name}({code}) 评分{score:.0f} — 未达80门槛, 跳过')
-                        break
+                    if score < 50:
+                        alerts.append(f'炸板 {name}({code}) 评分{score:.0f} — 未达50门槛, 跳过')
+                        continue
 
                     signals.append({
-                        'tab': 'zhaban', 'tab_cn': '炸板反包', 'strategy': 'B竞价确认',
+                        'tab': 'zhaban', 'tab_cn': '炸板反包', 'strategy': 'A开盘买+T+5',
                         'code': code, 'name': name, 'score': round(score, 1), 'rank': rank,
                         'signal_date': today_str, 'buy_date': next_td,
-                        'reason': f'min80+rank1 (历史EV+5.52%)',
+                        'reason': f'min50+top{rank} (回测56.2%胜率+15568)',
                     })
     except Exception as e:
         alerts.append(f'炸板扫描: {e}')
