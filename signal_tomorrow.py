@@ -138,6 +138,16 @@ def generate_signals(today_str: str = None, settings: dict = None) -> dict:
     tr_min = tr_set.get('min_score', 45)
     _seller = f'持{zb_sell_n}天'
 
+    next_td = _next_trading_date(today_str)
+    if next_td is None:
+        return {'date': today_str, 'next_trade_day': None,
+                'signals': [], 'alerts': [], 'summary': '明日非交易日, 无信号'}
+
+    w = datetime.strptime(today_str, '%Y%m%d').weekday()
+    weekday_name = ['周一','周二','周三','周四','周五','周六','周日'][w]
+    signals = []
+    alerts = []
+
     # ── 涨停信号: 周二/三/五, top-3, 评分38~72 ──
     try:
         from backtest_engine import SIGNAL_POOL_FETCHERS, SCORE_FUNCS, SCORE_COLUMNS, TAB_LIMIT_UP
