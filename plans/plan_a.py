@@ -189,9 +189,13 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
 
     if weights is None:
         weights = weight_manager.load_weights()
-    sector_merged = (factors['sector_res'] + factors['sector_mom']) / 2.0
+    # P1-1 修复: sector 因子直接用 sector_mom(superset),不再平均 sector_res
+    # 原代码 (sector_res + sector_mom)/2.0 让 sector_mom 满 15 分被压到 11.5,
+    # 权重 17 实际只发挥 13 分的威力(76.5%)。
+    # sector_mom 已经含 sector_res 的所有信息(板块涨停数)+资金一致性+ETF共振
+    sector_scores = factors['sector_mom']
     base = weight_manager.apply_weights(
-        factors['seal'], money, sector_merged,
+        factors['seal'], money, sector_scores,
         factors['tech'], h_scores,
         sentiment_series,
         stock_sentiment_scores=factors['stock_sentiment'],
@@ -201,7 +205,10 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
 
     from scanner import score_danger_signals
     danger_penalty, danger_flags = score_danger_signals(filtered, factors['raw_money'], today_str)
-    total = (base + danger_penalty).clip(lower=0)
+    # P1-2 修复: 危险信号改乘性惩罚,避免加性 clip -30 导致烂票均匀对待、失去区分度
+    # penalty 范围 -30~0 → factor 范围 0.7~1.0(最多扣 30%,保留 70% 底)
+    danger_factor = 1.0 + danger_penalty / 100.0  # -30→0.7, -15→0.85, -5→0.95, 0→1.0
+    total = (base * danger_factor).clip(lower=0)
 
     # 后台回测
     try:

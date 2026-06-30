@@ -816,25 +816,24 @@ def detect_market_sentiment(today_str: str):
         except Exception as e:
             print(f"  [情绪] 盘前信号获取异常: {e}", file=sys.stderr)
 
-        # ── 6. 北向资金修正 (v2.0新增) ──
-        north_bonus = 0
+        # ── 6. 北向资金修正 (P1-3 移除,改为加权因子) ──
+        # 原代码在此加 north_bonus (±2),但 north_flow 已作为独立加权因子(5% 权重)
+        # 在 plan_a 里参与评分——两处计费 → 移除 sentiment 里的北向修正
+        # 保留 north_detail 给前端展示累计净流入/方向(用于决策辅助)
         north_detail = {}
         try:
             from north_flow_tracker import get_north_flow_signal
             nf = get_north_flow_signal()
-            if nf and nf.get('sentiment_bonus') is not None:
-                north_bonus = nf['sentiment_bonus']  # -2~+2
+            if nf:
                 north_detail = {
-                    'north_direction': nf['direction'],
-                    'north_cumulative_net': nf['cumulative_net'],
-                    'north_sentiment_bonus': north_bonus,
+                    'north_direction': nf.get('direction'),
+                    'north_cumulative_net': nf.get('cumulative_net'),
+                    'note': '已迁出 sentiment,改走 north_flow 加权因子(权重 5%)',
                 }
-                if abs(north_bonus) > 0.5:
-                    print(f"  [情绪] 北向资金修正: {north_bonus:+.1f} ({nf['direction']}, 累计{nf['cumulative_net']:+.1f}亿)", file=sys.stderr)
         except Exception as e:
-            print(f"  [情绪] 北向信号获取异常: {e}", file=sys.stderr)
+            pass  # 北向数据获取失败不影响 sentiment 评分
 
-        score = score + premarket_bonus + north_bonus
+        score = score + premarket_bonus
         score = max(0, min(10, score))
 
         # 最终等级
