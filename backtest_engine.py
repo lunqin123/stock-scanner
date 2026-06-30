@@ -1226,9 +1226,12 @@ def run_tab_backtest(
         if d_buy is None or d_buy > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
             continue
-        # 多时点卖出：sell_n=持仓天数（信号日后 N 交易日卖出）
+        # 多时点卖出：sell_n=T+N 卖出(N 是信号日后的偏移交易日数)
+        # 例: sell_n=2 → d_buy 后 1 个交易日(T+2) ; sell_n=3 → d_buy 后 2 个交易日(T+3)
+        # BUG-8 修复: 之前 range(sell_n) 实际算到 T+(N+1), 导致默认 sell_n=3 的回测
+        # 把边界最后几天的信号全部 "卖出日超出区间" 跳过, 用户看到"没最新交易"
         d_sell = d_buy
-        for _si in range(max(1, sell_n)):
+        for _si in range(max(0, sell_n - 1)):
             d_sell = _next_trading_date(d_sell)
             if d_sell is None:
                 break
