@@ -1516,7 +1516,16 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
     if not refresh:
         cached = daily_get("dashboard_latest")
         if cached:
-            return cached
+            # BUG 修复: 旧版 _cache_dashboard_snapshot 只缓存 5 字段, 导致前端缺
+            # premarket/north_flow/market_fund_flow/regime/zhaban/dieting/avg_premium 等
+            # 检测关键字段, 缺则强制 refresh 一次 (避免用户看到"—"无数据)
+            _REQUIRED_FIELDS = ('sentiment', 'limit_up_count', 'hot_sectors',
+                                'premarket', 'north_flow', 'market_fund_flow', 'regime',
+                                'zhaban_count', 'dieting_count')
+            if all(cached.get(k) is not None for k in _REQUIRED_FIELDS):
+                return cached
+            # 缓存不完整, fallthrough 走实时拉取
+            print(f"  [dashboard] 缓存字段不全, 自动 refresh (缺: {[k for k in _REQUIRED_FIELDS if cached.get(k) is None]})", file=sys.stderr)
 
     import akshare as ak
     import pandas as pd
@@ -2453,21 +2462,37 @@ def _run_close_scan(principal=20000):
 
 
 def _cache_dashboard_snapshot(today_str, sentiment_score, sentiment_level, limit_up_count, df):
-    """收盘时缓存市场概览快照（force 绕过冻结）"""
-    import pandas as pd
-    result = {"ok": True, "date": today_str, "fetched_at": _fetched_at(),
-              "sentiment": {"score": sentiment_score, "level": sentiment_level},
-              "limit_up_count": limit_up_count}
-    if df is not None and not df.empty:
-        ind_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
-        if ind_col:
-            top5 = df[ind_col].value_counts().head(5)
-            result["hot_sectors"] = [{"name": str(n), "count": int(c), "url": f"https://www.10jqka.com.cn/#/search/{str(n)}"}
-                                     for n, c in top5.items()]
+    """收盘时缓存市场概览快照（force 绕过冻结）
+
+    修复: 原代码只缓存 5 个字段 (ok/date/sentiment/limit_up_count/hot_sectors),
+    但前端 dashboard.js 用 11 个字段 — 缺 zhaban_count/dieting_count/prev_limit_count/
+    avg_premium/promotion_rate/premarket/north_flow/market_fund_flow/regime,
+    导致前端"市场概览"显示"—"或"未知", 用户体验为"无数据"。
+
+    新方案: 直接调 api_dashboard(refresh=True) 复用完整拉取逻辑, 缓存 11 字段完整版。
+    收盘时只跑一次 (后台线程), 多几秒可接受。
+    """
+    # 复用 api_dashboard 的完整拉取逻辑, 缓存到同一个 key
+    # refresh=True 绕过 daily_get 短路, 强制拉取最新
+    try:
+        result = api_dashboard(refresh=True)
+    except Exception as e:
+        # 兜底: 如果 api_dashboard 失败, 用旧逻辑缓存 5 字段 (避免 cache 写入失败)
+        import pandas as pd
+        result = {"ok": True, "date": today_str, "fetched_at": _fetched_at(),
+                  "sentiment": {"score": sentiment_score, "level": sentiment_level},
+                  "limit_up_count": limit_up_count}
+        if df is not None and not df.empty:
+            ind_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+            if ind_col:
+                top5 = df[ind_col].value_counts().head(5)
+                result["hot_sectors"] = [{"name": str(n), "count": int(c), "url": f"https://www.10jqka.com.cn/#/search/{str(n)}"}
+                                         for n, c in top5.items()]
+            else:
+                result["hot_sectors"] = []
         else:
             result["hot_sectors"] = []
-    else:
-        result["hot_sectors"] = []
+        print(f"  [dashboard snapshot] api_dashboard 失败, 回退 5 字段版: {e}", file=sys.stderr)
     daily_set("dashboard_latest", result, force=True)
 
 
