@@ -13,6 +13,25 @@ from datetime import date, datetime, timedelta
 
 import akshare as ak
 import numpy as np
+
+
+# BUG-1 修复: 因子字段名 (来自归档 stocks) → weight_manager 权重 key 的显式映射
+# 原代码 fkey.replace('_score', '') 会把 'principal_score' → 'principal',
+# 但 weight_manager.BACKTEST_FACTORS 用 'principal_score', 导致该因子无法被调权
+# 此映射保证字段名与权重 key 一致, 8 因子全部能进入 daily_adjust_weights
+_FKEY_TO_WEIGHT_KEY = {
+    'seal_score': 'seal',
+    'money_score': 'money',
+    'sector_score': 'sector',
+    'tech_score': 'tech',
+    'history_score': 'history',
+    'stock_sentiment_score': 'stock_sentiment',
+    'principal_score': 'principal_score',  # 不剥 _score, 保持权重 key 原样
+    'north_flow_score': 'north_flow',
+    'margin_score': 'margin_ratio',
+    'inst_rating_score': 'inst_rating',
+    'limit_reason_score': 'limit_reason',
+}
 import pandas as pd
 
 from scanner_utils import get_market_status, TOP_N
@@ -341,7 +360,12 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
                             continue
                         c = scores_arr.corr(returns_arr)
                         if not pd.isna(c):
-                            plan_fc[fkey.replace('_score', '')] = round(float(c), 4)
+                            # BUG-1 修复: 之前用 fkey.replace('_score', '') 会把
+                            # 'principal_score' → 'principal', 但 weight_manager.BACKTEST_FACTORS
+                            # 用 'principal_score' 作为 key, 导致 principal_score 因子
+                            # 永远无法被 daily_adjust_weights 识别并调权
+                            # 现在用显式映射, 保持与 weight_manager 因子 key 一致
+                            plan_fc[_FKEY_TO_WEIGHT_KEY[fkey]] = round(float(c), 4)
                     if plan_fc:
                         archive_used = True  # 仅在确实产出有效IC后标记
                         lines.append(f" [Plan {plan_name}] 归档验证 | {len(stocks)}只")
