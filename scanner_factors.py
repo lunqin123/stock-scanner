@@ -361,33 +361,43 @@ def score_tech_form(df: pd.DataFrame) -> pd.Series:
 
 def score_stock_sentiment(df: pd.DataFrame, money_scores: pd.Series,
                           buyability_scores: pd.Series) -> pd.Series:
-    """个股情绪 0-10: 资金态度 + 确定性 + 板块地位。每只票独立评分。"""
-    scores = pd.Series(5.0, index=df.index)
+    """个股情绪 0-10: 仅连板位置 + 流通市值分档 (P0-1 修复后)。
 
-    # 1. 资金态度 (0-3): 主力净流入越大→情绪越高
-    scores += (money_scores / 20.0).clip(0, 1) * 3
+    P0-1 改动 (消除 double-dipping):
+      - 移除"资金态度"(原 L367-368): money_scores/20*3 与 money 因子重复计费
+      - 移除"确定性"(原 L370-371): buyability 已被 can_buy_filter 用作过滤器,不应再进入加权
+      - 移除"板块领先度"(原 L373-390): 与 sector 因子的板块共振高度相关
 
-    # 2. 确定性 (0-3): 首板+封板时机→稳定性
-    scores += (buyability_scores / 12.0) * 3
+    因子边界 (与其他8因子正交):
+      - seal:  封板时间+封单+炸板 → 不含连板数
+      - money: 主力净流入 → 已独立计费
+      - sector: 板块涨停数+资金一致性+ETF共振 → 已算板块联动
+      - tech: 换手率博弈区间 → 不含连板/市值
+      - history: 历史涨停频率(全局,跨日) → 当日连板/市值是横截面新信号
 
-    # 3. 板块领先度 (0-2): 同板块最早封板的加分
-    industry_col = '所属行业' if '所属行业' in df.columns else None
-    if not industry_col and len(df.columns) > 15:
-        industry_col = df.columns[15]
-    if industry_col:
-        for ind in df[industry_col].unique():
-            mask = df[industry_col] == ind
-            group = df[mask]
-            seal_times = group['首次封板时间'] if '首次封板时间' in df.columns else group.iloc[:, 11]
-            times = seal_times.astype(str).str.strip()
-            # 最早封板的2只加分
-            sorted_idx = times.sort_values().index
-            if len(sorted_idx) >= 1:
-                scores.loc[sorted_idx[0]] += 2.0
-            if len(sorted_idx) >= 2:
-                scores.loc[sorted_idx[1]] += 1.0
-            if len(sorted_idx) >= 3:
-                scores.loc[sorted_idx[2]] += 0.5
+    新增维度:
+      - 连板位置 (0-7): 唯一反映连板高度的因子 — seal/money/sector/tech 均不含
+      - 流通市值分档 (0-3): 中小市值高弹性 — 与 principal 的"可买手数/流动性"角度不同
+    """
+    scores = pd.Series(0.0, index=df.index)
+
+    # 1. 连板位置 (0-7): 反映市场地位
+    lb_col = '连板数' if '连板数' in df.columns else None
+    if lb_col:
+        lb = df[lb_col].fillna(1).astype(float).clip(1, 7)
+        scores += lb
+
+    # 2. 流通市值分档 (0-3): 中小市值弹性大
+    # 注: principal 用市值算"持仓可买手数",这里用市值算"价格弹性",角度不同不重复
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+    if cap_col:
+        cap = df[cap_col].fillna(50e8).astype(float)
+        # 阶梯: <30亿=3, 30-80=2, 80-200=1, >200=0
+        scores += np.select(
+            [cap < 30e8, cap < 80e8, cap < 200e8, cap >= 200e8],
+            [3.0, 2.0, 1.0, 0.0],
+            default=1.0
+        )
 
     return scores.clip(0, 10)
 
@@ -435,7 +445,7 @@ def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
             penalty[idx] -= 12
             flags[idx].append("⚠️ 三无: 午后+无量+无板块")
 
-        # 规则3: 高位首板 - 上交易日还是连板今天首板（高标反抽特征）(-8)
+        # 规则3+7: 涨停统计相关危险信号 (P0-2 修复: 合并解析zt_stat, 消除parts作用域bug)
         zt_stat = ''
         for col in df.columns:
             if '涨停' in str(col) and '统计' in str(col):
@@ -446,14 +456,19 @@ def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
                 try:
                     recent_days = float(parts[1])
                     recent_times = float(parts[0])
-                    # 最近5天涨停≥3次(=曾连板)+今天首板→高位反抽信号
+                    # 规则3a: 最近5天涨停≥3次(=曾连板)+今天首板→高位反抽信号 (-10)
                     if recent_days <= 5 and recent_times >= 3 and lb == 1:
                         penalty[idx] -= 10
                         flags[idx].append("⚠️ 高位首板反抽")
-                    # 30天内涨停≥5次→老庄股/妖股活跃
+                    # 规则3b: 30天内涨停≥5次→老庄股/妖股活跃 (-5)
                     if recent_days <= 30 and recent_times >= 5:
                         penalty[idx] -= 5
                         flags[idx].append("⚠️ 高频涨停(庄股疑)")
+                    # 规则7: 30天内涨停<2次→股性差/超跌反弹 (-5)
+                    # 原代码此处 parts 未定义(NameError被except吞掉,实际从不触发),已修复
+                    if recent_days >= 10 and recent_times < 2:
+                        penalty[idx] -= 5
+                        flags[idx].append("⚠️ 股性差/超跌反弹")
                 except: pass
 
         # 规则4: 换手过低控盘 - 换手<3%且无板块效应 (-8)
@@ -470,14 +485,6 @@ def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
         if 0 <= net < 500e4:
             penalty[idx] -= 5
             flags[idx].append("⚠️ 资金极弱")
-
-        # 规则7: 股性差/超跌反弹 - 利用已解析的zt_stat (-5)
-        if zt_stat:
-            try:
-                if float(parts[1]) >= 10 and float(parts[0]) < 2:
-                    penalty[idx] -= 5
-                    flags[idx].append("⚠️ 股性差/超跌反弹")
-            except: pass
 
     return penalty.clip(lower=-30), flags
 

@@ -126,11 +126,13 @@ def compute_factors(filtered, fund_df, principal):
     buyability = score_buyability(filtered)
     stock_sent = score_stock_sentiment(filtered, money, buyability)
     # 舆情分数并入个股情绪 (30%权重，非阻塞)
+    # P0-3 修复: 舆情缺失时填 5.0(中性分),而非 fillna(stock_sent) — 后者导致加权完全失效
+    # (用自身值填充再加权 = (x*0.7 + x*0.3) = x, 舆情分数实质未生效)
     try:
         import stock_community
         comm_scores = stock_community.score_community(filtered)
         if comm_scores is not None and not comm_scores.empty:
-            comm_aligned = comm_scores.reindex(stock_sent.index).fillna(stock_sent)
+            comm_aligned = comm_scores.reindex(stock_sent.index).fillna(5.0)
             stock_sent = (stock_sent * 0.7 + comm_aligned / 7.0 * 10.0 * 0.3).clip(0, 10)
     except Exception as e:
         print(f"  [舆情] 不可用: {e}", file=sys.stderr)  # 舆情不可用时不改变 stock_sent
