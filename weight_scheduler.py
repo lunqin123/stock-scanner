@@ -20,7 +20,7 @@
 - 调权期间用户拉数据 → 加锁失败, 立即返回, 用旧权重 (调权是"best effort", 不阻塞用户)
 
 **数据流**:
-- 阶段 1 (plan_a): 跑 5 天回测 → 计算 factor × 收益相关性 → save_daily_correlations → daily_adjust_weights
+- 阶段 1 (plan_a): 跑 20 天回测 (P2-1) → 计算 factor × 收益相关性 → save_daily_correlations → daily_adjust_weights (P2-2: ICIR + EMA)
 - 阶段 2 (trend): 从 archive.db daily_stocks 读 N 天记录 → 调 adjust_trend_weights_from_backtest
 - 阶段 3 (all tabs): 盘后预缓存炸板/翘板/涨停/反转回测 + 调 tab 权重
 """
@@ -120,7 +120,7 @@ def _is_after_hours_safe() -> bool:
 
 # ─── 阶段 1: plan_a 调权 ───
 def _adjust_plan_a() -> dict:
-    """跑最近 5 天回测 → 计算 factor × 收益相关性 → 调 plan_a 权重"""
+    """跑最近 20 天回测 → 计算 factor × 收益相关性 → 调 plan_a 权重"""
     from weight_manager import (
         daily_adjust_weights, save_daily_correlations, load_weights,
         DEFAULT_WEIGHTS, DAILY_LR, ROLLING_WINDOW,
@@ -132,21 +132,22 @@ def _adjust_plan_a() -> dict:
 
     print(f"  [weight_scheduler] 阶段1: plan_a 调权 (LR={DAILY_LR}, window={ROLLING_WINDOW})", file=sys.stderr)
     try:
-        # 跑 5 天回测, 拿每笔交易 + 因子分
+        # 跑 20 天回测 (P2-1: 5 → 20), 拿每笔交易 + 因子分
         # 复用 _run_t1_backtest_cached 不行 (那是 limit-up only), 用 backtest_engine 直接跑
+        from weight_manager import BACKTEST_FACTORS
         result = run_tab_backtest(
-            tab='limit-up', max_days=5, top_n=3, capital=20000, use_cache=False
+            tab='limit-up', max_days=20, top_n=3, capital=20000, use_cache=False
         )
         trades = result.get('trades', [])
         if len(trades) < 3:
             return {'tab': 'plan_a', 'status': 'skip', 'msg': f'交易数 {len(trades)} < 3, 跳过'}
 
-        # 计算每个因子 (seal/tech/sector/history/money) 与 net_ret_pct 的相关性
+        # 计算每个因子 (P2-3: 8 因子全部纳入) 与 net_ret_pct 的相关性
         import pandas as pd
         df_trades = pd.DataFrame(trades)
         # 因子分列: backtest_engine 当前未把每笔的因子分保存到 trades (只存了 score 加权总分)
         # 用 score 总体作为代理: score 越高 → 整体评分体系越有效, 用 score 与 net_ret_pct 的相关性
-        # 喂给 daily_adjust_weights 的 4 个 key 全部填同一个相关性 (粗调, 但能用)
+        # 喂给 daily_adjust_weights 的 8 个 key 全部填同一个相关性 (粗调, 但能用)
         if 'score' not in df_trades.columns or 'net_ret_pct' not in df_trades.columns:
             return {'tab': 'plan_a', 'status': 'skip', 'msg': 'trades 缺少 score/net_ret_pct, 跳过'}
         if len(set(df_trades['score'])) <= 1:
@@ -154,8 +155,8 @@ def _adjust_plan_a() -> dict:
         overall_corr = df_trades['score'].corr(df_trades['net_ret_pct'])
         if pd.isna(overall_corr):
             return {'tab': 'plan_a', 'status': 'skip', 'msg': '相关性为 NaN, 跳过'}
-        # 同一相关性广播到 4 个 plan_a 因子 (daily_adjust_weights 会按权重份额分配调整)
-        corrs = {f: float(overall_corr) for f in ('seal', 'tech', 'sector', 'history')}
+        # 同一相关性广播到 8 个 plan_a 因子 (P2-3: BACKTEST_FACTORS 现在包含全部 8 个加权因子)
+        corrs = {f: float(overall_corr) for f in BACKTEST_FACTORS}
 
         if not corrs:
             return {'tab': 'plan_a', 'status': 'skip', 'msg': '无可用因子列, 跳过'}

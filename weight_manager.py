@@ -32,8 +32,11 @@ TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 105
 # 乘法系数 [×0.85~1.15], sector_res/mom 已合并到 sector, buyability 降为纯过滤器)。
 # 历史: 22+6+12+12+4+9+6=71  →  v1.24.1: 31+8+17+17+6+13+8=100 →  v2.0: +north_flow=5, seal 28
 
-# 回测中可调权的因子
-BACKTEST_FACTORS = ['seal', 'tech', 'sector', 'history']
+# 回测中可调权的因子 (P2-3: 扩展到 8 个, 涵盖全部 Plan A 实际加权因子)
+BACKTEST_FACTORS = [
+    'seal', 'money', 'sector', 'tech', 'history',
+    'stock_sentiment', 'principal_score', 'north_flow',
+]
 
 # Plan B 可调权因子 (所有16个因子都参与IC检验, 弱因子自动归零)
 BACKTEST_FACTORS_B = [
@@ -44,6 +47,8 @@ BACKTEST_FACTORS_B = [
 ]
 
 # IC 阈值: |IC| < 此值 → 权重归零 (统计噪声)
+# 5 天窗口下 IC 标准误 ≈ 0.045, 20 天 ≈ 0.022(假设 IC std=0.1)
+# 阈值 0.02 在 5 天窗口下基本不触发, 20 天窗口下有效剔除噪声因子
 IC_NOISE_THRESHOLD = 0.02
 
 # delta 调权的最小缩放基准: 默认=0 的死因子也能以合理步长移动
@@ -163,8 +168,10 @@ _ROLLING_FILE = os.path.join(
 )
 
 # 每日调权参数
+# P2-1: ROLLING_WINDOW 5 → 20 (5 天 IC 标准误 ≈ 0.045, 20 天 ≈ 0.022)
+# 20 天窗口让 |IC| < 0.02 的噪声剔除阈值真正起作用
 DAILY_LR = 0.1        # 每日学习率（配合30天回测数据量, 加速IC收敛）
-ROLLING_WINDOW = 5    # 滚动窗口：取最近N天相关性均值
+ROLLING_WINDOW = 20   # 滚动窗口：取最近N天相关性均值
 
 
 _ROLLING_LOCK = threading.Lock()
@@ -295,15 +302,20 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
             hi = defaults[f] * 1.5
             new_weights[f] = max(0.0, min(hi, new_weights[f]))
     else:
-        # Plan A: Delta 驱动 (signed IC, 允许负权)
+        # Plan A: ICIR 加权 + EMA 平滑 (P2-2 修复)
+        # 原 delta 驱动允许负权但只用 signed IC, 易被单日噪声主导;
+        # 现改用 ICIR (|IC|/sigma), 配合 20 天窗口, 噪声因子自动归零
+        # EMA 平滑 (50% 当前 + 50% ICIR 目标) 防止权重日间大幅波动
+        _EMA_SMOOTH = 0.5
+        total_icir = sum(ic_stats[f]['icir'] for f in active_factors) or 1.0
         for f in active_factors:
-            d_scale = max(defaults[f], MIN_DELTA_SCALE)
-            delta = ic_stats[f]['ic_mean'] * DAILY_LR * d_scale
-            new_val = current_weights.get(f, defaults[f]) + delta
-            lo = -d_scale          # 允许负权, 反向指标
-            hi = d_scale * 1.5     # 上限 1.5×
-            new_weights[f] = round(max(lo, min(hi, new_val)), 1)
-        # 噪声因子: 保持当前值 (不归零, 也不回到默认)
+            icir_target = defaults[f] * ic_stats[f]['icir'] / total_icir
+            cur = current_weights.get(f, defaults[f])
+            blended = cur * (1 - _EMA_SMOOTH) + icir_target * _EMA_SMOOTH
+            # 钳制 [0, 1.5×default] — Plan A 不允许负权, 与 Plan B 一致
+            hi = defaults[f] * 1.5
+            new_weights[f] = round(max(0.0, min(hi, blended)), 1)
+        # 噪声因子: 保持当前值 (不归零, 也不回到默认) — Plan A 兼容旧行为
         for f in dropped:
             if f in current_weights:
                 new_weights[f] = current_weights[f]
@@ -315,7 +327,7 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
             if new_weights.get(f, 0) > 0:
                 save_data[f] = new_weights[f]
         else:
-            # Plan A: 保存非零值或当前权重中存在的值
+            # Plan A: 保存非零值或当前权重中存在的值 (P2-3: 8 因子全部可调权)
             v = new_weights.get(f, 0)
             if v != 0 or f in current_weights:
                 save_data[f] = v
@@ -323,18 +335,22 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
 
     # 摘要
     pname = f"Plan {plan_name}"
-    adj_type = 'ICIR调权' if plan_name.upper() == 'B' else 'Delta调权'
+    # P2-2: Plan A 改 ICIR+EMA 后, summary 字段同步
+    if plan_name.upper() == 'B':
+        adj_type = 'ICIR调权'
+    else:
+        adj_type = 'ICIR+EMA调权'  # P2-2
     lines = [f"  {pname} {adj_type} ({len(recent)}天) | 有效{len(active_factors)}/总计{len(valid_factors)}"]
     for f in valid_factors:
         s = ic_stats[f]
         status = "+" if f in active_factors else "x"
+        cur = current_weights.get(f, defaults.get(f, 0))
+        new_v = new_weights.get(f, 0)
         if plan_name.upper() == 'B':
-            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} sigma={s['ic_std']:.3f} ICIR={s['icir']:.1f}")
+            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} sigma={s['ic_std']:.3f} ICIR={s['icir']:.1f} cur={cur:.1f} → {new_v:.1f}")
         else:
-            d_scale = max(defaults.get(f, 1), MIN_DELTA_SCALE)
-            delta = s['ic_mean'] * DAILY_LR * d_scale
-            cur = current_weights.get(f, defaults.get(f, 0))
-            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} ICIR={s['icir']:.1f} cur={cur:.1f} delta={delta:+.3f}")
+            # Plan A: ICIR + EMA (50% 当前 + 50% ICIR target)
+            lines.append(f"    {status} {f}: IC={s['ic_mean']:+.3f} ICIR={s['icir']:.1f} cur={cur:.1f} → {new_v:.1f}")
     if dropped:
         lines.append(f"  噪声剔除(|IC|<{IC_NOISE_THRESHOLD}): {', '.join(dropped)}")
     return new_weights, '\n'.join(lines)
