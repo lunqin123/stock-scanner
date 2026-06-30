@@ -41,7 +41,13 @@ def put(name, data):
 # ─── 持久化缓存 (无 TTL, 用于历史 OHLCV 等不变数据) ───
 
 def persistent_get(name):
-    """读取持久化缓存 (无 TTL 限制, 文件存在即有效)"""
+    """读取持久化缓存 (无 TTL 限制, 文件存在即有效)
+
+    BUG-7 修复: 升级 _CACHE_VER 后, 所有 _v8.pkl 历史归档找不到 _v9.pkl
+    (例: engine_limit_up_20260629_v8.pkl 在 8→9 升级后失效)
+    加 fallback: 找不到 v_current 时, 扫描 _v{N}.pkl (N < current) 找最新版本
+    并自动迁移 (rename) 到 v_current, 一次性解决历史兼容问题
+    """
     path = os.path.join(_CACHE_DIR, f"{name}_v{_CACHE_VER}.pkl")
     try:
         if os.path.exists(path):
@@ -49,7 +55,40 @@ def persistent_get(name):
                 return _pickle.load(f)
     except Exception as e:
         print(f"  [cache persistent_get] 读取失败 ({name}): {e}", file=sys.stderr)
-    return None
+        return None
+    # BUG-7 fallback: 升级版本后, 旧 _v{N}.pkl 找不到 → 自动迁移
+    try:
+        if not os.path.isdir(_CACHE_DIR):
+            return None
+        prefix = f"{name}_v"
+        candidates = []
+        for fname in os.listdir(_CACHE_DIR):
+            if fname.startswith(prefix) and fname.endswith('.pkl'):
+                # 提取版本号
+                try:
+                    ver = int(fname[len(prefix):-4])
+                    if ver < _CACHE_VER:
+                        candidates.append((ver, fname))
+                except ValueError:
+                    continue
+        if not candidates:
+            return None
+        # 取最新旧版本
+        candidates.sort(reverse=True)
+        old_ver, old_fname = candidates[0]
+        old_path = os.path.join(_CACHE_DIR, old_fname)
+        with open(old_path, 'rb') as f:
+            data = _pickle.load(f)
+        # 自动迁移: rename 到当前版本
+        try:
+            os.rename(old_path, path)
+            print(f"  [cache persistent_get] 迁移 {old_fname} → {os.path.basename(path)}", file=sys.stderr)
+        except Exception:
+            pass  # 迁移失败也返数据, 不影响本次调用
+        return data
+    except Exception as e:
+        print(f"  [cache persistent_get] 旧版本迁移失败 ({name}): {e}", file=sys.stderr)
+        return None
 
 
 def persistent_put(name, data):
