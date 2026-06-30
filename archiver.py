@@ -911,7 +911,8 @@ def batch_fetch_history(codes, start_date, end_date, max_workers=4):
                     try:
                         conn.execute("INSERT OR IGNORE INTO stock_daily (code, trade_date, chg_pct) VALUES (?,?,?)",
                                      (code, d, chg))
-                    except: pass
+                    except Exception:  # BUG-5 修复
+                        pass
                 conn.commit()
             fetched += 1
 

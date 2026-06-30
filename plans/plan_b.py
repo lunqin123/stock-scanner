@@ -280,8 +280,10 @@ def _compute_sector_fund_resonance(df: pd.DataFrame, raw_money: pd.Series,
                 for c in industry_fund_df.columns:
                     cl = str(c).lower()
                     if '净流入' in str(c) or '主力净流入' in str(c):
-                        try: net = float(row[c])
-                        except: pass
+                        try:
+                            net = float(row[c])
+                        except Exception:  # BUG-5 修复
+                            pass
                 if name:
                     sector_fund_dir[name] = net
         except Exception:

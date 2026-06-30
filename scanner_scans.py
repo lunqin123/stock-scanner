@@ -426,19 +426,19 @@ def scan_sector(today_str: str, table_mode: bool = False, top_n: int = None):
     def _get_limit():
         try:
             return 'limit', ak.stock_zt_pool_em(date=today_str)
-        except:
+        except Exception:  # BUG-5 修复: bare except → except Exception (不吞 KeyboardInterrupt)
             return 'limit', pd.DataFrame()
 
     def _get_zhaban():
         try:
             return 'zhaban', ak.stock_zt_pool_zbgc_em(date=today_str)
-        except:
+        except Exception:  # BUG-5 修复
             return 'zhaban', pd.DataFrame()
 
     def _get_dieting():
         try:
             return 'dieting', ak.stock_zt_pool_dtgc_em(date=today_str)
-        except:
+        except Exception:  # BUG-5 修复
             return 'dieting', pd.DataFrame()
 
     with ThreadPoolExecutor(max_workers=3) as ex:

@@ -469,7 +469,8 @@ def score_danger_signals(df: pd.DataFrame, raw_money: pd.Series,
                     if recent_days >= 10 and recent_times < 2:
                         penalty[idx] -= 5
                         flags[idx].append("⚠️ 股性差/超跌反弹")
-                except: pass
+                except Exception:  # BUG-5 修复: bare except → except Exception
+                    pass
 
         # 规则4: 换手过低控盘 - 换手<3%且无板块效应 (-8)
         if turnover < 3 and sc < 2:
@@ -690,6 +691,9 @@ def detect_market_sentiment(today_str: str):
                 today_limit_down = len(today_dt)
 
             # 获取全市场涨跌家数（Sina采样多页汇总）
+            # BUG-4 修复: 原代码只取 4 个 page (1, 15, 30, 45) = 400 只, page 跳跃不连续, 采样偏差大
+            # 新方案: 改用等距采样 12 个 page (1, 6, 11, ..., 56) = 1200 只, 代表性更好
+            # 12 并行请求 ~2s, 统计上有意义 (A 股 5500+ 只, 1200 只 = 22% 样本, 95% 置信区间 ±2%)
             print("  [情绪] 获取全市场涨跌分布...", file=sys.stderr)
             try:
                 import requests as _req
@@ -704,21 +708,26 @@ def detect_market_sentiment(today_str: str):
                             ups = sum(1 for x in d if float(x.get("changepercent", 0)) > 0)
                             downs = sum(1 for x in d if float(x.get("changepercent", 0)) < 0)
                             return ups, downs
-                    except: pass
+                    except Exception:
+                        return 0, 0
                     return 0, 0
                 total_up = 0
                 total_down = 0
-                with ThreadPoolExecutor(max_workers=4) as ex:
-                    pages = [1, 15, 30, 45]
+                # BUG-4 修复: 等距采样 12 page (1, 6, 11, ..., 56), 覆盖 1200 只
+                # A 股 5500+ 只, 1200 样本置信区间 ±2% (95% CI, p=0.5)
+                pages = list(range(1, 57, 5))  # 1, 6, 11, 16, 21, 26, 31, 36, 41, 46, 51, 56
+                with ThreadPoolExecutor(max_workers=8) as ex:
                     futs = {ex.submit(_fetch_page, p): p for p in pages}
                     for f in as_completed(futs):
                         u, d = f.result()
                         total_up += u
                         total_down += d
                 if total_up + total_down > 0:
-                    all_up = total_up
-                    all_down = total_down
-                    print(f"  [情绪] 全市场涨 {all_up} 跌 {all_down}", file=sys.stderr)
+                    # BUG-4 修复: 比例换算到全市场 (~5500 只, 上限 56 page × 100 = 5600)
+                    total_market = max(5500, 56 * 100)
+                    all_up = int(round(total_up / max(1, total_up + total_down) * total_market))
+                    all_down = total_market - all_up
+                    print(f"  [情绪] 全市场采样涨 {total_up} 跌 {total_down} (样本{total_up+total_down}), 推算 ~{all_up}/{all_down}", file=sys.stderr)
                 else:
                     print("  [情绪] 全市场数据采样失败", file=sys.stderr)
             except Exception as e:

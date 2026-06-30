@@ -238,8 +238,10 @@ def source_inst_rating(date_str: str) -> pd.DataFrame:
         from datetime import datetime, timedelta
         dt = datetime.now()
         if date_str:
-            try: dt = datetime.strptime(date_str.replace('-',''), '%Y%m%d')
-            except: pass
+            try:
+                dt = datetime.strptime(date_str.replace('-',''), '%Y%m%d')
+            except Exception:  # BUG-5 修复
+                pass
         begin = (dt - timedelta(days=30)).strftime('%Y-%m-%d')
         end = dt.strftime('%Y-%m-%d')
         all_reports = []

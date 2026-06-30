@@ -173,8 +173,10 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
             raw = str(pullback.loc[idx, seal_stat_col]) if pd.notna(pullback.loc[idx, seal_stat_col]) else ''
             consecutive = 0
             if '/' in raw:
-                try: consecutive = int(raw.split('/')[1])
-                except: pass
+                try:
+                    consecutive = int(raw.split('/')[1])
+                except Exception:  # BUG-5 修复
+                    pass
             if consecutive >= 4:     f_lb[idx] = 1.0   # 高度连板龙头，反包势能最强
             elif consecutive == 3:   f_lb[idx] = 0.85
             elif consecutive == 2:   f_lb[idx] = 0.65

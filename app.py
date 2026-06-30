@@ -600,7 +600,7 @@ def _fetch_trend_data(today, principal):
     strong = pd.DataFrame()
     try:
         strong = ak.stock_zt_pool_strong_em(date=today)
-    except:
+    except Exception:  # BUG-5 修复: bare except → except Exception
         pass
     if strong.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
@@ -1396,7 +1396,8 @@ def api_indicators_cards(refresh: bool = Query(False, description="强制刷新"
                 money_str = f"{money/1e4:.0f}万"
             else:
                 money_str = str(int(money))
-        except: pass
+        except Exception:  # BUG-5 修复: bare except → except Exception
+            pass
         items.append({
             'code': code,
             'name': name,

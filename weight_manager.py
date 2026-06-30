@@ -516,10 +516,11 @@ REV_DEFAULT_WEIGHTS = {
     'sector': 10,       # 板块支撑
 }
 
-REV_FACTOR_NAMES = {
-    'turnover': '换手', 'consecutive': '连板',
-    'pullback': '回调', 'sector': '板块',
-}
+
+# BUG-2 修复: 删除下方 4 因子版 REV_FACTOR_NAMES 旧定义 (L519 已删除)
+# 真正的 REV_FACTOR_NAMES 在 L612 (5 因子版, 含 'retention')
+# 注: REV_DEFAULT_WEIGHTS 是 4 因子 (上面), REV_FACTOR_NAMES 是 5 因子 — 不一致是设计
+# (weights dict 4 key, names dict 5 key 兼容未来扩展), 不应再用 4 因子版覆盖
 
 
 def load_reversal_weights() -> dict:

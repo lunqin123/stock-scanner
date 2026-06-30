@@ -176,12 +176,15 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     """
     import weight_manager
 
+    # BUG-3 修复: lhb_bonus 不再混入 money (clip(20) 会损失 5 分 lhb 信号)
+    # 原代码: money = (money + lhb).clip(upper=20) — money=20 + lhb=5 → 25 → 20, 损失 5
+    # 新方案: money 保持原样, lhb_bonus 作为独立加性微调 (缩放 50%, 范围 [-2, +2.5])
     money = factors['money']
     if hasattr(lhb_bonus, 'loc') and not lhb_bonus.empty:
-        money = (money + lhb_bonus.loc[filtered.index].reindex(
-            money.index, fill_value=0)).clip(upper=20.0)
+        lhb_series = lhb_bonus.loc[filtered.index].reindex(money.index, fill_value=0)
+        lhb_adjust = lhb_series * 0.5  # 缩放 50%, -4~+5 → -2~+2.5
     else:
-        money = money.clip(upper=20.0)
+        lhb_adjust = pd.Series(0.0, index=money.index)
 
     sentiment_series = pd.Series(float(sentiment_score), index=filtered.index)
     h_scores = history_scores.loc[filtered.index] if hasattr(history_scores, 'loc') and len(filtered.index) > 0 \
@@ -208,7 +211,8 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     # P1-2 修复: 危险信号改乘性惩罚,避免加性 clip -30 导致烂票均匀对待、失去区分度
     # penalty 范围 -30~0 → factor 范围 0.7~1.0(最多扣 30%,保留 70% 底)
     danger_factor = 1.0 + danger_penalty / 100.0  # -30→0.7, -15→0.85, -5→0.95, 0→1.0
-    total = (base * danger_factor).clip(lower=0)
+    # BUG-3 修复: lhb_bonus 独立加性微调,在 danger 之后叠加
+    total = ((base + lhb_adjust) * danger_factor).clip(lower=0)
 
     # 后台回测
     try:
