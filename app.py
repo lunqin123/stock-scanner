@@ -2578,6 +2578,58 @@ def api_weights_run(force: bool = Query(False, description="强制调权, 跳过
     return {"ok": True, "msg": f"调权已在后台启动 (force={force})"}
 
 
+# ═══════════════════════════════════════════
+#  SmartExit 阈值调权 API (P2.0 新增)
+# ═══════════════════════════════════════════
+
+@app.get("/api/smart_exit/status")
+def api_smart_exit_status():
+    """SmartExit 阈值调权状态 (前端面板展示)
+
+    返回:
+    - ok: True
+    - status: smart_exit_tuner 内部 status (running/done/failed/skipped/never_run)
+    - thresholds: 当前 6 个 tab 的阈值 (供前端展示)
+    """
+    try:
+        from smart_exit_tuner import get_tune_status, get_current_thresholds
+        return {
+            "ok": True,
+            "status": get_tune_status(),
+            "thresholds": get_current_thresholds(),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.post("/api/smart_exit/run")
+def api_smart_exit_run(
+    granularity: str = Query('daily', description="调权粒度: daily/weekly/monthly"),
+    force: bool = Query(False, description="跳过 archive.db 数据缺失检查"),
+):
+    """手动触发 SmartExit 阈值调权 (CLI/调试用)
+
+    granularity:
+    - daily: 基于近 1 天回测微调 (lr=0.1)
+    - weekly: 基于近 5 天回测中调 (lr=0.3)
+    - monthly: 基于近 30 天回测全调 (lr=0.5)
+    """
+    import threading
+    def _run():
+        try:
+            from smart_exit_tuner import tune_smart_exit_thresholds
+            return tune_smart_exit_thresholds(granularity=granularity, force=force)
+        except Exception as e:
+            return {'status': 'failed', 'error': str(e)[:200]}
+    # 后台跑, 不阻塞 API
+    result_holder = {}
+    def _wrapper():
+        result_holder['result'] = _run()
+    t = threading.Thread(target=_wrapper, daemon=True)
+    t.start()
+    return {"ok": True, "msg": f"SmartExit 调权已在后台启动 (granularity={granularity}, force={force})"}
+
+
 @app.get("/api/backtest/dashboard")
 def api_backtest_dashboard():
     """回测效果追踪面板 — 返回权重历史、因子相关性、模拟收益"""

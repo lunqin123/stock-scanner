@@ -248,6 +248,35 @@ def _adjust_trend() -> dict:
         return {'tab': 'trend', 'status': 'failed', 'error': str(e)[:200]}
 
 
+# ─── 阶段 2.5: SmartExit 阈值调权 (P2.0 新增) ───
+def _adjust_smart_exit(granularity: str = 'daily', force: bool = False) -> dict:
+    """调 SmartExit 阈值 (stop_loss/take_profit/limit_pct/low_volume/weak_sector/base_n)
+
+    数据源: archive.db daily_stocks.next_day_change
+    容错: archive.db 无 next_day_change 数据时, smart_exit_tuner 内部优雅 skip, 本函数不会失败
+    """
+    print(f"  [weight_scheduler] 阶段2.5: smart_exit 阈值调权 (granularity={granularity})", file=sys.stderr)
+    try:
+        from smart_exit_tuner import tune_smart_exit_thresholds
+        result = tune_smart_exit_thresholds(granularity=granularity, force=force)
+        # 把 status 映射成 weight_scheduler 通用格式
+        tabs = result.get('tabs', [])
+        tuned_count = sum(1 for t in tabs if t.get('status') == 'tuned')
+        skipped_count = sum(1 for t in tabs if t.get('status') == 'skipped')
+        return {
+            'tab': 'smart_exit',
+            'status': 'done' if result.get('status') == 'done' else result.get('status', 'unknown'),
+            'tuned_count': tuned_count,
+            'skipped_count': skipped_count,
+            'msg': result.get('msg', f'调权完成 {tuned_count} tab, skip {skipped_count} tab'),
+            'granularity': granularity,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {'tab': 'smart_exit', 'status': 'failed', 'error': str(e)[:200]}
+
+
 # ─── 入口 ───
 def run_after_hours_weight_adjust(force: bool = False) -> dict:
     """
@@ -334,6 +363,10 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
 
         # 阶段 3: reversal / tab 调权 (archive.db 缺因子分列, 暂搁)
         # TODO: 后续 daily_stocks 加 rev_chg/rev_lb_count/... 列后启用
+
+        # 阶段 4: SmartExit 阈值调权 (P2.0 新增, 与 _adjust_trend 对称)
+        r3 = _adjust_smart_exit(granularity='daily', force=True)
+        results.append(r3)
 
         duration = (datetime.now() - start_ts).total_seconds()
         any_failed = any(r.get('status') == 'failed' for r in results)
