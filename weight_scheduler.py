@@ -277,6 +277,44 @@ def _adjust_smart_exit(granularity: str = 'daily', force: bool = False) -> dict:
         return {'tab': 'smart_exit', 'status': 'failed', 'error': str(e)[:200]}
 
 
+# ─── 阶段 2.6: next_day_change 历史回填 (防止断档累积) ───
+def _backfill_next_day_history() -> dict:
+    """从 archive.db 查最早缺 next_day 的 trade_date, 跑 backfill 到今天
+
+    目的: 解决 6-05 之后那种 13 天静默断档 — 之前 _update_next_day_data 静默 skip 时
+          没日志可见, 累积到 N 天没补就只能等手动跑 CLI。 现在阶段 5 每天跑一次自动补。
+    """
+    print(f"  [weight_scheduler] 阶段2.6: next_day backfill", file=sys.stderr)
+    try:
+        from archiver import get_db, backfill_next_day_data
+        conn = get_db()
+        row = conn.execute(
+            "SELECT MIN(trade_date) FROM daily_stocks WHERE next_day_change IS NULL"
+        ).fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return {'tab': 'backfill', 'status': 'no_change', 'msg': '无缺失数据, 跳过'}
+
+        start = row[0]
+        from cache import _trading_date as _get_td
+        end = _get_td().replace('-', '')
+        if start > end:
+            return {'tab': 'backfill', 'status': 'no_change', 'msg': f'缺失 {start} > today {end}, 跳过'}
+
+        updated = backfill_next_day_data(start, end, max_workers=8)
+        return {
+            'tab': 'backfill',
+            'status': 'done',
+            'updated': updated,
+            'range': f'{start}~{end}',
+            'msg': f'回填 {start}~{end}: {updated} 条',
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {'tab': 'backfill', 'status': 'failed', 'error': str(e)[:200]}
+
+
 # ─── 入口 ───
 def run_after_hours_weight_adjust(force: bool = False) -> dict:
     """
@@ -367,6 +405,10 @@ def run_after_hours_weight_adjust(force: bool = False) -> dict:
         # 阶段 4: SmartExit 阈值调权 (P2.0 新增, 与 _adjust_trend 对称)
         r3 = _adjust_smart_exit(granularity='daily', force=True)
         results.append(r3)
+
+        # 阶段 5: next_day_change 历史回填 (防止 6-05 那种断档累积)
+        r4 = _backfill_next_day_history()
+        results.append(r4)
 
         duration = (datetime.now() - start_ts).total_seconds()
         any_failed = any(r.get('status') == 'failed' for r in results)
