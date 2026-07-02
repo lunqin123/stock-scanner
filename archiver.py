@@ -662,6 +662,8 @@ def _update_next_day_data(conn, target_date, current_date):
         (target_date,)
     ).fetchone()[0]
     if existing > 10:
+        # 写 skipped 日志, 让 daily_stocks 已有数据时也能看见调用历史
+        _log(conn, target_date, 'day_t1', 0, 'skipped', f'已有 {existing} 条 next_day, 跳过')
         return 0  # 已经有足够数据，跳过
 
     import akshare as ak
@@ -717,6 +719,130 @@ def _update_next_day_data(conn, target_date, current_date):
         print(f"      更新next_day(全市场)错误: {e}")
 
     return updated
+
+
+def _compute_next_day_via_hist(code: str, target_date: str) -> float | None:
+    """用历史 K 线算 target_date 的 next_day_change (target_date+1 相对 target_date 的涨跌幅)
+
+    返回:
+        float: 涨跌幅 (%)
+        None: 拉不到数据
+
+    数据源 (按顺序尝试, 任一成功即返回):
+        1. ak.stock_zh_a_hist_tx (腾讯源, 不限流, 但只支持 1 年内历史)
+        2. ak.stock_zh_a_hist (东方财富, 支持任意历史, 但频繁调用被代理断)
+    """
+    import akshare as ak
+    import pandas as _pd
+    td = datetime.strptime(target_date, '%Y%m%d')
+    end_td = (td + timedelta(days=7)).strftime('%Y%m%d')
+
+    # 1) 腾讯源 (稳定)
+    try:
+        prefix = 'sh' if code.startswith('6') else 'sz'
+        df = ak.stock_zh_a_hist_tx(symbol=f'{prefix}{code}',
+                                   start_date=target_date, end_date=end_td)
+        if df is not None and not df.empty and len(df) >= 2:
+            df['d'] = _pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
+            target_row = df[df['d'] == target_date]
+            next_rows = df[df['d'] > target_date]
+            if not target_row.empty and not next_rows.empty:
+                target_close = float(target_row.iloc[0]['close'])
+                next_close = float(next_rows.iloc[0]['close'])
+                if target_close > 0:
+                    return round((next_close / target_close - 1) * 100, 2)
+    except Exception as e:
+        print(f"      [backfill-tx] {code}@{target_date}: {type(e).__name__}: {str(e)[:100]}", file=sys.stderr)
+
+    # 2) 东方财富 (fallback, 不限流的话更全)
+    try:
+        df = ak.stock_zh_a_hist(symbol=code, period='daily',
+                                start_date=target_date, end_date=end_td, adjust='qfq')
+        if df is not None and not df.empty and len(df) >= 2:
+            df['d'] = _pd.to_datetime(df['日期']).dt.strftime('%Y%m%d')
+            target_row = df[df['d'] == target_date]
+            next_rows = df[df['d'] > target_date]
+            if not target_row.empty and not next_rows.empty:
+                target_close = float(target_row.iloc[0]['close'])
+                next_close = float(next_rows.iloc[0]['close'])
+                if target_close > 0:
+                    return round((next_close / target_close - 1) * 100, 2)
+    except Exception as e:
+        print(f"      [backfill-em] {code}@{target_date}: {type(e).__name__}: {str(e)[:100]}", file=sys.stderr)
+
+    return None
+
+
+def backfill_next_day_data(start_date: str, end_date: str, max_workers: int = 8) -> int:
+    """回填 daily_stocks 在 [start_date, end_date] 区间内所有 next_day_change IS NULL 的记录
+
+    数据源: ak.stock_zh_a_hist (历史 K 线, target_date+1 vs target_date 的涨跌幅)
+    并行: ThreadPoolExecutor, 默认 8 worker
+    容错: 单只失败不阻塞其他
+
+    Returns:
+        int: 实际更新的记录数
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    conn = get_db()
+
+    # 1. 查所有缺失的 (trade_date, code) pair
+    rows = conn.execute("""
+        SELECT DISTINCT trade_date, code FROM daily_stocks
+        WHERE next_day_change IS NULL
+          AND trade_date BETWEEN ? AND ?
+        ORDER BY trade_date, code
+    """, (start_date, end_date)).fetchall()
+
+    if not rows:
+        print(f"  [backfill] {start_date}~{end_date} 区间无缺失数据, 跳过")
+        conn.close()
+        return 0
+
+    print(f"  [backfill] {start_date}~{end_date} 共 {len(rows)} 条 (trade_date, code) 待回填, workers={max_workers}")
+
+    # 2. 按 trade_date 分组 (每天一批并行)
+    by_date = {}
+    for td, code in rows:
+        by_date.setdefault(td, []).append(code)
+
+    total_updated = 0
+    total_failed = 0
+    for td in sorted(by_date.keys()):
+        codes = by_date[td]
+        date_updated = 0
+        date_failed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_compute_next_day_via_hist, c, td): c for c in codes}
+            for f in as_completed(futures):
+                code = futures[f]
+                try:
+                    chg = f.result()
+                except Exception as e:
+                    chg = None
+                    print(f"      [backfill] {code}@{td}: {e}", file=sys.stderr)
+                if chg is not None:
+                    cur = conn.execute(
+                        "UPDATE daily_stocks SET next_day_change=?, updated_at=datetime('now','localtime') "
+                        "WHERE trade_date=? AND code=? AND next_day_change IS NULL",
+                        (chg, td, code)
+                    )
+                    if cur.rowcount > 0:
+                        date_updated += 1
+                else:
+                    date_failed += 1
+        conn.commit()
+        total_updated += date_updated
+        total_failed += date_failed
+        print(f"    [{td}] {len(codes)} codes → updated {date_updated}, failed {date_failed}")
+
+    # 3. 写 archive_log (供后续状态查询)
+    _log(conn, start_date, 't1_backfill', total_updated, 'success',
+         f'backfill {start_date}~{end_date}: {total_updated} ok, {total_failed} failed')
+
+    conn.close()
+    print(f"  [backfill] 完成: {total_updated} ok, {total_failed} failed")
+    return total_updated
 
 
 # ═══════════════════════════════════════════
@@ -939,8 +1065,12 @@ def get_cached_history(code, start_date, end_date):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="每日数据归档系统")
-    parser.add_argument('--stage', choices=['t', 't1', 'auto'], default='auto',
-                        help='归档阶段: t=拉取当日数据, t1=补上交易日next_day, auto=自动检测')
+    parser.add_argument('--stage', choices=['t', 't1', 't1-backfill', 'auto'], default='auto',
+                        help='归档阶段: t=拉取当日数据, t1=补上交易日next_day, t1-backfill=批量回填历史缺失, auto=自动检测')
+    parser.add_argument('--start', type=str, default=None,
+                        help='[t1-backfill] 起始日期 YYYYMMDD')
+    parser.add_argument('--end', type=str, default=None,
+                        help='[t1-backfill] 截止日期 YYYYMMDD')
     parser.add_argument('--date', type=str, default=None,
                         help='指定日期 YYYYMMDD（默认今天）')
     parser.add_argument('--status', action='store_true', help='查看归档状态')
@@ -975,3 +1105,11 @@ if __name__ == "__main__":
             _log(conn, trade_date, 'day_t1', 0, 'error', e)
         finally:
             conn.close()
+
+    elif args.stage == 't1-backfill':
+        # 批量回填历史 daily_stocks 中 next_day_change IS NULL 的记录
+        # 数据源: ak.stock_zh_a_hist 历史 K 线
+        start = args.start or '20260101'
+        end = args.end or _today_str()
+        print(f"[归档 t1-backfill] 区间 {start} ~ {end}")
+        backfill_next_day_data(start, end, max_workers=8)
