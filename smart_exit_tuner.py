@@ -202,6 +202,10 @@ def _is_lock_stale(max_age_sec: int = 300) -> bool:
 def _fetch_recent_backtest_metrics(tab: str, granularity: str) -> dict:
     """从 archive.db 拉近 N 天的回测数据, 计算调权指标
 
+    数据源: archive.db daily_stocks 表 (next_day_change IS NOT NULL)
+    范围: 按粒度 (daily/weekly/monthly) 取最近 N 条 trade_date (而非日历天),
+          因为归档数据是 T+1 才补,按日历天过滤 daily 永远查不到东西
+
     Returns:
         {
           'win_rate': float,
@@ -211,20 +215,22 @@ def _fetch_recent_backtest_metrics(tab: str, granularity: str) -> dict:
           'exit_dist': {'止损': 0, '止盈': 0, ...}
         }
     """
-    days_map = {'daily': 1, 'weekly': 5, 'monthly': 30}
-    days = days_map.get(granularity, 5)
-    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+    # 粒度 → 取的 trade_date 数量 (各档 lr 在 tune_smart_exit_thresholds 决定)
+    count_map = {'daily': 20, 'weekly': 60, 'monthly': 200}
+    limit = count_map.get(granularity, 20)
 
     try:
         conn = sqlite3.connect(_ARCHIVE_DB, timeout=10)
         cur = conn.cursor()
-        # 拉对应 tab 的当日和次日数据
+        # 拉最近 N 个有 next_day 数据的交易日 (跨日 limit 而非日历 cutoff)
+        # 与 backtest_engine 一致: 所有 tab 基础池都映射到 limit_up (回测基础池)
         cur.execute("""
             SELECT trade_date, code, change_pct, next_day_change
             FROM daily_stocks
-            WHERE stock_type='limit_up' AND trade_date >= ?
+            WHERE stock_type='limit_up' AND next_day_change IS NOT NULL
             ORDER BY trade_date DESC
-        """, (cutoff,))
+            LIMIT ?
+        """, (limit,))
         rows = cur.fetchall()
         conn.close()
     except Exception as e:
