@@ -29,7 +29,7 @@ const _BT_DAYS = 60;
 var _TAB_DEFAULT_SELL_N = {
     'trend': 3,
     'limit-up': 3,
-    'zhaban': 3,   // BUG-9 修复: 改 5→3, sell_n=5 让 6-25 后的炸板 trade 永远 incomplete (T+5 超出 today)
+    'zhaban': 5,   // 实测 T+5 avg_ret +4.59%/+20659 pnl 最高, T+3 仅 +2.72%/+17161; 与 signal_tomorrow / backtest_engine 默认一致
     'reversal': 3,
     'dtqiaoban': 3,
 };
@@ -50,19 +50,19 @@ var _btSellNs = (function() {
     }
     return stored;
 })();
-// Tier2: 老用户 zhaban=2 (旧默认) 自动升级为 3 (T+3 胜率最高 75% +15,675)
-// BUG-9 修复: 同时把 zhaban=5 (新默认 之前) 自动降回 3, 因为 sell_n=5 让最近 5 天 trade incomplete
+// Tier3: 老用户 zhaban=2/3 自动升级为 5 (T+5 实测 avg_ret/+pnl 最高)
+// v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v2') || 'v1';
-    if (sellNsVer !== 'v2') {
-        if (_btSellNs.zhaban === 2 || _btSellNs.zhaban === 5) {
-            _btSellNs.zhaban = 3;
+    var sellNsVer = localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
+    if (sellNsVer !== 'v3') {
+        if (_btSellNs.zhaban === 2 || _btSellNs.zhaban === 3) {
+            _btSellNs.zhaban = 5;
         }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v2', 'v2');
+        localStorage.setItem('btSellNs_v3', 'v3');
     }
 })();
-function _getSellN(tab) { return _btSellNs[tab] !== undefined ? _btSellNs[tab] : 3; }
+function _getSellN(tab) { return _btSellNs[tab] !== undefined ? _btSellNs[tab] : (_TAB_DEFAULT_SELL_N[tab] || 3); }
 function _setSellN(tab, val) { _btSellNs[tab] = val; localStorage.setItem('btSellNs', JSON.stringify(_btSellNs)); }
 
 var _btMinScores = (function() {
