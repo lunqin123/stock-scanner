@@ -230,11 +230,16 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
 # ═══════════════════════════════════════════
 
 def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
-                 sentiment_score, history_scores, pool=None):
-    """组装 stocks 列表，供前端卡片渲染"""
-    from scanner import money_str, TOP_N
+                 sentiment_score, history_scores, pool=None, max_n: int = None):
+    """组装 stocks 列表，供前端卡片渲染
 
-    top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
+    Args:
+        max_n: 输出票数上限 (None = 用全局 TOP_N)
+    """
+    from scanner import money_str, TOP_N
+    n = max_n if max_n is not None else TOP_N
+
+    top_indices = list(total_scores.sort_values(ascending=False).head(n).index)
 
     stocks = []
     for rank, idx in enumerate(top_indices, 1):
@@ -274,7 +279,7 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
 #  app.py 唯一需要调用的函数
 # ═══════════════════════════════════════════
 
-def score(inputs: dict) -> dict:
+def score(inputs: dict, max_n: int = None) -> dict:
     """
     Plan A 评分主入口。
 
@@ -291,6 +296,9 @@ def score(inputs: dict) -> dict:
         today_str          — str (YYYY-MM-DD)
         pool               — 原始涨停池 DataFrame（供龙头检测）
         principal          — float (本金)
+
+    Args:
+        max_n: 输出 stocks 数量上限 (None = 用全局 TOP_N)
 
     返回 dict:
         stocks, df, seal_scores, money_scores, raw_money,
@@ -331,7 +339,7 @@ def score(inputs: dict) -> dict:
     # 3. 组装 stocks
     print("  [PlanA] 组装TOP股票...", file=sys.stderr)
     stocks = build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
-                          sentiment_score, history_scores, pool)
+                          sentiment_score, history_scores, pool, max_n=max_n)
 
     return {
         'stocks': stocks,

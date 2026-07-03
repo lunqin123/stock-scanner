@@ -313,18 +313,25 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
         'principal': principal,
     }
     plan_inputs.update(source_data)  # DataFrames 直接注入 inputs
-    result = plan_obj.score(plan_inputs)
+    # v2 集成关键: 让 plan_a 评分输出 20 票 (而不是默认 10), 保证 v2 过滤后还有 5+ 票
+    # 这样 S15-prime 等较宽过滤能保证 5+ 票通过, 满足用户硬需求
+    try:
+        from config import ENABLE_V2_HARD_FILTER, TOP_N
+        v2_pool_size = 20 if ENABLE_V2_HARD_FILTER and len(filtered) >= 20 else TOP_N
+    except Exception:
+        v2_pool_size = TOP_N if 'TOP_N' in dir() else 10
+    result = plan_obj.score(plan_inputs, max_n=v2_pool_size)
 
     # ── v2 硬过滤 (2026-07-03 上线, 数据驱动: 18 天 1445 笔 T+1 验证) ──
-    # 多档 fallback: S12-prime (严苛高性能) → S15-prime (含 1 板) → S12-no-boost
-    # 硬约束: 每天至少 tier_min 票 (默认 3)
+    # 多档 fallback: S15-prime (笔数保证) → S12-prime (高性能) → S12-no-boost
+    # 硬约束: 每天至少 tier_min 票 (默认 1 — 至少 1 票交易, 优于无票)
     try:
         from config import ENABLE_V2_HARD_FILTER, TOP_N
         if ENABLE_V2_HARD_FILTER and result.get('stocks'):
             from strategy_filters_v2 import apply_v2_with_fallback
             pre_n = len(result['stocks'])
             filtered_stocks, used_scheme = apply_v2_with_fallback(
-                result['stocks'], filtered, top_n=TOP_N, tier_min=3)
+                result['stocks'], filtered, top_n=TOP_N, tier_min=1)
             if filtered_stocks:
                 result['stocks'] = filtered_stocks
                 print(f"  [v2 硬过滤] {used_scheme}: {pre_n}→{len(filtered_stocks)} 票", file=sys.stderr)
@@ -412,7 +419,13 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
         val = raw.get(src_name)
         if val is not None:
             plan_inputs[src_name] = val
-    result = plan.score(plan_inputs)
+    # v2 集成: 让 plan_a 评分输出 20 票 (默认 10), 保证 v2 过滤后还有 5+ 票
+    try:
+        from config import ENABLE_V2_HARD_FILTER, TOP_N
+        v2_pool_size = 20 if ENABLE_V2_HARD_FILTER and len(filtered) >= 20 else TOP_N
+    except Exception:
+        v2_pool_size = TOP_N if 'TOP_N' in dir() else 10
+    result = plan.score(plan_inputs, max_n=v2_pool_size)
     result['_from_cache'] = True
 
     # ── v2 硬过滤 (同 _scan_limit_up_data, 保持按钮行为一致) ──
@@ -422,7 +435,7 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
             from strategy_filters_v2 import apply_v2_with_fallback
             pre_n = len(result['stocks'])
             filtered_stocks, used_scheme = apply_v2_with_fallback(
-                result['stocks'], filtered, top_n=TOP_N, tier_min=3)
+                result['stocks'], filtered, top_n=TOP_N, tier_min=1)
             if filtered_stocks:
                 result['stocks'] = filtered_stocks
                 print(f"  [v2 硬过滤-cache] {used_scheme}: {pre_n}→{len(filtered_stocks)} 票", file=sys.stderr)

@@ -323,17 +323,24 @@ def _akshare_row_to_dict(row) -> dict:
 # 验证数据: 18 天 41 笔 胜率 80.5% EV +5.39% PLR 2.51 Sharpe 1.01 MaxDD -0.50%
 # 条件: default_hard_filters() + 连板>=2 + 换手<5% + 行业=top×1.2 加权
 SCHEME_PRESETS = {
-    # S15-prime: 1板+换手<8% (放宽, 笔数充足)
-    # 18天 N=54 胜率72.2% 6月+4.84% 7月-0.20% (略负)
+    # S15-prime: 第一档 fallback, 含 1 板换手<8%, 笔数保证
+    # 关键调整: 不硬排除 bottom 行业 (用户硬需求: 每天 5+ 票)
+    #   bottom 行业只做软加权 ×0.5 (避免用户被完全空仓)
+    #   7 月灾难子集 (1板+turnover 15-30%) 由 default_hard_filters 排除 (turnover 0.5-15%)
+    # 18天 N=??? (待重新跑)
     'S15-prime': {
-        'hard_filters': default_hard_filters() + [
+        'hard_filters': [
+            # 保留 default 的 4 条 (turnover 0.5-15% + seal_fund + 早盘封板)
+            lambda t: f_turnover_range(t, 0.5, 15.0),
+            lambda t: f_seal_fund_range(t, 0.5e8, 10e8),
+            f_exclude_afternoon_seal,
+            # 不再硬排除 bottom 行业
+            # cons>=2 OR (cons=1 AND turnover<8%)
             lambda t: (t.get('consecutive') or 0) >= 2 or (t.get('turnover') is not None and t.get('turnover') < 8),
         ],
-        'industry_boost': True,  # 软加权: top 行业 × 1.2
+        'industry_boost': 'soft',  # 软加权: top ×1.2, bottom ×0.5, mid ×1.0
     },
-    # S12-prime: 连板≥2 + 换手<8% + top 加权 (严苛高性能)
-    # 18天 N=52 胜率73.1% 6月+4.92% 7月+1.19% MaxDD -0.50% — 6+7月双正
-    # 风险: 7-3 这种连板少的日子只 1 票
+    # S12-prime: 第二档 fallback, cons>=2 + 换手<8% (高性能, 强势日子用)
     'S12-prime': {
         'hard_filters': default_hard_filters() + [
             lambda t: (t.get('consecutive') or 0) >= 2,
@@ -341,7 +348,7 @@ SCHEME_PRESETS = {
         ],
         'industry_boost': True,
     },
-    # S12-no-boost: 不加权版
+    # S12-no-boost: 兜底
     'S12-no-boost': {
         'hard_filters': default_hard_filters() + [
             lambda t: (t.get('consecutive') or 0) >= 2,
@@ -372,10 +379,10 @@ SCHEME_PRESETS = {
 #  双档 fallback: 严苛 → 放宽, 保证每天都有票
 # ═══════════════════════════════════════════
 
-# 多档 fallback 序列: 严苛 → 放宽 → 最后兜底 (无过滤)
+# 多档 fallback 序列: 笔数保证 → 严苛高性能 (满足用户硬需求: 每天都有票)
 FALLBACK_TIERS = [
-    'S12-prime',   # 第一档: cons>=2 + 换手<8% + top 加权 (高性能)
-    'S15-prime',   # 第二档: 含 1板换手<8% (笔数保证)
+    'S15-prime',     # 第一档: 含 1板换手<8% (笔数保证, 7-3 出 5 票)
+    'S12-prime',     # 第二档: cons>=2 + 换手<8% + top 加权 (高性能, 强势日子用)
     'S12-no-boost',  # 第三档: 严苛但不加权 (兜底)
 ]
 
@@ -434,7 +441,13 @@ def apply_v2_to_stocks(stocks: List[dict], df, scheme: str = 'S9-prime',
             filtered_stocks.append(merged)
 
     # 3. 软加权 (industry boost on total_score)
-    if industry_boost:
+    # industry_boost: True (top ×1.2) / 'soft' (top ×1.2, bottom ×0.5) / False (不加权)
+    if industry_boost == 'soft':
+        for s in filtered_stocks:
+            tier = industry_tier(s.get('industry'))
+            mult = 1.2 if tier == 'top' else (0.5 if tier == 'bottom' else 1.0)
+            s['total_score'] = round(s.get('total_score', 0) * mult, 1)
+    elif industry_boost:
         for s in filtered_stocks:
             if industry_tier(s.get('industry')) == 'top':
                 s['total_score'] = round(s.get('total_score', 0) * 1.2, 1)
@@ -483,13 +496,41 @@ def apply_v2_with_fallback(stocks: List[dict], df, top_n: int = 10,
             if c:
                 code_to_row[c] = row_dict
 
+    # Debug: 看 df 字段映射情况
+    import sys as _sys
+    if code_to_row:
+        first_code = next(iter(code_to_row.keys()))
+        sample = code_to_row[first_code]
+        print(f"  [v2-fallback-debug] df size={len(df)} code_to_row={len(code_to_row)} "
+              f"sample({first_code}): {sample}", file=_sys.stderr)
+
     for tier_idx, scheme in enumerate(FALLBACK_TIERS):
         result = apply_v2_to_stocks(stocks, df, scheme=scheme, top_n=None)
+        print(f"  [v2-fallback-debug] tier{tier_idx+1} {scheme}: {len(result)} 票", file=_sys.stderr)
+        if len(result) < 3:
+            # 详细 debug: 每只票的过滤失败原因
+            preset = SCHEME_PRESETS[scheme]
+            for s in stocks:
+                c = str(s.get('code', '')).strip().zfill(6)
+                row = code_to_row.get(c, {})
+                merged = {**row, **s}
+                for k in ('turnover', 'seal_fund', 'market_cap'):
+                    v = merged.get(k)
+                    if v is not None and not isinstance(v, (int, float)):
+                        try: merged[k] = float(v)
+                        except: merged[k] = None
+                fails = []
+                for f in preset['hard_filters']:
+                    if not f(merged):
+                        fails.append(f.__name__ if hasattr(f, '__name__') else str(f))
+                if fails:
+                    print(f"    [v2-detail] {c} {merged.get('name','')[:8]} cons={merged.get('consecutive')} "
+                          f"tovr={merged.get('turnover')} seal={merged.get('seal_time')} "
+                          f"fund={merged.get('seal_fund')} ind={merged.get('industry','')[:6]} "
+                          f"→ fail: {fails}", file=_sys.stderr)
         if len(result) >= tier_min:
-            # 够了, 截 top_n
             final = result[:top_n]
             return final, scheme
 
-    # 三档都 < tier_min: 用最后一档的结果 (即使票数少)
     last = apply_v2_to_stocks(stocks, df, scheme=FALLBACK_TIERS[-1], top_n=top_n)
     return last, FALLBACK_TIERS[-1]
