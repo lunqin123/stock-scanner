@@ -315,6 +315,26 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
     plan_inputs.update(source_data)  # DataFrames 直接注入 inputs
     result = plan_obj.score(plan_inputs)
 
+    # ── v2 硬过滤 (2026-07-03 上线, 数据驱动: 18 天 1445 笔 T+1 验证) ──
+    # 候选方案 'S9-prime' (默认) / 'S9-strict' (更严)
+    # Fallback 机制: 过滤后 0 票 → 回退到原 plan_a 评分排序, 避免无票
+    try:
+        from config import ENABLE_V2_HARD_FILTER, V2_SCHEME, TOP_N
+        if ENABLE_V2_HARD_FILTER and result.get('stocks'):
+            from strategy_filters_v2 import apply_v2_to_stocks
+            pre_n = len(result['stocks'])
+            filtered_stocks = apply_v2_to_stocks(
+                result['stocks'], filtered, scheme=V2_SCHEME, top_n=TOP_N)
+            if filtered_stocks:
+                result['stocks'] = filtered_stocks
+                print(f"  [v2 硬过滤] {V2_SCHEME}: {pre_n}→{len(result['stocks'])} 票", file=sys.stderr)
+            else:
+                # v2 过滤后 0 票: 回退原结果, 不强制空仓
+                result['stocks'] = result['stocks'][:TOP_N]
+                print(f"  [v2 硬过滤] {V2_SCHEME}: 0 票, 回退原结果 {len(result['stocks'])} 票", file=sys.stderr)
+    except Exception as e:
+        print(f"  [v2 硬过滤] 失败: {e} (回退原结果)", file=sys.stderr)
+
     # 异步归档扫描输入 (供回测引擎历史回放)
     _archive_scan_inputs_async(today_str, fund_df, sentiment_score, sentiment_level,
                                sentiment_detail, sentiment_ok, lhb_bonus, history_scores)
@@ -394,6 +414,23 @@ def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
             plan_inputs[src_name] = val
     result = plan.score(plan_inputs)
     result['_from_cache'] = True
+
+    # ── v2 硬过滤 (同 _scan_limit_up_data, 保持按钮行为一致) ──
+    try:
+        from config import ENABLE_V2_HARD_FILTER, V2_SCHEME, TOP_N
+        if ENABLE_V2_HARD_FILTER and result.get('stocks'):
+            from strategy_filters_v2 import apply_v2_to_stocks
+            pre_n = len(result['stocks'])
+            filtered_stocks = apply_v2_to_stocks(
+                result['stocks'], filtered, scheme=V2_SCHEME, top_n=TOP_N)
+            if filtered_stocks:
+                result['stocks'] = filtered_stocks
+                print(f"  [v2 硬过滤-cache] {V2_SCHEME}: {pre_n}→{len(result['stocks'])} 票", file=sys.stderr)
+            else:
+                result['stocks'] = result['stocks'][:TOP_N]
+                print(f"  [v2 硬过滤-cache] {V2_SCHEME}: 0 票, 回退原结果 {len(result['stocks'])} 票", file=sys.stderr)
+    except Exception as e:
+        print(f"  [v2 硬过滤-cache] 失败: {e} (回退原结果)", file=sys.stderr)
 
     _archive_scan_inputs_async(raw['date'], fund_df, sentiment_score, sentiment_level,
                                sentiment_detail, sentiment_ok, lhb_bonus, history_scores)
