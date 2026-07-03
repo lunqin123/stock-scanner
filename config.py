@@ -27,12 +27,15 @@ TOP_N = 10                      # 默认输出数量 (CLI + 回测 + cards)
 INCLUDE_CHINEXT = False
 
 # V2 硬过滤开关 — 默认开启 (2026-07-03 实盘上线)
-# 数据依据: 18 天 1445 笔 T+1 真实收益对比, 6+7 月双正最稳方案 S9-prime
+# 数据依据: 18 天 1445 笔 T+1 真实收益对比
 # 详细: strategy_filters_v2.py + compare_strategies.py 跑出的对比表
 # 关闭 (False) 时: 退回原 plan_a 评分 + 选股, 不应用 v2 硬过滤
-# 打开 (True) 时:  选股后应用 S9-prime 硬过滤 + 软加权, 重排输出
+# 打开 (True) 时:  选股后应用 v2 硬过滤 + 软加权, 重排输出
+# 默认 'S12-prime' (S6+换手<8%+行业加权, 笔数充足, 6+7月双正)
+# 备选: 'S10-prime' (无行业加权) / 'S9-prime' (换手<5%严苛, 笔数稀)
+#       'S9-strict' (再加行业=top限制, 笔数更稀)
 ENABLE_V2_HARD_FILTER = True
-V2_SCHEME = "S9-prime"  # 默认方案 (备选: S9-strict)
+V2_SCHEME = "S12-prime"  # 默认方案 (每天 3-5 票, 6+7 月双正)
 
 # ═══════════════════════════════════════════
 #  缓存配置

@@ -30,7 +30,7 @@
 """
 from __future__ import annotations
 import sqlite3
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 # ═══════════════════════════════════════════
 #  行业分层 (来自 6+7 月数据挖掘, n>=10)
@@ -323,22 +323,61 @@ def _akshare_row_to_dict(row) -> dict:
 # 验证数据: 18 天 41 笔 胜率 80.5% EV +5.39% PLR 2.51 Sharpe 1.01 MaxDD -0.50%
 # 条件: default_hard_filters() + 连板>=2 + 换手<5% + 行业=top×1.2 加权
 SCHEME_PRESETS = {
+    # S15-prime: 1板+换手<8% (放宽, 笔数充足)
+    # 18天 N=54 胜率72.2% 6月+4.84% 7月-0.20% (略负)
+    'S15-prime': {
+        'hard_filters': default_hard_filters() + [
+            lambda t: (t.get('consecutive') or 0) >= 2 or (t.get('turnover') is not None and t.get('turnover') < 8),
+        ],
+        'industry_boost': True,  # 软加权: top 行业 × 1.2
+    },
+    # S12-prime: 连板≥2 + 换手<8% + top 加权 (严苛高性能)
+    # 18天 N=52 胜率73.1% 6月+4.92% 7月+1.19% MaxDD -0.50% — 6+7月双正
+    # 风险: 7-3 这种连板少的日子只 1 票
+    'S12-prime': {
+        'hard_filters': default_hard_filters() + [
+            lambda t: (t.get('consecutive') or 0) >= 2,
+            lambda t: (t.get('turnover') is not None and t.get('turnover') < 8),
+        ],
+        'industry_boost': True,
+    },
+    # S12-no-boost: 不加权版
+    'S12-no-boost': {
+        'hard_filters': default_hard_filters() + [
+            lambda t: (t.get('consecutive') or 0) >= 2,
+            lambda t: (t.get('turnover') is not None and t.get('turnover') < 8),
+        ],
+        'industry_boost': False,
+    },
+    # S9-prime: 严格版 (笔数稀, 7月几乎0票 — 不推荐作为默认)
     'S9-prime': {
         'hard_filters': default_hard_filters() + [
             lambda t: (t.get('consecutive') or 0) >= 2,
             lambda t: (t.get('turnover') is not None and t.get('turnover') < 5),
         ],
-        'industry_boost': True,  # 软加权: top 行业 × 1.2
+        'industry_boost': True,
     },
     'S9-strict': {
         'hard_filters': default_hard_filters() + [
             lambda t: (t.get('consecutive') or 0) >= 2,
             lambda t: (t.get('turnover') is not None and t.get('turnover') < 5),
-            lambda t: industry_tier(t.get('industry')) == 'top',  # 额外要求 top 行业
+            lambda t: industry_tier(t.get('industry')) == 'top',
         ],
         'industry_boost': False,
     },
 }
+
+
+# ═══════════════════════════════════════════
+#  双档 fallback: 严苛 → 放宽, 保证每天都有票
+# ═══════════════════════════════════════════
+
+# 多档 fallback 序列: 严苛 → 放宽 → 最后兜底 (无过滤)
+FALLBACK_TIERS = [
+    'S12-prime',   # 第一档: cons>=2 + 换手<8% + top 加权 (高性能)
+    'S15-prime',   # 第二档: 含 1板换手<8% (笔数保证)
+    'S12-no-boost',  # 第三档: 严苛但不加权 (兜底)
+]
 
 
 def apply_v2_to_stocks(stocks: List[dict], df, scheme: str = 'S9-prime',
@@ -348,7 +387,7 @@ def apply_v2_to_stocks(stocks: List[dict], df, scheme: str = 'S9-prime',
     Args:
         stocks: 评分后的 stocks 列表 (每个 dict 包含 code/name/total_score 等)
         df: 原始 filtered DataFrame (akshare 拉过来的, 包含 industry/turnover/...)
-        scheme: 'S9-prime' (推荐) / 'S9-strict' (更严)
+        scheme: 'S12-prime' / 'S15-prime' / 'S9-prime' / 'S9-strict' / 'S12-no-boost'
         top_n: 截取前 N 名 (None = 不截)
 
     Returns:
@@ -412,3 +451,45 @@ def apply_v2_to_stocks(stocks: List[dict], df, scheme: str = 'S9-prime',
         filtered_stocks = filtered_stocks[:top_n]
 
     return filtered_stocks
+
+
+def apply_v2_with_fallback(stocks: List[dict], df, top_n: int = 10,
+                            tier_min: int = 3) -> Tuple[List[dict], str]:
+    """多档 fallback: 严苛 → 放宽, 保证至少 tier_min 票
+
+    Args:
+        stocks: plan_a.score 返回的 stocks 列表
+        df: 原始 filtered DataFrame
+        top_n: 截取前 N 名
+        tier_min: 至少输出 N 票 (不够时降级到下一档)
+
+    Returns:
+        (filtered_stocks, used_scheme) 元组
+
+    档位 (FALLBACK_TIERS):
+        1. S12-prime (cons>=2 + 换手<8% + top 加权, 高性能)
+        2. S15-prime (含 1 板换手<8%, 笔数保证)
+        3. S12-no-boost (严苛但不加权, 兜底)
+    """
+    if not stocks:
+        return [], 'none'
+
+    # 缓存 code → row 映射 (避免每次重算)
+    code_to_row = {}
+    if df is not None and len(df) > 0:
+        for idx in df.index:
+            row_dict = _akshare_row_to_dict(df.loc[idx])
+            c = row_dict.get('code')
+            if c:
+                code_to_row[c] = row_dict
+
+    for tier_idx, scheme in enumerate(FALLBACK_TIERS):
+        result = apply_v2_to_stocks(stocks, df, scheme=scheme, top_n=None)
+        if len(result) >= tier_min:
+            # 够了, 截 top_n
+            final = result[:top_n]
+            return final, scheme
+
+    # 三档都 < tier_min: 用最后一档的结果 (即使票数少)
+    last = apply_v2_to_stocks(stocks, df, scheme=FALLBACK_TIERS[-1], top_n=top_n)
+    return last, FALLBACK_TIERS[-1]
