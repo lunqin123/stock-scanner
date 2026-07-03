@@ -328,15 +328,22 @@ window.loadTomorrowSignals = loadTomorrowSignals;
 const _navItems = () => document.querySelectorAll('.nav-item');
 
 let currentPage = '';
-let _outputCache = {};  // {html: string} - 服务端注入 _CACHED_RANKING 的临时展示(scan-limit fallback)
+let _outputCache = {};  // {html, ts} - 服务端注入 _CACHED_RANKING 的临时展示(scan-limit fallback)
+// v2 改造 (2026-07-03) 加 30s 过期机制: 防止旧版 HTML 被切回 tab 时复用
 // nav 切 tab 永远重拉(见 switchPage),此处仅供 _CACHED_RANKING fallback 路径用
+const _OUTPUT_CACHE_TTL_MS = 30 * 1000;  // 30s 内有效, 超过视为过期强制重拉
 
 function _getCachedPage(page) {
     var c = _outputCache[page];
-    return c ? c.html : null;
+    if (!c) return null;
+    if (Date.now() - c.ts > _OUTPUT_CACHE_TTL_MS) {
+        delete _outputCache[page];
+        return null;
+    }
+    return c.html;
 }
 function _setCachedPage(page, html) {
-    _outputCache[page] = html;
+    _outputCache[page] = { html: html, ts: Date.now() };
 }
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台

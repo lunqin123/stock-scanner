@@ -107,7 +107,8 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 7  # v6→v7: 同步 P0/P1/P2 评分逻辑大改 — 旧 raw_scan_data.pkl 里的 stock_sentiment/sector/danger/north_flow 字段都是旧公式算的, 不 bump 的话 daily 缓存命中后会用旧值传给新公式, 产生不一致分数
+_RAW_CACHE_VERSION = 8  # v7→v8: v2 硬过滤上线 (S15-prime 双档 fallback, plan_a.score max_n=20)
+# 旧 raw_scan_data.pkl 里的 filtered 是 plan_a 10 票结果, 不够 v2 20 票过滤用, 不 bump 会用旧 df 过滤出错的子集
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
