@@ -629,6 +629,22 @@ def compute_recommendation_score(cand: dict) -> dict:
 # 是买入日开盘-收盘差, 实盘时还没发生, 不能直接套.
 # 改用以下实盘可知信息做等价过滤 — 让 best 真的是"经过过滤后留下
 # 的票", 而非裸的 score top 1.
+
+# 各 tab cards 返回字段名不同 (limit-up 没有 'score' 字段, 只有
+# 'total_score'; trend/reversal 才有 'composite_score')
+def _item_score(item: dict) -> float:
+    """从 cards item 读综合分, 支持多 tab 字段名 fallback."""
+    for key in ('total_score', 'composite_score', 'score',
+                '动量评分', '反转评分', '总分', '翘板评分'):
+        v = item.get(key)
+        if v is not None:
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                continue
+    return 0.0
+
+
 def _passes_preset_like_filter(item: dict, tab: str, today_dt=None) -> bool:
     """实盘可达的 preset 等价过滤 (不含未来数据).
 
@@ -636,7 +652,7 @@ def _passes_preset_like_filter(item: dict, tab: str, today_dt=None) -> bool:
     """
     if today_dt is None:
         today_dt = datetime.strptime(_today_trading(), '%Y%m%d')
-    score = float(item.get('score') or item.get('composite_score') or 0)
+    score = _item_score(item)
     if tab == 'limit-up':
         # Q2+Q3 甜蜜区 (避开 Q4 > 75 陷阱, 见 strategy_filters.py 注释 2026-06-14)
         # 实测: limit-prime 选中票 score 51/57/82, 故上限放宽到 85.
@@ -696,10 +712,15 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 print(f'  [signals/today] {tab}: items=[] (空池/未完成)',
                       file=sys.stderr)
                 continue
-            # BEST = 经过 preset-like filter 后的第一只, 而非裸 top 1
-            best = _find_pass_after_filter(items, tab, today_dt) or items[0]
-            best_filter_passed = best is not items[0] or _passes_preset_like_filter(
-                items[0], tab, today_dt)
+            # BEST = 经过 preset-like filter 后的第一只. 该 filter 不达标时
+            # 用 items[0] 兜底并明确标记 filter_passed=False.
+            passed = _find_pass_after_filter(items, tab, today_dt)
+            if passed is not None:
+                best = passed
+                filter_passed = True
+            else:
+                best = items[0]
+                filter_passed = False
 
             ev = TAB_EV_ESTIMATES.get(tab, {'win_rate': 0.5, 'ev_pct': 0, 'note': ''})
             candidates.append({
@@ -707,7 +728,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 'code': best.get('code'),
                 'name': best.get('name'),
                 'url': best.get('url'),
-                'score': best.get('total_score') or best.get('composite_score') or best.get('score'),
+                'score': _item_score(best),
                 'industry': best.get('industry', ''),
                 'price': best.get('price'),
                 'change_pct': best.get('change_pct'),
@@ -717,8 +738,8 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 'expected_pnl_per_trade': round(ev['ev_pct'] * 20000 / 100, 0),
                 'win_rate_estimate': ev['win_rate'],
                 'strategy_note': ev['note'],
-                # 新增: 标注 best 是否经过实盘 filter
-                'filter_passed': best_filter_passed,
+                # 标注 best 是否经过实盘 filter
+                'filter_passed': filter_passed,
                 'top10_count': len(items),
             })
         except Exception as e:
