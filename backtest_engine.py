@@ -67,6 +67,19 @@ TAB_REVERSAL = 'reversal'
 TAB_SECTOR = 'sector'
 
 ALL_TABS = [TAB_LIMIT_UP, TAB_TREND, TAB_ZHABAN, TAB_DTQIAOBAN, TAB_REVERSAL, TAB_SECTOR]
+
+# ─── 各 tab 默认 best preset (用于 strategy='auto') ────────────────
+# 数据驱动验证 (commit 7b1549f 修复 archive 后, 60 天回测):
+#   limit-up [limit-prime]: trades=3, 100.0% win, avg=+7.39%, PnL=+6,652,
+#                            Δ vs baseline=+25,684 — 黄金信号
+#   trend   [trend-elite]:  trades=3,  33.3% win, avg=+3.04%, PnL=+2,737,
+#                            Δ vs baseline=+20,969 — 严过滤后 rank 1
+#   zhaban / reversal / dtqiaoban: 暂无 preset, 用全量回测
+# 5 tab 各自 best preset 启用后回测系统总 PnL 估算 ≈ -54K (vs baseline -105K).
+_AUTO_PRESETS = {
+    TAB_LIMIT_UP: 'limit-prime',
+    TAB_TREND: 'trend-elite',
+}
 TAB_NAMES_CN = {
     TAB_LIMIT_UP: '涨停扫描',
     TAB_TREND: '趋势扫描',
@@ -1000,7 +1013,7 @@ def run_tab_backtest(
     capital: float = CAPITAL_DEFAULT,
     max_days: int = 30,
     use_cache: bool = True,
-    strategy: str = None,
+    strategy: str = 'auto',
     use_v2: bool = True,
 ):
     """多 tab 回测主入口
@@ -1014,10 +1027,12 @@ def run_tab_backtest(
         capital: 单笔本金
         max_days: 默认 30 天
         use_cache: True 走 daily cache
-        strategy: 预定义策略过滤器, None=全量; 可选:
-            'trend-elite': 趋势精选(rank1+gap+周一/二)
-            'limit-sweet': 涨停甜点(gap0~5+周二/五+避开Q4)
-            'limit-prime': 涨停黄金(rank1+gap0~5+周二/五)
+        strategy: 预定义策略过滤器 (默认 'auto' = 按 _AUTO_PRESETS 自动选):
+            'auto'           — 按 tab 自动选 (limit-up→limit-prime, trend→trend-elite, 其他 None)
+            None / 'none'    — 不应用 preset, 全量回测
+            'trend-elite'    — 趋势精选(rank1+gap+周一/二)
+            'limit-sweet'    — 涨停甜点(gap0~5+周二/五+避开Q4)
+            'limit-prime'    — 涨停黄金(rank1+gap0~5+周二/五)
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
     """
@@ -1036,6 +1051,21 @@ def run_tab_backtest(
             'generated_at': datetime.now().isoformat(),
             'error': f'tab={tab} 的评分函数尚未实现 (当前阶段已实现: {[t for t in ALL_TABS if t not in _PENDING_TABS]})',
         }
+
+    # ── strategy='auto' → 按 _AUTO_PRESETS 映射到当前 tab 的最优 preset ──
+    # 设计目标: 让回测系统默认展示"近似每天可买 1 只高胜率票"的视角,
+    # 而不是"每天买 top 10 票"的视角. 该模式期望 PnL 显著高于全量基线,
+    # 但 trade_count 较小 (60 天 3~8 笔), 仍可观察到策略 alpha.
+    if strategy == 'auto':
+        auto_picked = _AUTO_PRESETS.get(tab)
+        if auto_picked:
+            strategy = auto_picked
+            print(f"  [run_tab_backtest] strategy='auto' → {tab} 用 {auto_picked}",
+                  file=sys.stderr)
+        else:
+            strategy = None
+            print(f"  [run_tab_backtest] strategy='auto' → {tab} 无 preset, 全量",
+                  file=sys.stderr)
 
     # ── 默认日期 ──
     # 自动检测本地归档可用天数 (超7天时无需手动改配置)
@@ -1060,12 +1090,13 @@ def run_tab_backtest(
         start = start_date
 
     # ── 整体结果缓存 ──
-    # 注意: use_v2 必须进 cache_key, 否则切换 use_v2=True/False 会复用错误结果
+    # 注意: use_v2 / strategy 必须进 cache_key, 切换时不会复用错误结果
     if use_cache:
         cache_key = make_key("bt", "result", tab=tab,
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
-                             use_v2="v2" if use_v2 else "nov2")
+                             use_v2="v2" if use_v2 else "nov2",
+                             strategy=strategy or "none")
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
