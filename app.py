@@ -545,6 +545,100 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
                               data['sentiment_level'], data['date'])
 
 
+# ─── 今日信号综合 (5 tab 各取 top 1, 按历史 EV 排序) ────────────────
+# 设计目标: 回测系统已验证每个 tab 在 60 天内的 EV (commit cfe36f1),
+#   这里把每个 tab 的当前 top 1 票 + 历史期望拼接成"今日推荐"列表。
+#   实盘层面: 用户每天开盘看这个面板选 1 只全仓, 不需要 5 个 tab 高频交易。
+
+# tab → 60 天回测基线: 胜率 & 平均收益 (commit cfe36f1 验证)
+# limit-up / trend 走 auto preset (limit-prime / trend-elite)
+# 其他 tab 暂无 preset, 用全量基线
+TAB_EV_ESTIMATES = {
+    'limit-up':   {'win_rate': 0.83,  'ev_pct': 4.10,  'note': 'limit-prime (3/3 全胜)'},
+    'trend':      {'win_rate': 0.50,  'ev_pct': 3.04,  'note': 'trend-elite (rank1+周一/二)'},
+    'reversal':   {'win_rate': 0.49,  'ev_pct': -0.55, 'note': '全量基线'},
+    'zhaban':     {'win_rate': 0.31,  'ev_pct': -2.31, 'note': '全量基线'},
+    'dtqiaoban':  {'win_rate': 0.41,  'ev_pct': -0.56, 'note': '全量基线'},
+}
+
+
+def _signals_today_inner(refresh: bool = False) -> dict:
+    """调 5 个 tab cards 端点的内部 lambda 拿 top 1, 综合排序.
+
+    顶部 cache: 30 分钟内复用上次结果 (避免 5 tab 重复扫描).
+    复用 daily cache — 已有数据直接命中 (cards 端点已实现 2h 缓存),
+    首次拉取时 5 tab 大约 30s, 之后命中即时返回.
+    """
+    cache_key = make_key('app', 'signals_today', date=_today_trading())
+    if not refresh:
+        cached = daily_get(cache_key)
+        if cached and cached.get('candidates'):
+            cached['cached'] = True
+            return cached
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    candidates = []
+    for tab in ['limit-up', 'trend', 'reversal', 'zhaban', 'dtqiaoban']:
+        try:
+            params = '?refresh=true' if refresh else ''
+            r = client.get(f'/api/scan/{tab}/cards{params}', timeout=240)
+            data = r.json() if r.status_code == 200 else {}
+            # BUG-FIX: limit-up cards 用 'stocks' 字段, 其他 tab 用 'items'
+            items = data.get('items') or data.get('stocks') or []
+            if not items:
+                print(f'  [signals/today] {tab}: items=[] (空池/未完成)',
+                      file=sys.stderr)
+                continue
+            top = items[0]
+            ev = TAB_EV_ESTIMATES.get(tab, {'win_rate': 0.5, 'ev_pct': 0, 'note': ''})
+            candidates.append({
+                'tab': tab,
+                'code': top.get('code'),
+                'name': top.get('name'),
+                'url': top.get('url'),
+                'score': top.get('total_score') or top.get('composite_score') or top.get('score'),
+                'industry': top.get('industry', ''),
+                'price': top.get('price'),
+                'change_pct': top.get('change_pct'),
+                'advice': top.get('advice', ''),
+                'tags': top.get('signals', []),
+                'auction_check': top.get('auction_check', ''),
+                'expected_pnl_per_trade': round(ev['ev_pct'] * 20000 / 100, 0),
+                'win_rate_estimate': ev['win_rate'],
+                'strategy_note': ev['note'],
+            })
+        except Exception as e:
+            print(f'  [signals/today] {tab}: {type(e).__name__}: {str(e)[:80]}',
+                  file=sys.stderr)
+    # 按历史期望单笔 PnL (元) 降序
+    candidates.sort(key=lambda c: c['expected_pnl_per_trade'], reverse=True)
+    result = {
+        'ok': True,
+        'best': candidates[0] if candidates else None,
+        'candidates': candidates,
+        'tab_estimates': TAB_EV_ESTIMATES,
+        'fetched_at': _fetched_at(),
+        'cached': False,
+    }
+    daily_set(cache_key, result)  # 30 分钟顶部 cache (走默认 expire)
+    return result
+
+
+@app.get('/api/signals/today')
+def api_signals_today(refresh: bool = Query(False, description='强制刷新 (跳过 cache)')):
+    """今日信号综合面板 - 5 tab 各取今日 top 1 候选 + 历史 EV.
+
+    返回:
+        best:        排序后的 #1 推荐 (用户全仓买入这个)
+        candidates:  5 tab top 1 列表 (按预期单笔 PnL 降序)
+        tab_estimates: tab → 历史胜率/期望说明 (供前端展示)
+
+    前端: dashboard 默认面板之一, 取代之前的"5 tab 分开展示"决策路径.
+    cache: 30 分钟内复用上一次结果 (避免 5 tab 重复扫描触发 akshare 限流).
+    """
+    return _signals_today_inner(refresh=refresh)
+
+
 @app.get("/api/scan/sector/cards")
 def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）
