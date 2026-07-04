@@ -1534,25 +1534,100 @@ def api_backtest_tab_full(tab: str,
 
 @app.get("/api/signal/tomorrow")
 def api_signal_tomorrow(
-    zhaban_top_n: int = Query(3, description="炸板TOP-N"),
-    zhaban_min_score: float = Query(50, description="炸板最低评分"),
-    zhaban_sell_n: int = Query(5, description="炸板持仓天数"),
-    limit_up_top_n: int = Query(3, description="涨停TOP-N"),
-    limit_up_min_score: float = Query(38, description="涨停最低评分"),
-    trend_top_n: int = Query(1, description="趋势TOP-N"),
-    trend_min_score: float = Query(45, description="趋势最低评分"),
+    zhaban_top_n: int = Query(3, description="(legacy 兼容参数, 新逻辑忽略)"),
+    zhaban_min_score: float = Query(50, description="(legacy 兼容参数)"),
+    zhaban_sell_n: int = Query(5, description="(legacy 兼容参数)"),
+    limit_up_top_n: int = Query(3, description="(legacy 兼容参数)"),
+    limit_up_min_score: float = Query(38, description="(legacy 兼容参数)"),
+    trend_top_n: int = Query(1, description="(legacy 兼容参数)"),
+    trend_min_score: float = Query(45, description="(legacy 兼容参数)"),
 ):
-    """明日买入信号 — 接受回测面板参数覆盖默认值"""
+    """明日买入信号 — 复用 _signals_today_inner 综合推荐.
+
+    历史 (commit 1bf5d0f 之前): 走 signal_tomorrow.py 的 rank/Q4/星期等规则过滤
+    现在 (commit 1bf5d0f): 调 5 tab 综合打分, 综合推荐 best (= candidates[0]).
+    前端 loadTomorrowSignals() 直接渲染此端点 (单数路径); /api/signals/today
+    (复数) 保留为同样逻辑的独立端点.
+
+    返回格式 (供前端 static/app.js:271 loadTomorrowSignals 渲染):
+      {
+        ok: true,
+        date: 'YYYYMMDD',
+        weekday: '周一/.../周日',
+        alerts: [str],      # 跳过原因列表 (best 之外的提醒)
+        signals: [{tab, tab_cn, name, code, score, buy_date, reason}],
+        summary: str        # 当 signals 为空时显示
+      }
+    """
     try:
-        from signal_tomorrow import generate_signals
-        settings = {
-            'zhaban': {'top_n': zhaban_top_n, 'min_score': zhaban_min_score,
-                       'sell_n': zhaban_sell_n},
-            'limit-up': {'top_n': limit_up_top_n, 'min_score': limit_up_min_score},
-            'trend': {'top_n': trend_top_n, 'min_score': trend_min_score},
+        sig = _signals_today_inner(refresh=False)
+        today = _today_trading()
+        weekday_cn = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][
+            datetime.strptime(today, '%Y%m%d').weekday()
+        ]
+
+        # 转成前端期望的 signals 格式
+        tab_cn_map = {
+            'limit-up': '涨停', 'trend': '趋势', 'reversal': '反转',
+            'zhaban': '炸板', 'dtqiaoban': '翘板',
         }
-        result = generate_signals(settings=settings)
-        return {"ok": True, **result}
+        signals = []
+        alerts = []
+        for c in sig.get('candidates', []):
+            tab = c.get('tab')
+            score = c.get('score', 0) or 0
+            ev = c.get('expected_pnl_per_trade', 0)
+            reason = (
+                f"{c.get('strategy_note', '')} | 单笔期望 {ev:+} 元 "
+                f"| 当日评分 {score:.1f} | sample={c.get('sample_size', '?')} "
+                f"conf={c.get('confidence_factor', '?')} "
+                f"rare={c.get('rare_event_boost', '?')} "
+                f"| 综合分 {c.get('recommendation_score', '?')}"
+            )
+            signals.append({
+                'tab': tab,
+                'tab_cn': tab_cn_map.get(tab, tab),
+                'name': c.get('name') or '?',
+                'code': c.get('code') or '?',
+                'score': score,
+                'buy_date': today,
+                'reason': reason,
+            })
+
+        # 跳过原因: 把 EV 负的低分候选列到 alerts (告警)
+        for c in sig.get('candidates', []):
+            ev = c.get('expected_pnl_per_trade', 0)
+            if ev < 0:
+                alerts.append(
+                    f"{tab_cn_map.get(c['tab'], c['tab'])} {c.get('name') or '?'}"
+                    f"({c.get('code')}) 评分 {c.get('score', 0):.0f} — "
+                    f"历史 EV {ev:+} 元/笔, 跳过"
+                )
+
+        # best (candidates[0]) 是否提示性输出
+        summary_msg = ''
+        if not signals:
+            summary_msg = f"{weekday_cn} — 综合打分无合适候选"
+        else:
+            b = signals[0]
+            summary_msg = (
+                f"{weekday_cn} — 综合分最高: {b['name']}({b['code']}) "
+                f"建议关注"
+            )
+
+        return {
+            'ok': True,
+            'date': today,
+            'weekday': weekday_cn,
+            'alerts': alerts,
+            'signals': signals,
+            'summary': summary_msg,
+            # 新增: 把综合打分详情也暴露, 供前端未来扩展
+            'best': sig.get('best'),
+            'candidates': sig.get('candidates', []),
+            'tab_estimates': sig.get('tab_estimates', {}),
+            'fetched_at': sig.get('fetched_at'),
+        }
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)[:200]})
 
