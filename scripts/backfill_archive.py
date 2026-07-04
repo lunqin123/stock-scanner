@@ -1,11 +1,22 @@
-"""backfill archive.db daily_stocks 从 2h 引擎缓存
+"""backfill archive.db daily_stocks 从引擎持久化缓存
 
-读取 data/cache/persistent_engine_*.pkl (Tier1.A 升级的),
-把所有池 (limit-up / trend / reversal / zhaban / dtqiaoban) 数据补到 archive.db daily_stocks 表。
+读取 data/cache/ 下两类持久化文件, 把它们对应的池 (limit-up / trend / reversal /
+zhaban / dtqiaoban) 数据补到 archive.db daily_stocks 表:
+
+  1. ``engine_*_v<N>.pkl``           — 当下格式, 由 backtest_engine.py
+       :func:`_pool_cache_put` 调用 ``cache.persistent_put('engine_xxx', df)`` 生成
+       (例: ``engine_limit_up_20260615_v10.pkl``)。
+  2. ``persistent_engine_*_v<N>.pkl`` — 历史格式, 由旧版
+       ``scripts/backfill_engine_cache.py`` 复制生成 (已废弃, 仅兼容)。
+
+两者都接受, 同 (pool_type, trade_date) 取最高版本 (高版本缓存覆盖低版本的事实)。
 对 limit-up 类型同时尝试 backfill next_day_change (从 stock_daily 关联)。
 对其他类型, next_day_change 留空 (后续 backfill 脚本可填)。
+
+历史变更:
+- 6/17 之后数据 pipeline 断档 — 修此脚本后已恢复。 见 docstring。
 """
-import os, glob, pickle, sqlite3
+import os, re, glob, pickle, sqlite3
 from datetime import datetime, timedelta
 
 DB = r'C:\Users\16689\Desktop\stock-scanner\archive.db'
@@ -25,7 +36,7 @@ COL_MAP = {
     '成交量': 'volume',
 }
 
-# engine_* cache 文件 → stock_type
+# engine_* cache 文件名 → stock_type
 # Tier2.E 扩展: 加入 reversal / zhaban / dtqiaoban
 POOL_MAP = {
     'engine_limit_up_': 'limit_up',
@@ -35,10 +46,51 @@ POOL_MAP = {
     'engine_dtqiaoban_': 'dtqiaoban',
 }
 
+# 两种文件名格式的解析: ``persistent_engine_xxx_<date>_v<N>.pkl``
+# 和 ``engine_xxx_<date>_v<N>.pkl`` 都接受, 抽 (pool_suffix, trade_date, version)。
+# 历史版本 (v8 / v9 / v10) 数据格式相同 (老 DataFrame), 仅版本号含义不同
+# (cache schema bump), 列名一致, 复用同一解析逻辑。
+_FILENAME_RE = re.compile(
+    r'^(?:(?P<prefix>persistent_))?'
+    r'(?P<pool>engine_(?:limit_up|trend|reversal|zhaban|dtqiaoban))'
+    r'_(?P<date>\d{8})_v(?P<ver>\d+)\.pkl$'
+)
+
 def parse_date(date_str: str) -> str:
     if len(date_str) == 8 and date_str.isdigit():
         return date_str
     return None
+
+def discover_pool_files(cache_dir: str) -> list:
+    """扫描 cache 目录, 抽出全部 (suffix, date_str, version, path)。
+
+    同 (suffix, date_str) 可能因为版本更迭而存在多个文件 (例如同时存在
+    v8 与 v10)。调用方负责按版本号取最新, 我们这里全部列出。
+    返回按 (date, suffix) 排序, 方便断点续跑场景。
+    """
+    found = []
+    # 既要匹配 ``engine_xxx_...`` 也要匹配 ``persistent_engine_xxx_...``
+    # — 所以前面是 0 或多个任意字符。
+    for f in glob.glob(os.path.join(cache_dir, '*engine_*_v*.pkl')):
+        name = os.path.basename(f)
+        # 兼容 ``engine_dtqiaoban_20260612_v8.pkl`` — 不带 persistent_ 前缀
+        m = _FILENAME_RE.match(name)
+        if not m:
+            # 回退: 即使正则没匹配也试一种简化模式 (兼容老命名)
+            m2 = re.match(r'^(persistent_)?(?P<pool>engine_(?:limit_up|trend|reversal|zhaban|dtqiaoban))_(?P<date>\d{8})_v(?P<ver>\d+)\.pkl$', name)
+            if not m2:
+                print(f'  [skip] 文件名无法解析: {name}')
+                continue
+            m = m2
+        found.append({
+            'prefix': m.group('prefix') or '',
+            'pool': m.group('pool'),
+            'date_str': m.group('date'),
+            'version': int(m.group('ver')),
+            'path': f,
+        })
+    found.sort(key=lambda x: (x['date_str'], x['pool'], x['version']))
+    return found
 
 def main():
     conn = sqlite3.connect(DB)
@@ -48,32 +100,55 @@ def main():
     added = 0
     skipped = 0
     next_day_filled = 0
-    files = sorted(glob.glob(os.path.join(CACHE, 'persistent_engine_*_v8.pkl')))
-    for f in files:
-        name = os.path.basename(f)
-        # 解析 pool_type + date
-        prefix = None
-        for p in POOL_MAP:
-            if name.startswith('persistent_' + p):
-                prefix = p
-                break
-        if prefix is None:
-            continue
-        stock_type = POOL_MAP[prefix]
-        # persistent_engine_limit_up_20260612_v8.pkl
-        rest = name[len('persistent_' + prefix):-len('_v8.pkl')]
-        date_str = parse_date(rest)
-        if date_str is None:
-            print(f'  [skip] 无法解析日期: {name}')
+
+    # 1. 扫描全部候选文件
+    candidates = discover_pool_files(CACHE)
+    if not candidates:
+        print('  [WARN] 没扫到任何候选文件, 检查 CACHE 路径')
+        return
+
+    # 2. 同 (pool, date) 取最高版本 (高版本覆盖低版本是 cache 版本号约定)
+    latest_by_key = {}
+    for cand in candidates:
+        key = (cand['pool'], cand['date_str'])
+        if key not in latest_by_key or cand['version'] > latest_by_key[key]['version']:
+            latest_by_key[key] = cand
+    dropped = len(candidates) - len(latest_by_key)
+    print(f'  候选文件 {len(candidates)}, 去重后 {len(latest_by_key)}'
+          f' (丢弃 {dropped} 个低版本副本)')
+
+    for key, cand in sorted(latest_by_key.items(), key=lambda x: (x[0][1], x[0][0])):
+        pool = cand['pool']                        # 例 ``engine_limit_up``
+        date_str = cand['date_str']
+        version = cand['version']
+        f = cand['path']
+        # POOL_MAP key 是 ``engine_xxx_`` 形式, 末尾带下划线; pool 是不带下划线的
+        prefix = pool + '_'
+        if prefix not in POOL_MAP:
+            print(f'  [skip] 未知 pool 类型: {pool}')
             skipped += 1
             continue
+        stock_type = POOL_MAP[prefix]
+        print(f'  [{date_str} v{version}] {pool} → {stock_type}  ({os.path.basename(f)})')
 
         try:
             df = pickle.load(open(f, 'rb'))
         except Exception as e:
-            print(f'  [err] {name}: {e}')
+            print(f'  [err] {f}: {e}')
             continue
-        if df is None or (hasattr(df, 'empty') and df.empty):
+        # None marker / '__NONE__' 哨兵 / 空 DataFrame 都跳过
+        if df is None:
+            skipped += 1
+            continue
+        if isinstance(df, str):
+            if df == '__NONE__':
+                skipped += 1
+                continue
+            # 其它字符串 — 异常内容, 跳过
+            print(f'  [skip] 非预期 str 内容: {os.path.basename(f)} → {df[:50]}')
+            skipped += 1
+            continue
+        if hasattr(df, 'empty') and df.empty:
             skipped += 1
             continue
 
