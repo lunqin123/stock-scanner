@@ -626,13 +626,23 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
 
     factors = compute_factors(scoring_base, fund_df=fund_df, principal=principal)
 
+    # v2 因子 (持续性 + 回撤位置) — 回测路径此前缺失, 导致 mc/pd 一律 5.0,
+    # 等价于 baseline (use_v2=False). 现补回显式注入, 与 plan_a.score() 前端路径对齐。
+    from plans.factors_v2 import compute_v2_factors as _compute_v2
+    v2_factors = _compute_v2(scoring_base, today_fmt)
+    factors['momentum_consistency'] = v2_factors['momentum_consistency']
+    factors['pullback_depth'] = v2_factors['pullback_depth']
+    n_with_hist = int((v2_factors['momentum_consistency'] != 5.0).sum())
+    print(f"  [PlanA v2 / backtest] {n_with_hist}/{len(scoring_base)} 票有历史, mc/pd 启用",
+          file=sys.stderr)
+
     # 使用涨停专用权重（板块热度提权、封板强度降权）
     from weight_manager import _load_tab_weights
     limit_up_weights = _load_tab_weights('limit-up')
 
     total_scores, base_scores, danger_flags, weights = apply_scores(
         filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt,
-        weights=limit_up_weights)
+        weights=limit_up_weights, use_v2=True)
 
     # 3. 附加评分列到 DataFrame
     filtered = filtered.copy()
@@ -931,6 +941,7 @@ def run_tab_backtest(
     max_days: int = 30,
     use_cache: bool = True,
     strategy: str = None,
+    use_v2: bool = True,
 ):
     """多 tab 回测主入口
 
@@ -989,10 +1000,12 @@ def run_tab_backtest(
         start = start_date
 
     # ── 整体结果缓存 ──
+    # 注意: use_v2 必须进 cache_key, 否则切换 use_v2=True/False 会复用错误结果
     if use_cache:
         cache_key = make_key("bt", "result", tab=tab,
                              start=start, end=end, top_n=top_n,
-                             min_score=int(min_score), sell_n=sell_n, capital=int(capital))
+                             min_score=int(min_score), sell_n=sell_n, capital=int(capital),
+                             use_v2="v2" if use_v2 else "nov2")
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
