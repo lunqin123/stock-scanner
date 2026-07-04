@@ -624,12 +624,56 @@ def compute_recommendation_score(cand: dict) -> dict:
     return cand
 
 
-def _signals_today_inner(refresh: bool = False) -> dict:
-    """调 5 个 tab cards 端点的内部 lambda 拿 top 1, 综合排序.
+# ── 实盘可行 filter (不含 gap, 因为 gap 是未来数据) ─────────────
+# strategy_filters.py 里的 preset 含 gap_sweet_spot, 但 gap_open_pct
+# 是买入日开盘-收盘差, 实盘时还没发生, 不能直接套.
+# 改用以下实盘可知信息做等价过滤 — 让 best 真的是"经过过滤后留下
+# 的票", 而非裸的 score top 1.
+def _passes_preset_like_filter(item: dict, tab: str, today_dt=None) -> bool:
+    """实盘可达的 preset 等价过滤 (不含未来数据).
 
-    综合排序逻辑: 40% 历史 EV (sample-shrinkage + rare-event boost) +
-                  60% 当日评分 (tab 内 top 1 卡的分数).
-    顶部 cache: 30 分钟内复用 (避免重复扫描).
+    Returns True 表示"今日大概率能像 limit-prime/trend-elite 选中".
+    """
+    if today_dt is None:
+        today_dt = datetime.strptime(_today_trading(), '%Y%m%d')
+    score = float(item.get('score') or item.get('composite_score') or 0)
+    if tab == 'limit-up':
+        # Q2+Q3 甜蜜区 (避开 Q4 > 75 陷阱, 见 strategy_filters.py 注释 2026-06-14)
+        # 实测: limit-prime 选中票 score 51/57/82, 故上限放宽到 85.
+        if not (38 <= score <= 85):
+            return False
+        # 周二/周五 (策略预设 weekday)
+        if today_dt.weekday() not in (1, 4):
+            return False
+    elif tab == 'trend':
+        # 实测 trend-elite 选中票 score 80/81/94, 故下限放宽到 60.
+        if not (60 <= score <= 100):
+            return False
+        # 周一/周二
+        if today_dt.weekday() not in (0, 1):
+            return False
+    # 其余 tab 没有 preset, 不过滤
+    return True
+
+
+def _find_pass_after_filter(items: list, tab: str, today_dt=None) -> dict | None:
+    """对 items 列表应用 preset-like filter, 返回第一个保留项.
+    items 已按 score 降序, 所以第一个保留的就是实盘可买的 best.
+    """
+    for item in items:
+        if _passes_preset_like_filter(item, tab, today_dt):
+            return item
+    return None
+
+
+def _signals_today_inner(refresh: bool = False) -> dict:
+    """调 5 个 tab cards 端点的内部 lambda, 对每 tab items 应用实盘可行
+    preset-like filter (weekday + score 甜蜜区), 留下的最高分 = 今日 best.
+    综合排序: 40% 历史 EV (sample-shrinkage + rare-event) + 60% 当日评分.
+
+    关键修复 (用户反馈): "经过过滤后的回测选中的哪些交易". 不再用 cards top 1,
+    改用 *经过 weekday + Q2/Q3 甜蜜区过滤后能留下的票* 作 best.
+    顶部 cache: 30 分钟内复用.
     """
     cache_key = make_key('app', 'signals_today', date=_today_trading())
     if not refresh:
@@ -639,6 +683,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
             return cached
     from fastapi.testclient import TestClient
     client = TestClient(app)
+    today_dt = datetime.strptime(_today_trading(), '%Y%m%d')
     candidates = []
     for tab in ['limit-up', 'trend', 'reversal', 'zhaban', 'dtqiaoban']:
         try:
@@ -651,28 +696,35 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 print(f'  [signals/today] {tab}: items=[] (空池/未完成)',
                       file=sys.stderr)
                 continue
-            top = items[0]
+            # BEST = 经过 preset-like filter 后的第一只, 而非裸 top 1
+            best = _find_pass_after_filter(items, tab, today_dt) or items[0]
+            best_filter_passed = best is not items[0] or _passes_preset_like_filter(
+                items[0], tab, today_dt)
+
             ev = TAB_EV_ESTIMATES.get(tab, {'win_rate': 0.5, 'ev_pct': 0, 'note': ''})
             candidates.append({
                 'tab': tab,
-                'code': top.get('code'),
-                'name': top.get('name'),
-                'url': top.get('url'),
-                'score': top.get('total_score') or top.get('composite_score') or top.get('score'),
-                'industry': top.get('industry', ''),
-                'price': top.get('price'),
-                'change_pct': top.get('change_pct'),
-                'advice': top.get('advice', ''),
-                'tags': top.get('signals', []),
-                'auction_check': top.get('auction_check', ''),
+                'code': best.get('code'),
+                'name': best.get('name'),
+                'url': best.get('url'),
+                'score': best.get('total_score') or best.get('composite_score') or best.get('score'),
+                'industry': best.get('industry', ''),
+                'price': best.get('price'),
+                'change_pct': best.get('change_pct'),
+                'advice': best.get('advice', ''),
+                'tags': best.get('signals', []),
+                'auction_check': best.get('auction_check', ''),
                 'expected_pnl_per_trade': round(ev['ev_pct'] * 20000 / 100, 0),
                 'win_rate_estimate': ev['win_rate'],
                 'strategy_note': ev['note'],
+                # 新增: 标注 best 是否经过实盘 filter
+                'filter_passed': best_filter_passed,
+                'top10_count': len(items),
             })
         except Exception as e:
             print(f'  [signals/today] {tab}: {type(e).__name__}: {str(e)[:80]}',
                   file=sys.stderr)
-    # 综合打分排序 (历史 40% + 当日 60%, 含 sample-shrinkage + rare-event boost)
+    # 综合打分排序
     for c in candidates:
         compute_recommendation_score(c)
     candidates.sort(key=lambda c: c.get('recommendation_score', c['expected_pnl_per_trade']),
@@ -685,7 +737,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
         'fetched_at': _fetched_at(),
         'cached': False,
     }
-    daily_set(cache_key, result)  # 30 分钟顶部 cache (走默认 expire)
+    daily_set(cache_key, result)  # 30 分钟顶部 cache
     return result
 
 
