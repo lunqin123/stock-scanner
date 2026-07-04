@@ -189,7 +189,7 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
-def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str = None):
+def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str = None, use_v2: bool = True):
     """涨停扫描核心逻辑：拉取数据 + 过滤 + 调用评分方案"""
     from scanner import (fetch_limit_up_pool, pre_filter,
                          filter_by_price, can_buy_filter,
@@ -312,6 +312,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str
         'today_str': today_str,
         'pool': pool,
         'principal': principal,
+        'use_v2': use_v2,
     }
     plan_inputs.update(source_data)  # DataFrames 直接注入 inputs
     # v2 集成关键: 让 plan_a 评分输出 20 票 (而不是默认 10), 保证 v2 过滤后还有 5+ 票
@@ -517,19 +518,21 @@ def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
 @app.get("/api/scan/limit-up/cards")
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
                               principal: float = Query(20000, description="本金(元)"),
-                              plan: str = Query(None, description="评分方案(A/B/...)")):
+                              plan: str = Query(None, description="评分方案(A/B/...)"),
+                              use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子(A/B 对比用)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）
     缓存策略: 缓存 _scan_limit_up_data 返回的原始 dict(含 stocks/sentiment),
     每次用最新 _make_cache_entry 重新组装 items。改组装逻辑后直接 reload 即可。
     """
     plan_name = plan or None
-    raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default")
+    raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default",
+                       v2=use_v2)
 
     print("  [涨停卡片] 开始扫描", file=sys.stderr)
     today = _today_trading()
     data, from_cache, err = _cached_pool_loader(
         raw_key,
-        lambda: _scan_limit_up_data(today, principal=principal, plan_name=plan_name),
+        lambda: _scan_limit_up_data(today, principal=principal, plan_name=plan_name, use_v2=use_v2),
         refresh
     )
     if err:
@@ -1711,7 +1714,8 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 @app.get("/api/scan/limit-up/stream")
 async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新"),
                                     principal: float = Query(20000, description="本金(元)"),
-                                    plan: str = Query(None, description="评分方案(A/B/...)")):
+                                    plan: str = Query(None, description="评分方案(A/B/...)"),
+                                    use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子")):
     """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
     plan_name = plan or None
     today = _today_trading()
@@ -1754,7 +1758,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             try:
                 sys.stderr = cap
                 sys.stdout = cap
-                data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
+                data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name, use_v2=use_v2)
                 result_holder["data"] = data
                 if data and data.get('sentiment_ok'):
                     cache_data = _make_cache_entry(data['stocks'], data['sentiment_score'],

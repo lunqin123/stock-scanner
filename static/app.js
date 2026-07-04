@@ -421,6 +421,33 @@ function savePrincipal() {
     var el = document.getElementById('principal-input');
     if (el) localStorage.setItem('_principal', el.value);
 }
+// P2.0 新因子开关: 默认开启 (持续性 + 回撤位置), 用户可关掉回退到老评分
+function getUseV2() {
+    return localStorage.getItem('_useV2') !== 'false';
+}
+function toggleUseV2() {
+    var v = !getUseV2();
+    localStorage.setItem('_useV2', v);
+    updateV2Button();
+    // 清缓存重拉
+    if (typeof _btCache !== 'undefined') _btCache = {};
+    // 当前页如果是涨停, 重拉
+    var cur = location.hash.slice(1) || 'scan-trend';
+    if (cur === 'scan-limit') {
+        if (typeof _runCurrentFromCache === 'function') _runCurrentFromCache(true);
+        else if (typeof switchPage === 'function') switchPage(cur);
+    }
+}
+function updateV2Button() {
+    var btn = document.getElementById('v2ToggleBtn');
+    if (!btn) return;
+    var on = getUseV2();
+    btn.textContent = '🧠 V2 评分 ' + (on ? 'ON' : 'OFF');
+    btn.style.background = on ? '#22c55e' : 'var(--bg-secondary)';
+    btn.style.color = on ? '#fff' : 'var(--text-muted)';
+    btn.style.borderColor = on ? '#22c55e' : 'var(--border)';
+    btn.title = on ? '持续性+回撤位置因子已启用 (关掉=老评分)' : '已回退老评分 (点开=新评分)';
+}
 function getPlan() {
     var el = document.getElementById('plan-select');
     return el ? el.value || '' : '';
@@ -477,7 +504,7 @@ async function runCurrent() {
     savePrincipal();
     var plan = getPlan();
     // 稳定 cache key: 不含 _r (随机数), 否则每次 runCurrent 都 miss 永远 14s 重 fetch
-    var stableKey = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '');
+    var stableKey = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + (getUseV2() ? '&use_v2=true' : '&use_v2=false');
     var url = stableKey + '&_r=' + Math.random().toString(36).slice(2);
     if (_lastUrl[currentPage] === stableKey && _getCachedPage(currentPage)) {
         return;
@@ -1190,6 +1217,7 @@ function expandOlderVersions() {
 
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
+    updateV2Button();
     updateCacheStatus();
     loadMarketStatus();
     loadDashboard();

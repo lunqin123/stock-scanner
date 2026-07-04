@@ -54,6 +54,8 @@ function renderStockCards(stocks, data) {
             [s.money_score, 20, '资金驱动'],
             [s.principal_score || 5, 10, '本金适配'],
             [s.north_flow_score || 5, 10, '北向资金'],
+            [s.momentum_consistency != null ? s.momentum_consistency : 5, 10, '持续性'],
+            [s.pullback_depth != null ? s.pullback_depth : 5, 10, '回撤位置'],
         ];
 
         let barsHTML = '';

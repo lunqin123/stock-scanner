@@ -168,7 +168,7 @@ def reindex_factors(factors, idx):
 # ═══════════════════════════════════════════
 
 def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, today_str,
-                  weights=None):
+                  weights=None, use_v2=True):
     """
     因子加权 + 大盘情绪系数 + 危险信号惩罚。
     返回 (total_scores, base_scores, danger_flags, weights)
@@ -211,8 +211,24 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
     # P1-2 修复: 危险信号改乘性惩罚,避免加性 clip -30 导致烂票均匀对待、失去区分度
     # penalty 范围 -30~0 → factor 范围 0.7~1.0(最多扣 30%,保留 70% 底)
     danger_factor = 1.0 + danger_penalty / 100.0  # -30→0.7, -15→0.85, -5→0.95, 0→1.0
+
+    # v2.0 新增: 持续性 + 回撤位置 乘性因子
+    # 设计目的: 解决"评分高=追高陷阱"问题
+    #   - momentum_consistency (0-10): mc=0 → factor 0.85 (扣 15%), mc=10 → factor 1.05 (加 5%)
+    #     → 持续强势的票小幅加分, 一日游的票扣分
+    #   - pullback_depth (0-10): pd=0 → factor 0.90 (扣 10%), pd=10 → factor 1.10 (加 10%)
+    #     → 高位强势 / 刚回踩后回升的票加分, 深度回撤中的票扣分
+    # 无历史数据时 mc/pd=5.0 → factor=1.0 (中性, 不影响)
+    mc_series = factors.get('momentum_consistency', pd.Series(5.0, index=filtered.index))
+    pd_series = factors.get('pullback_depth', pd.Series(5.0, index=filtered.index))
+    if use_v2:
+        mc_factor = 0.85 + mc_series / 50.0      # mc=10→1.05, mc=0→0.85, mc=5→0.95
+        pd_factor = 0.90 + pd_series / 50.0      # pd=10→1.10, pd=0→0.90, pd=5→1.00
+        position_factor = mc_factor * pd_factor   # 总范围 0.765~1.155
+    else:
+        position_factor = 1.0  # 老评分模式,无 v2 影响
     # BUG-3 修复: lhb_bonus 独立加性微调,在 danger 之后叠加
-    total = ((base + lhb_adjust) * danger_factor).clip(lower=0)
+    total = ((base + lhb_adjust) * danger_factor * position_factor).clip(lower=0)
 
     # 后台回测
     try:
@@ -263,6 +279,8 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
             'stock_sentiment_score': round(float(factors['stock_sentiment'].get(idx, 5)), 1),
             'principal_score': round(float(factors['principal'].get(idx, 5)), 1),
             'north_flow_score': round(float(factors.get('north_flow', pd.Series(5.0, index=factors['seal'].index)).get(idx, 5)), 1),
+            'momentum_consistency': round(float(factors.get('momentum_consistency', pd.Series(5.0, index=factors['seal'].index)).get(idx, 5)), 1),
+            'pullback_depth': round(float(factors.get('pullback_depth', pd.Series(5.0, index=factors['seal'].index)).get(idx, 5)), 1),
             'danger_flags': danger_flags.get(idx, []),
             'auction_check': _gen_auction_check(row, idx, factors['sector_mom'], factors['money'], filtered, pool),
             'net_money': net,
@@ -279,7 +297,7 @@ def build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
 #  app.py 唯一需要调用的函数
 # ═══════════════════════════════════════════
 
-def score(inputs: dict, max_n: int = None) -> dict:
+def score(inputs: dict, max_n: int = None, use_v2: bool = True) -> dict:
     """
     Plan A 评分主入口。
 
@@ -323,6 +341,30 @@ def score(inputs: dict, max_n: int = None) -> dict:
     print("  [PlanA] 计算9因子...", file=sys.stderr)
     factors_full = compute_factors(scoring_base, fund_df, principal)
 
+    # v2.0 新增: 持续性 + 回撤位置因子 (解决"评分高=追高陷阱"问题)
+    # 无历史数据时降级到 5.0 (中性, 不影响总评分)
+    # use_v2=False 时跳过 v2 因子,保持与 baseline 一致
+    if use_v2:
+        try:
+            from plans.factors_v2 import compute_v2_factors
+            v2 = compute_v2_factors(scoring_base, today_str)
+            factors_full['momentum_consistency'] = v2['momentum_consistency']
+            factors_full['pullback_depth'] = v2['pullback_depth']
+            n_with_hist = sum(1 for v in v2['momentum_consistency'] if v != 5.0)
+            print(f"  [PlanA v2] {n_with_hist}/{len(scoring_base)} 票有历史数据,新因子生效",
+                  file=sys.stderr)
+        except Exception as e:
+            print(f"  [PlanA v2] 因子计算失败: {e}", file=sys.stderr)
+            factors_full['momentum_consistency'] = pd.Series(5.0, index=scoring_base.index)
+            factors_full['pullback_depth'] = pd.Series(5.0, index=scoring_base.index)
+    else:
+        # A/B 对比: 老评分模式,mc/pd 设为 5.0 (中性),position_factor=0.95 等比缩放
+        # 注: 这会让 total = base * 0.95,与 v2 完全关闭不同(v2=全 5.0,position=0.95;关闭 v2=base 不变)
+        # 实际效果: 老评分 = base 不变;v2 = base * 0.95 * mc_factor * pd_factor
+        # 为保证老评分与 baseline 完全一致,关闭 v2 时 mc/pd 不参与加权
+        factors_full['momentum_consistency'] = pd.Series(5.0, index=scoring_base.index)
+        factors_full['pullback_depth'] = pd.Series(5.0, index=scoring_base.index)
+
     # 缩到 filtered 的索引（如果 scoring_base > filtered）
     if len(scoring_base) > len(filtered):
         common_idx = filtered.index.intersection(scoring_base.index)
@@ -334,7 +376,8 @@ def score(inputs: dict, max_n: int = None) -> dict:
     # 2. 加权 + 危险信号
     print("  [PlanA] 加权+危险信号...", file=sys.stderr)
     total_scores, base_scores, danger_flags, weights = apply_scores(
-        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_str)
+        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_str,
+        use_v2=use_v2)
 
     # 3. 组装 stocks
     print("  [PlanA] 组装TOP股票...", file=sys.stderr)
