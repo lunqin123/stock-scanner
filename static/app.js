@@ -20,8 +20,6 @@ const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 3, 'trend': 1, 'dtqiaoban': 3
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
-// P2.0: SmartExit 智能 T+n 卖出 (默认 off, 用户可开启)
-let _btSmartMode = localStorage.getItem('btSmartMode') === 'true';
 // 回测天数（服务端归档最多到109天，默认60天不过载）
 const _BT_DAYS = 60;
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
@@ -82,25 +80,8 @@ function _saveBacktestParams() {
     localStorage.setItem('btTopN', _btTopN);
     localStorage.setItem('btCapital', _btCapital);
     localStorage.setItem('btStrategy', _btStrategy);
-    localStorage.setItem('btSmartMode', _btSmartMode);
     // btMinScores 已通过 _setMinScore 持久化到 btMinScores
 }
-function _toggleSmartMode() {
-    _btSmartMode = !_btSmartMode;
-    _saveBacktestParams();
-    _btCache = {};  // 清缓存, 重新跑
-    // 同步更新按钮文字/颜色 (按钮区不会随 loadBacktestTab 重新渲染)
-    var btn = document.getElementById('btSmartModeBtn');
-    if (btn) {
-        btn.textContent = '🧠 SmartExit ' + (_btSmartMode ? 'ON' : 'OFF');
-        btn.style.background = _btSmartMode ? '#22c55e' : 'var(--bg-secondary)';
-        btn.style.color = _btSmartMode ? '#fff' : 'var(--text-muted)';
-        btn.style.borderColor = _btSmartMode ? '#22c55e' : 'var(--border)';
-        btn.style.fontWeight = _btSmartMode ? '600' : '400';
-    }
-    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
-}
-
 // 重置回默认 (1把梭3万, 全部 TOP1)
 function _resetBacktestParams() {
     if (!confirm('重置回测参数为默认值?\n(全部 tab 用 TOP1 + 3万本金, 切回默认趋势 tab)')) return;
@@ -148,7 +129,6 @@ async function loadBacktestTab(tab, days, topN, capital) {
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
         var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
-        if (_btSmartMode) url += '&smart_mode=true';
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
         var data = await resp.json();
@@ -187,7 +167,6 @@ function _prefetchBacktestTabs(currentTab, days, topN, capital) {
         if (_btCache[key]) return;
         var url = '/api/bt/' + t + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(t) + '&sell_n=' + _getSellN(t) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
-        if (_btSmartMode) url += '&smart_mode=true';
         fetch(url).then(function(r) { return r.json(); }).then(function(d) {
             if (d && typeof d === 'object' && d.ok) {
                 _btCache[key] = { data: d, ts: Date.now() };
@@ -842,14 +821,6 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '</select>'
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
                     + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
-                    // P2.0: SmartExit 智能 T+n 切换
-                    + '<button id="btSmartModeBtn" onclick="_toggleSmartMode()" title="SmartExit: 多维度智能决策卖出日 (止损/止盈/一字板/量能/时间)" '
-                    + 'style="margin-left:8px;padding:3px 8px;font-size:11px;'
-                    + 'background:' + (_btSmartMode ? '#22c55e' : 'var(--bg-secondary)') + ';'
-                    + 'color:' + (_btSmartMode ? '#fff' : 'var(--text-muted)') + ';'
-                    + 'border:1px solid ' + (_btSmartMode ? '#22c55e' : 'var(--border)') + ';'
-                    + 'border-radius:4px;cursor:pointer;font-weight:' + (_btSmartMode ? '600' : '400') + '">'
-                    + '🧠 SmartExit ' + (_btSmartMode ? 'ON' : 'OFF') + '</button>'
                     + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '</div>'

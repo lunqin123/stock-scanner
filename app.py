@@ -1291,8 +1291,7 @@ def api_backtest_tab_full(tab: str,
                            sell_n: int = Query(3, description="卖出日偏移(2=T+2,3=T+3,4=T+4,5=T+5)"),
                            capital: float = Query(30000, description="单笔本金"),
                            force: bool = Query(False, description="强制重算(跳过缓存)"),
-                           strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime"),
-                           smart_mode: bool = Query(False, description="SmartExit 智能 T+n 卖出 (P2.0)")):
+                           strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime")):
     """P6: 单 tab 完整回测面板 — 一次返回回测+因子权重+调权历史
 
     cache key 包含 end_date (前一个 completed 交易日)
@@ -1300,14 +1299,12 @@ def api_backtest_tab_full(tab: str,
     → 新一天 (新 completed 交易日) cache miss, 重算
     → force=true 跳过缓存强制重算
     → strategy=trend-elite/limit-sweet/limit-prime 启用策略过滤器
-    → smart_mode=true 启用 SmartExit 智能 T+n 决策 (多维度信号)
     """
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
     try:
         result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
-                                   capital=capital, use_cache=not force, strategy=strategy,
-                                   smart_mode=smart_mode)
+                                   capital=capital, use_cache=not force, strategy=strategy)
 
         # 因子权重 + 调权历史
         try:
@@ -2627,58 +2624,6 @@ def api_weights_run(force: bool = Query(False, description="强制调权, 跳过
         daemon=True
     ).start()
     return {"ok": True, "msg": f"调权已在后台启动 (force={force})"}
-
-
-# ═══════════════════════════════════════════
-#  SmartExit 阈值调权 API (P2.0 新增)
-# ═══════════════════════════════════════════
-
-@app.get("/api/smart_exit/status")
-def api_smart_exit_status():
-    """SmartExit 阈值调权状态 (前端面板展示)
-
-    返回:
-    - ok: True
-    - status: smart_exit_tuner 内部 status (running/done/failed/skipped/never_run)
-    - thresholds: 当前 6 个 tab 的阈值 (供前端展示)
-    """
-    try:
-        from smart_exit_tuner import get_tune_status, get_current_thresholds
-        return {
-            "ok": True,
-            "status": get_tune_status(),
-            "thresholds": get_current_thresholds(),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
-
-
-@app.post("/api/smart_exit/run")
-def api_smart_exit_run(
-    granularity: str = Query('daily', description="调权粒度: daily/weekly/monthly"),
-    force: bool = Query(False, description="跳过 archive.db 数据缺失检查"),
-):
-    """手动触发 SmartExit 阈值调权 (CLI/调试用)
-
-    granularity:
-    - daily: 基于近 1 天回测微调 (lr=0.1)
-    - weekly: 基于近 5 天回测中调 (lr=0.3)
-    - monthly: 基于近 30 天回测全调 (lr=0.5)
-    """
-    import threading
-    def _run():
-        try:
-            from smart_exit_tuner import tune_smart_exit_thresholds
-            return tune_smart_exit_thresholds(granularity=granularity, force=force)
-        except Exception as e:
-            return {'status': 'failed', 'error': str(e)[:200]}
-    # 后台跑, 不阻塞 API
-    result_holder = {}
-    def _wrapper():
-        result_holder['result'] = _run()
-    t = threading.Thread(target=_wrapper, daemon=True)
-    t.start()
-    return {"ok": True, "msg": f"SmartExit 调权已在后台启动 (granularity={granularity}, force={force})"}
 
 
 @app.get("/api/backtest/dashboard")
