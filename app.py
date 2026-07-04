@@ -579,8 +579,16 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     items = []
     for s in sector_stats:
         lc = s['limit_cnt']; zc = s['zhaban_cnt']; dc = s['dieting_cnt']
-        score = min(12, 4 + lc * 2)  # 保持和旧版一致的简分
         eff = s['seal_rate']  # 封板率
+        # 连续化评分 (0-12, 跟旧版区间一致 → 前端 cards.js 的 sc>=10/sc>=6 判断不变)
+        #   旧公式 min(12, 4 + lc*2): 4/6/8/10/12 五档, "汽车零部"和"通用设备"都是 12 无法区分
+        #   新公式叠加效率(封板率)+ 炸板/跌停惩罚 → 4 只涨停+100%效率=顶格, 区分度高
+        import math
+        base_score = math.log1p(lc) * 4  # log(1+lc)*4: 1→2.8, 4→6.6, 8→8.3, 20→12.4
+        eff_bonus = (eff - 50) / 25      # eff=50%→0, 100%→+2, 0%→-2
+        zb_penalty = zc * 0.3            # 炸板轻度惩罚
+        dc_penalty = dc * 1.0            # 跌停重度惩罚
+        score = max(0, min(12, round(base_score + eff_bonus - zb_penalty - dc_penalty, 1)))
 
         # 收集成分股
         stock_list = []

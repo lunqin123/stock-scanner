@@ -318,11 +318,14 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
         elif 20 < t <= 25:      f_turnover[idx] = 0.333
         else:                   f_turnover[idx] = 0.167
 
-    # 3. 成交额分 (归一化)
+    # 3. 成交额分 (percentile 归一化, p90=1.0 / p10=0.0)
+    #   旧逻辑用 max 归一化 → 单只头部票(40亿成交)直接压制其他所有票, 30 张里 22 张 amount 分 < 0.2
+    #   新逻辑用 [p10, p90] 区间 → 线性拉伸, 大多数票得到合理区分度
     volumes = df[volume_col].astype(float)
-    max_v = volumes.max()
-    if max_v > 0:
-        f_amount = (volumes / max_v).clip(0, 1)
+    p10 = volumes.quantile(0.10)
+    p90 = volumes.quantile(0.90)
+    if p90 > p10:
+        f_amount = ((volumes - p10) / (p90 - p10)).clip(0, 1)
     else:
         f_amount = pd.Series(0.5, index=df.index)
 
