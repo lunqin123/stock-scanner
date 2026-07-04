@@ -89,6 +89,15 @@ function _toggleSmartMode() {
     _btSmartMode = !_btSmartMode;
     _saveBacktestParams();
     _btCache = {};  // 清缓存, 重新跑
+    // 同步更新按钮文字/颜色 (按钮区不会随 loadBacktestTab 重新渲染)
+    var btn = document.getElementById('btSmartModeBtn');
+    if (btn) {
+        btn.textContent = '🧠 SmartExit ' + (_btSmartMode ? 'ON' : 'OFF');
+        btn.style.background = _btSmartMode ? '#22c55e' : 'var(--bg-secondary)';
+        btn.style.color = _btSmartMode ? '#fff' : 'var(--text-muted)';
+        btn.style.borderColor = _btSmartMode ? '#22c55e' : 'var(--border)';
+        btn.style.fontWeight = _btSmartMode ? '600' : '400';
+    }
     loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
@@ -834,7 +843,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
                     + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     // P2.0: SmartExit 智能 T+n 切换
-                    + '<button onclick="_toggleSmartMode()" title="SmartExit: 多维度智能决策卖出日 (止损/止盈/一字板/量能/时间)" '
+                    + '<button id="btSmartModeBtn" onclick="_toggleSmartMode()" title="SmartExit: 多维度智能决策卖出日 (止损/止盈/一字板/量能/时间)" '
                     + 'style="margin-left:8px;padding:3px 8px;font-size:11px;'
                     + 'background:' + (_btSmartMode ? '#22c55e' : 'var(--bg-secondary)') + ';'
                     + 'color:' + (_btSmartMode ? '#fff' : 'var(--text-muted)') + ';'
