@@ -668,9 +668,12 @@ def _fetch_trend_data(today, principal):
     }
     strong['涨幅'] = strong[cols['chg']].astype(float)
 
-    # 3. 用回测引擎的 _score_trend (含过滤+评分, 与66.7%胜率一致)
-    from backtest_engine import _score_trend as backtest_score_trend
-    strong = backtest_score_trend(strong, today)
+    # 3. 用纯评分函数 (去掉 backtest_engine 自带的市值/价格/涨幅硬过滤 — 实时排行榜要广撒网,不像回测要严过滤)
+    #   - backtest_engine._score_trend 自带: 主板 + 市值≤200亿 + 价格≤MAX + 涨幅[2.5%, 8.5%)
+    #     → 155 张 → 8 张 (砍掉91% 样本,用户看到只有4只票)
+    #   - scanner_scoring._score_trend 纯评分,过滤交给后续步骤 (涨幅 2-9% + head 30)
+    from scanner_scoring import _score_trend as score_trend
+    strong = score_trend(strong)
     if strong is None or strong.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
     prev = strong
