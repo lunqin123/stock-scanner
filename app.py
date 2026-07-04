@@ -554,20 +554,82 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 # limit-up / trend 走 auto preset (limit-prime / trend-elite)
 # 其他 tab 暂无 preset, 用全量基线
 TAB_EV_ESTIMATES = {
-    'limit-up':   {'win_rate': 0.83,  'ev_pct': 4.10,  'note': 'limit-prime (3/3 全胜)'},
-    'trend':      {'win_rate': 0.50,  'ev_pct': 3.04,  'note': 'trend-elite (rank1+周一/二)'},
+    'limit-up':   {'win_rate': 1.00,  'ev_pct': 7.39,  'note': 'limit-prime (3/3 100%)'},
+    'trend':      {'win_rate': 0.33,  'ev_pct': 3.04,  'note': 'trend-elite (1/3 胜, 但 avg=+3.04)'},
     'reversal':   {'win_rate': 0.49,  'ev_pct': -0.55, 'note': '全量基线'},
     'zhaban':     {'win_rate': 0.31,  'ev_pct': -2.31, 'note': '全量基线'},
     'dtqiaoban':  {'win_rate': 0.41,  'ev_pct': -0.56, 'note': '全量基线'},
 }
 
+# ── 各 tab 历史有效样本数 (来自上次 60 天回测: trade_count) ─────────
+# 用 sample_size 给 Beta-shrinkage 强度, 越少样本折扣越大. 但用户原话:
+# "少样本但胜率高的 tab 在每日信号里着重加分以便挑选上" — 因此加了
+# rare_event_boost 弥补折扣 (见 compute_recommendation_score).
+TAB_SAMPLE_SIZE = {
+    'limit-up':   3,    # limit-prime 严过滤
+    'trend':      3,    # trend-elite 严过滤
+    'reversal':   63,   # baseline
+    'dtqiaoban':  51,   # baseline
+    'zhaban':     68,   # baseline
+}
+
+
+def compute_recommendation_score(cand: dict) -> dict:
+    """综合推荐分: 40% 历史 EV (sample-shrunk) + 60% 当日评分.
+
+    用户设计意图: "综合五个 tab 的回测以及当日评分等信息来给出应该买那只股票.
+    少样本但胜率高的 tab 在每日信号哪里着重加分以便挑选上."
+
+    Args:
+        cand: 含 score (当日评分 0-100), expected_pnl_per_trade (历史 EV),
+              win_rate_estimate, tab 等字段
+
+    Returns:
+        dict 含 recommendation_score (越大越推荐), sample_size, confidence_factor,
+              rare_event_boost 字段, 写到 cand 上
+    """
+    tab = cand['tab']
+    ev_pnl = cand['expected_pnl_per_trade']  # 元/笔 (历史期望)
+    win_rate = cand['win_rate_estimate']
+    today_score = float(cand.get('score') or 0)  # 当日评分 0-100
+    sample = TAB_SAMPLE_SIZE.get(tab, 0)
+
+    # Bayesian shrinkage: 样本越少越向中性折扣, 但不全压垮
+    if sample >= 30:
+        confidence = 1.0
+    elif sample >= 15:
+        confidence = 0.9
+    elif sample >= 5:
+        confidence = 0.8
+    else:  # sample < 5
+        confidence = 0.6
+
+    # 罕见 "奇迹信号": 极小样本 + 高胜率 → 加分, 弥补 confidence 折扣
+    # (用户原话: "回测很少记录进去, 但是胜率很高, 着重加分")
+    rare_event_boost = 1.4 if (sample <= 5 and win_rate >= 0.85) else 1.0
+
+    # 历史 EV 已含 confidence + rare_event 调整
+    historical_component = ev_pnl * confidence * rare_event_boost
+
+    # 当日评分标准化到 0~100 区间 (跟 historical_component 同尺度可比)
+    today_component = today_score  # 已是 0-100
+
+    # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
+    combined = 0.4 * historical_component + 0.6 * today_component
+
+    cand['sample_size'] = sample
+    cand['confidence_factor'] = confidence
+    cand['rare_event_boost'] = rare_event_boost
+    cand['recommendation_score'] = round(combined, 1)
+    return cand
+
 
 def _signals_today_inner(refresh: bool = False) -> dict:
     """调 5 个 tab cards 端点的内部 lambda 拿 top 1, 综合排序.
 
-    顶部 cache: 30 分钟内复用上次结果 (避免 5 tab 重复扫描).
-    复用 daily cache — 已有数据直接命中 (cards 端点已实现 2h 缓存),
-    首次拉取时 5 tab 大约 30s, 之后命中即时返回.
+    综合排序逻辑: 40% 历史 EV (sample-shrinkage + rare-event boost) +
+                  60% 当日评分 (tab 内 top 1 卡的分数).
+    顶部 cache: 30 分钟内复用 (避免重复扫描).
     """
     cache_key = make_key('app', 'signals_today', date=_today_trading())
     if not refresh:
@@ -610,8 +672,11 @@ def _signals_today_inner(refresh: bool = False) -> dict:
         except Exception as e:
             print(f'  [signals/today] {tab}: {type(e).__name__}: {str(e)[:80]}',
                   file=sys.stderr)
-    # 按历史期望单笔 PnL (元) 降序
-    candidates.sort(key=lambda c: c['expected_pnl_per_trade'], reverse=True)
+    # 综合打分排序 (历史 40% + 当日 60%, 含 sample-shrinkage + rare-event boost)
+    for c in candidates:
+        compute_recommendation_score(c)
+    candidates.sort(key=lambda c: c.get('recommendation_score', c['expected_pnl_per_trade']),
+                    reverse=True)
     result = {
         'ok': True,
         'best': candidates[0] if candidates else None,
@@ -626,14 +691,18 @@ def _signals_today_inner(refresh: bool = False) -> dict:
 
 @app.get('/api/signals/today')
 def api_signals_today(refresh: bool = Query(False, description='强制刷新 (跳过 cache)')):
-    """今日信号综合面板 - 5 tab 各取今日 top 1 候选 + 历史 EV.
+    """今日信号综合面板 - 5 tab 各取今日 top 1 候选 + 综合打分.
+
+    综合打分逻辑:
+        历史 EV (40%, 含 Bayesian sample-shrinkage + rare-event 加成)
+      + 当日评分 (60%, 票分 0-100)
+      = recommendation_score (综合, 越大越推荐)
 
     返回:
-        best:        排序后的 #1 推荐 (用户全仓买入这个)
-        candidates:  5 tab top 1 列表 (按预期单笔 PnL 降序)
-        tab_estimates: tab → 历史胜率/期望说明 (供前端展示)
+        best:           #1 推荐 (排序最高)
+        candidates:     5 tab top 1 列表 (含 recommendation_score 等明细)
+        tab_estimates:  tab → 历史胜率/期望说明
 
-    前端: dashboard 默认面板之一, 取代之前的"5 tab 分开展示"决策路径.
     cache: 30 分钟内复用上一次结果 (避免 5 tab 重复扫描触发 akshare 限流).
     """
     return _signals_today_inner(refresh=refresh)
