@@ -89,7 +89,7 @@ function _toggleSmartMode() {
     _btSmartMode = !_btSmartMode;
     _saveBacktestParams();
     _btCache = {};  // 清缓存, 重新跑
-    loadBacktestPanel();
+    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
 // 重置回默认 (1把梭3万, 全部 TOP1)
