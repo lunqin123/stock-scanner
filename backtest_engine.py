@@ -554,8 +554,61 @@ SIGNAL_POOL_FETCHERS = {
 }
 
 # ═══════════════════════════════════════════
-#  评分函数 (P1.1: limit-up / zhaban / dtqiaoban 可用)
+#  V2 因子注入 helper
 # ═══════════════════════════════════════════
+# 目标: 给所有 5 个 tab 的回测评分叠加 mc/pd position_factor, 复用 ACE0597
+# 的 limit-up tab 接入路径, 让 trend/reversal/zhaban/dtqiaoban 也吃到
+# V2 因子预测力 (数据驱动分析见: commit ace0597, n=2231 票, ρ=+0.0906 p<0.001)
+
+_BACKTEST_USE_V2_DEFAULT = True
+
+
+def _apply_v2_to_score(df: pd.DataFrame, score_col: str, today_str: str,
+                       use_v2: bool = None) -> pd.DataFrame:
+    """对 ``df[score_col]`` 乘上 position_factor 调整。
+
+    factor = (0.85 + mc/50) * (0.90 + pd/50)
+        mc=10 pd=10 → 1.05 × 1.10 = 1.155 (+15.5%)
+        mc=0  pd=0  → 0.85 × 0.90 = 0.765 (-23.5%)
+        mc=pd=5 (中性) → 0.95 × 1.00 = 0.95 (-5%, 与 baseline 校准)
+
+    历史票 mc/pd 拿不到时降为 5.0 → factor=0.95。这是 archive.db 在 v8/v9/v10
+    cache 升级后被 backfill_archive.py (commit 7b1549f) 补回的覆盖 — 现在 mc/pd
+    真值命中率 ~50%, 50% 票用 5.0 默认温和调整。
+
+    Args:
+        df: 评分后 DataFrame (含 '代码'/'最新价'/'名称' 列)
+        score_col: 要调整的评分列名 (如 '动量评分', '反转评分', '总分', '翘板评分')
+        today_str: YYYYMMDD 格式, 内部转 YYYY-MM-DD 给 factors_v2
+        use_v2: None=读 _BACKTEST_USE_V2_DEFAULT, True/False=强制
+    """
+    if df is None or df.empty:
+        return df
+    if use_v2 is None:
+        use_v2 = _BACKTEST_USE_V2_DEFAULT
+    if not use_v2:
+        return df
+    try:
+        from plans.factors_v2 import compute_v2_factors as _compute_v2
+        today_iso = f'{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}'
+        v2 = _compute_v2(df, today_iso)
+        mc = v2['momentum_consistency']
+        pd_ = v2['pullback_depth']
+        mc_factor = 0.85 + mc / 50.0
+        pd_factor = 0.90 + pd_ / 50.0
+        position = (mc_factor * pd_factor).reindex(df.index, fill_value=0.95)
+        df = df.copy()
+        df[score_col] = (df[score_col].astype(float) * position).round(1)
+    except Exception as e:
+        # V2 不可用 (历史不足等) — 静默回退到 baseline, 不阻塞回测
+        print(f'  [_apply_v2_to_score] {today_str} 跳过: {type(e).__name__}: {str(e)[:80]}',
+              file=__import__('sys').stderr)
+    return df
+
+
+# ═══════════════════════════════════════════
+#  评分函数 (P1.1: limit-up / zhaban / dtqiaoban 可用)
+# ════════════════════════════════════
 
 def _score_limit_up(df: pd.DataFrame, date_str: str):
     """涨停评分: plan_a 9因子 (与前端排名一致)
@@ -640,9 +693,11 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
     from weight_manager import _load_tab_weights
     limit_up_weights = _load_tab_weights('limit-up')
 
+    # use_v2=True 已经内置在 apply_scores 路径 (factors 里已注入 mc/pd),
+    # 无需再走 _apply_v2_to_score (那是给其它 tab 评分函数末位套用的 helper)
     total_scores, base_scores, danger_flags, weights = apply_scores(
         filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt,
-        weights=limit_up_weights, use_v2=True)
+        weights=limit_up_weights, use_v2=_BACKTEST_USE_V2_DEFAULT)
 
     # 3. 附加评分列到 DataFrame
     filtered = filtered.copy()
@@ -689,6 +744,8 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
             fund_df = archived.get('fund_df')
     except Exception:
         pass
+    # NOTE: V2 因子只在 limit-up tab 注入, 不在此 tab 扰动排序 (数据验证:
+    # 全 tab 接入 V2 让总 PnL 净亏 -5K, 因为独立评分函数被 0.95 缩放扰乱)
     return score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
 
 
@@ -712,6 +769,7 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
         w = _load_tab_weights('dtqiaoban')
     except Exception:
         w = None
+    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释, 数据验证接入恶化总 PnL)
     return score_dtqiaoban_data(df, weights=w)
 
 
@@ -722,6 +780,7 @@ def _score_reversal(df: pd.DataFrame, date_str: str):
         w = _load_tab_weights('reversal')
     except Exception:
         w = None
+    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释)
     return scanner_score_reversal(df, today_str=date_str, weights=w)
 
 
@@ -759,6 +818,7 @@ def _score_trend(df: pd.DataFrame, date_str: str):
         w = load_trend_weights()
     except Exception:
         w = None
+    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释)
     return scanner_score_trend(df, weights=w)
 
 
