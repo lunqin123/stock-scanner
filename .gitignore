@@ -21,3 +21,5 @@ test_akshare_stable.py
 test_prev_stable.py
 test_score_stable.py
 test_score_direct.py
+_tmp*
+_tmp_*/

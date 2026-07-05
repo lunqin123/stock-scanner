@@ -1,204 +1,123 @@
-# stock-scanner 系统逻辑文档
+# Stock Scanner 系统架构文档
 
-## 1. 架构总览
+> 最后更新: 2026-07-05
 
-```
-浏览器 / QQ内置浏览器
-    │
-    ▼ http://134.175.231.8
-  nginx (token认证 + /webhook 放行)
-    │
-    ▼ proxy_pass 127.0.0.1:8080
-  FastAPI (app.py)
-    │
-    ├── 涨停扫描 ─── _scan_limit_up_data() ─── 7因子加权 → TOP10
-    ├── 板块热度 ─── akshare 涨停池行业分布 → 评分卡片
-    ├── 趋势扫描 ─── 昨日涨停今日续强 → 动量卡片
-    ├── 炸板分析 ─── 独立评分模型 → 反包潜力
-    ├── 跌停翘板 ─── 独立评分模型 → 翘板信号
-    ├── 龙虎榜 ─── indicators.py → 封成比/仓位/龙虎榜
-    ├── 舆情监测 ─── community.py → 新闻/股吧/千股千评
-    ├── 市场情绪 ─── detect_market_sentiment() → 0-10分
-    ├── 市场概览 ─── api_dashboard() → 情绪+涨跌停+板块
-    └── 回测系统 ─── backtest_score_prev + 模拟交易
-```
+## 一、系统定位
 
-## 2. 评分管线（核心）
+A股超短线选股扫描器，5个tab（涨停/趋势/反转/炸板/跌停翘板）各自扫描→评分→回测→明日信号推荐。
 
-### 2.1 因子体系
-
-| # | 因子 | 原始分范围 | 权重 | 贡献 |
-|---|------|-----------|:---:|------|
-| 1 | 市场情绪 sentiment | 0-10 | **25** | 昨日涨停溢价+全市场涨跌比+炸板率(乘法调节) |
-| 2 | 开盘可行性 buyability | 0-12 | **18** ↑ | 首板优先+尾盘板+换手适中(次日可买性) |
-| 3 | 量价结构 tech | 0-10 | **16** | 交叉矩阵(换手率×连板数)+封单力度+活跃持续性 |
-| 4 | 晋级预期 sector_mom | 0-12 | **15** | 板块内资金一致性+涨停集中度 |
-| 5 | 板块共振 sector_res | 0-8 | **9** | 同板块今日涨停数 |
-| 6 | 历史股性 history | 0-6 | **8** | 近期涨停频率(次数/天数) |
-| 7 | 封板强度 seal | 0-25 | **6** ↓ | 封板时间+封单+换手+炸板次数(已降权) |
-| 8 | 资金驱动 money | 0-20 | **3** ↓ | 主力净流入+龙虎榜加分(已大幅降权) |
-
-**情绪因子已改为乘法调节: 总分 = 基础分 × (1 + (sentiment-5)×0.06), 冰点×0.7~高潮×1.3**
-
-### 2.2 评分公式
-
-```python
-# 基础分（不含情绪，7因子加权归一化到百分制）
-weighted = seal × 6/25 + tech × 16/10 + sector_res × 9/8
-         + sector_mom × 15/12 + history × 8/6 + money × 3/20
-         + buyability × 18/12
-base = weighted / 75 × 100  → 0-100
-
-# 情绪乘法调节
-total = base × (1 + (sentiment - 5) × 0.06)
-# sentiment=5(中性)→×1.0, sentiment=10(高潮)→×1.3, sentiment=0(冰点)→×0.7
-```
-
-**本金过滤**（不参与评分）：
-- `<10万` → 梭哈1只，能买<0.5手排除
-- `≥10万` → 分3份，每份能买<0.5手排除
-
-### 2.3 评分流程
+## 二、核心数据流
 
 ```
-涨停池(akshare) → 过滤ST/688/8xx/一字板/市值>200亿/晚封
-    → 资金流(同花顺) → 股价过滤(>60元排除)
-    → 7因子评分 → 本金过滤 → apply_weights → TOP10
+akshare API → scanner_data.py(拉数据) → scanner_filters.py(过滤)
+→ scanner_factors.py(算因子) → plans/plan_a.py(9因子加权评分)
+→ scanner_scoring.py(各tab专用评分) → backtest_engine.py(回测验证)
+→ app.py(API输出) → 前端渲染
 ```
 
-## 3. 缓存系统
+## 三、文件职责（按层级）
 
-### 3.1 缓存层次
+### 基础层
+| 文件 | 职责 | 大小 |
+|------|------|------|
+| `config.py` | 全局常量（手续费/阈值/时间） | 4KB |
+| `cache.py` | 2h短期+每日持久缓存 | 13KB |
+| `ak_utils.py` | akshare重试封装 | 2KB |
 
-| 缓存 | TTL | 存储 | 用途 |
-|------|-----|------|------|
-| 每日缓存 `daily_*` | 跨交易日 | JSON文件 | 涨停排行、市场概览、情绪 |
-| 短期缓存 `cache_*` | 2小时 | Pickle | 板块/趋势/炸板/翘板卡片 |
-| 资金流缓存 | 盘中5分钟/盘后0 | Pickle | 同花顺资金流数据 |
-| 交易日历 | 7天 | TXT文件 | akshare交易日历 |
-
-### 3.2 冻结机制
-
-- **盘后 15:00 → 次日 9:30**：每日缓存冻结，`refresh=1` 不覆盖
-- **收盘 15:05**：自动扫描 `force=True` 写入最终快照
-- **节假日**：同周末处理，冻结缓存
-- **凌晨 0:00-9:30**：`_today_trading()` 归为前一个交易日
-
-### 3.3 交易日历
-
-`_load_trading_calendar()` 从 akshare 拉取 8797 天交易日历，缓存 7 天。所有日期函数均通过 `_is_trading_day()` 校验。
-
-## 4. 市场情绪算法
-
-```
-detect_market_sentiment(today_str):
-  1. 取"昨天"（回退找最近交易日）
-  2. 获取昨日涨停池 → prev_limit
-  3. 计算 avg_premium（昨日涨停今日平均涨幅）
-  4. 计算 promo_rate（晋级率 = 今日仍涨停的比例）
-  5. 基础分：avg_premium>3→9(高潮) >1→7(活跃) >-1→5(正常) >-3→3(低迷) else→1(冰点)
-  6. 全市场涨跌比修正：涨占比<20%→-3分
-  7. 今日涨停/跌停修正：涨停≥60→+1, 跌停>30→-1
-  8. 炸板率修正：>40%→-2
-  9. 返回 0-10 分
-```
-
-情绪是独立因子（25/100），不再作为乘数。
-
-## 5. 回测系统
-
-### 5.1 数据存储 (两层，容易踩坑)
-
-| 存储位置 | 格式 | 用途 | 查看方式 |
-|---------|------|------|---------|
-| `data/cache/tab_performance.json` | JSON | **Web Dashboard 回测面板的权威数据源** | `GET /api/backtest/dashboard` |
-| `data/cache/bt_result_*.pkl` | Pickle | 单次回测的完整交易明细（含每笔因子分） | 仅供调试，**Dashboard 不读这个** |
-| `data/cache/engine_*.pkl` | Pickle | 回测引擎中间缓存（池+评分） | 加速回测，不包含结果 |
-
-**关键规则**: 看回测排名 → 读 `tab_performance.json`，不要读 pickle 缓存。pickle 文件可能几天前的、不同参数的、不同代码版本的，不能反映当前状态。
-
-`tab_performance.json` 由 `weight_manager.save_tab_performance()` 写入，每次回测完成自动追加。`compute_tab_weights()` 取近5天滚动加权，前端面板直接调用。
-
-### 5.2 评分对齐
-
-`backtest_score_prev()` 使用与实盘完全相同的 `apply_weights` 8 因子模型（含 north_flow）。
-
-历史不可用的因子用默认值：
-- money: 10.0（中性）
-- sentiment: 5.0（中性）
-- north_flow: 5.0（中性）
-
-### 5.3 模拟交易
-
-`_simulate_trades()` 模拟 TOP-N 买入次日卖出：
-- 扣除佣金（万2.5双向）+ 滑点（0.1%）
-- 输出：均收益、胜率、盈亏比、最大回撤
-
-### 5.4 自动调权
-
-每次扫描后后台线程运行 `auto_verify_backtest`：
-- 周一至周四：保存因子相关性到 `rolling_correlations.json`
-- 周五：调用 `weekly_adjust_weights`，基于本周均值调整 3 个回测因子权重
-
-## 6. 前端
-
-### 6.1 服务端注入
-
-`index()` 函数将缓存排行注入 HTML：
-```html
-<script>window._CACHED_RANKING = {...}</script>
-```
-手机端无需 API 请求即可瞬间展示排行。
-
-### 6.2 缓存机制
-
-- localStorage 持久化本金和页面缓存
-- `_outputCache` Proxy 自动同步到 localStorage
-- `_lastUrl` 跟踪避免重复请求
-
-### 6.3 市场状态
-
-侧边栏底部显示当前状态：⚡盘中 / 🌙盘后 / ☕午休 / 🎉休市 / 🎌假日
-
-## 7. 部署
-
-### 7.1 Webhook
-
-GitHub push → POST `/webhook` → nginx 放行 → 下载 zip → 解压替换文件 → `systemctl restart stock-scanner`
-
-### 7.2 CI 门禁
-
-`.github/workflows/ci.yml`：push/PR 时自动运行 `test_invariants.py` 55 项不变性测试。只改 UI/版本号时不触发。
-
-## 8. 数据源
-
-| 数据 | akshare 函数 | 说明 |
-|------|-------------|------|
-| 涨停池 | `stock_zt_pool_em` | 当日涨停股 |
-| 昨日涨停 | `stock_zt_pool_previous_em` | 含今日涨跌幅 |
-| 炸板池 | `stock_zt_pool_zbgc_em` | 炸板股 |
-| 跌停池 | `stock_zt_pool_dtgc_em` | 跌停股 |
-| 资金流 | `stock_fund_flow_individual` | 同花顺个股资金流 |
-| 龙虎榜 | `stock_lhb_detail_em` | 龙虎榜明细 |
-| 股吧排名 | `stock_hot_rank_em` | 人气排名 |
-| 千股千评 | `stock_comment_em` | 综合评分 |
-| 交易日历 | `tool_trade_date_hist_sina` | A股交易日 |
-| 全市场涨跌 | 新浪API | 4页采样 |
-
-## 9. 文件清单
-
+### 数据层
 | 文件 | 职责 |
 |------|------|
-| `app.py` | Web API、扫描管道、收盘调度、Webhook |
-| `scanner.py` | 评分函数、回测、CLI入口 |
-| `weight_manager.py` | 权重管理、`apply_weights`、周调权 |
-| `cache.py` | 缓存系统、交易日历 |
-| `community.py` | 舆情聚合（股吧+千股千评+新闻） |
-| `indicators.py` | 龙虎榜增强指标 |
-| `static/app.js` | 前端主逻辑 |
-| `static/cards.js` | 卡片渲染 |
-| `static/style.css` | UI 样式 |
-| `static/dashboard.js` | 市场概览 |
-| `test_invariants.py` | 55项不变性测试 |
-| `version.json` | 版本号和更新日志 |
-| `.github/workflows/ci.yml` | CI 门禁 |
+| `scanner_data.py` | 拉涨停池/资金流（带降级） |
+| `scanner_filters.py` | 过滤（板块/除权/价格/一字板） |
+| `archiver.py` | 每日数据归档到SQLite+pickle |
+| `scanner_utils.py` | 纯工具函数 |
+
+### 评分层
+| 文件 | 职责 |
+|------|------|
+| `scanner_factors.py` | 15+个评分因子纯函数（封板/资金/板块/技术等） |
+| `scanner_scoring.py` | 5个tab专用评分函数（调用factors） |
+| `plans/plan_a.py` | 涨停tab的9因子加权+危险信号 |
+| `plans/factors_v2.py` | v2因子（持续性+回撤位置） |
+| `weight_manager.py` | 权重管理+IC驱动自动调权 |
+| `weight_scheduler.py` | 盘后自动调权调度 |
+
+### 回测层
+| 文件 | 职责 |
+|------|------|
+| `backtest_engine.py` | **主回测引擎**：多tab统一入口，策略A(开盘买) |
+| `t1_real_backtest.py` | 旧版T+1回测（limit-up专用，被backtest_engine兼容包装） |
+| `scanner_backtest.py` | 旧版回测+评分验证（CLI入口） |
+| `compare_strategies.py` | 多方案对比框架 |
+| `strategy_filters_v2.py` | v2硬过滤器 |
+
+### 信号层
+| 文件 | 职责 |
+|------|------|
+| `signal_tomorrow.py` | 明日买入信号决策 |
+| `recommendation_tracker.py` | 推荐追踪+次日胜率统计 |
+
+### 辅助层
+| 文件 | 职责 |
+|------|------|
+| `premarket.py` | 盘前多空信号（美股/A50/汇率） |
+| `market_regime.py` | 市场状态分类（5种） |
+| `north_flow_tracker.py` | 北向资金追踪 |
+| `community.py` | 舆情+新闻聚合 |
+| `indicators.py` | 增强指标（封成比/龙虎榜） |
+
+### 入口层
+| 文件 | 职责 |
+|------|------|
+| `app.py` | **FastAPI后端**（158KB，所有API路由） |
+| `scanner.py` | CLI入口+公共API re-export |
+| `scanner_scans.py` | 5种扫描模式主流程 |
+| `scanner_format.py` | 文本输出格式化 |
+| `data_manager.py` | 数据持久化+总结 |
+
+## 四、回测系统现状
+
+### 4.1 策略
+- **策略A（开盘买）**：D+1开盘买入，D+N开盘卖出（唯一保留的策略）
+- 已删除策略B（尾盘买）和策略C（休盘+止损）
+
+### 4.2 参数（2026-07-05 当前值）
+| tab | min_score | sell_n | 回测结果(26天,top1,3w) |
+|-----|-----------|--------|----------------------|
+| 涨停 | 50 | 3 | +3044 ✅ 66.7% |
+| 炸板 | 50 | 5 | +3778 ✅ 60% |
+| 跌停 | 50 | 3 | +4575 ✅ 46.2% |
+| 反转 | 50 | 3 | -4568 ❌ 41.7% |
+| 趋势 | 50 | 3 | -9289 ❌ 33.3% |
+
+### 4.3 评分系统
+- **plan_a 9因子**：封板/资金/板块/技术/买入性/情绪/本金/历史/北向
+- **IC = -0.036**（弱负相关，但3/5 tab盈利，暂不重构）
+- **数据驱动修正已回退**（价格驱动评分导致炸板25%胜率，已删除）
+
+### 4.4 明日信号排序
+- `compute_recommendation_score`：40%历史EV + 60%当日评分
+- tab加权：dtqiaoban 1.5x, limit-up 0.5x, zhaban 0.3x, reversal 0.3x, trend 0.2x
+
+## 五、数据存储
+| 位置 | 内容 |
+|------|------|
+| `data/cache/` | 1770+个pkl（engine池缓存+OHLCV缓存） |
+| `data/cache/archive_pools/` | 按日pickle归档（各tab信号池） |
+| `data/archive.db` | SQLite（daily_stocks 20天, stock_daily） |
+| `data/backtest_results.json` | 历史回测结果（追加写入） |
+| `data/recommendations/` | 推荐追踪记录 |
+
+## 六、部署
+- 服务器：134.175.231.8（ubuntu）
+- 服务：systemd `stock-scanner`（uvicorn 8080端口）
+- 反代：nginx（token认证）→ uvicorn
+- 部署方式：GitHub webhook（zip下载→覆盖→systemctl restart）
+- 手动部署：`scp file ubuntu@ip:/home/ubuntu/stock-scanner/`
+
+## 七、已知问题
+1. `app.py` 158KB过大，API路由+业务逻辑混杂
+2. 三个回测文件（engine/t1/scanner_backtest）职责重叠
+3. `backtest_results.json` 追加写入导致JSON解析需要raw_decode
+4. 前端localStorage版本管理（v1~v8）混乱
+5. 服务器git HEAD与实际文件不同步（webhook用zip覆盖不用git pull）
