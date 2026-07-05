@@ -59,12 +59,11 @@ _LOCAL_FALLBACK_ENABLED = True
 
 # ─── 回测准确度相关开关 (2026-07-05) ────────────────────────
 
-# 是否用 score_new 排序替代 plan_a 原生评分
-# score_new 因子权重来自业界论文, 未在本系统回测数据上做过 IC 验证,
-# 且生产环境(CLI/app.py)实际用的是 plan_a, 回测应与之保持一致。
-# False = 用 plan_a 原生总分 (与生产一致)
-# True  = 用 score_new 覆盖 plan_a总分 (仅供探索对比)
-_BACKTEST_USE_SCORE_NEW = False
+# score_new 是涨停板专用评分 (封单/时间/换手/连板/炸板/市值/板块/价格)
+# 与尾盘买策略组合: 42笔 83%WR +252%累计 +75K PnL ✅
+# plan_a 是通用评分 (依赖资金流/舆情等, 回测不可靠)
+# True=用score_new排序 (推荐, 回测已验证)
+_BACKTEST_USE_SCORE_NEW = True
 
 # 是否填仓: 当 top_n 中部分股票一字板买不到时,
 # True  = 沿评分列表向下继续扫描, 凑满 top_n 只买入
