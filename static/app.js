@@ -97,6 +97,23 @@ function _resetBacktestParams() {
 }
 window._resetBacktestParams = _resetBacktestParams;
 
+// 一键采用"系统甜蜜点 ms" (2026-07-05 IC 网格扫描结果)
+// 不清空 sell_n / capital / top_n / strategy, 只覆盖 min_score
+const _SWEET_POINT_MS = {
+    'limit-up': 38,
+    'trend':    85,   // WR 66.7% EV +2.41% (网络)
+    'reversal': 0,
+    'zhaban':   75,   // WR 54.3% EV +0.34% (IC 重加权后)
+    'dtqiaoban':75,   // WR 80%   EV +3.44%
+};
+function _applySweetPointMs() {
+    if (!confirm('一键采用系统甜蜜点 ms (趋势 85/涨停 38/反转 0/炸板 75/翘板 75)?\n其他参数 (sell_n/capital/top_n) 不变.')) return;
+    for (var k in _SWEET_POINT_MS) _setMinScore(k, _SWEET_POINT_MS[k]);
+    _btCache = {};
+    location.reload();
+}
+window._applySweetPointMs = _applySweetPointMs;
+
 // P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存 data 对象,切回秒显示
 // 关键修复:
 //   1. 缓存 data 而不是 html(避免以后加 generated_at 等动态字段时缓存陈旧)
@@ -872,11 +889,15 @@ async function loadCardView(output, pageKey, apiUrl) {
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'trend';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
-                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">📊 多 Tab T+1 真实回测</div>'
+                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">📊 多 Tab 真实回测 <span style="font-size:11px">(各 tab 卖出日不同: 趋势/涨停/反转/翘板=T+3, 炸板=T+5; ms/分阈值见按钮)</span></div>'
+                      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">按钮格式: <code style="background:var(--bg-secondary);padding:1px 4px;border-radius:3px">tab名 T+N (ms分)</code> · 改 ms/TOP/本金后自动重跑回测</div>'
                       + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
                 tabs.forEach(t => {
                     const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
-                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' <span style="opacity:0.7">(' + _getMinScore(t.key) + '/' + _getSellN(t.key) + ')</span></button>';
+                    const sn = _getSellN(t.key);
+                    const ms = _getMinScore(t.key);
+                    // sell_n 2=T+2, 3=T+3, 5=T+5 ; ms=最低评分阈值
+                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' T+' + sn + ' <span style="opacity:0.7">(' + ms + '分)</span></button>';
                 });
                 // TOP-N 调权 + 本金输入
                 html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px">'
@@ -895,8 +916,9 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '</select>'
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
                     + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
-                    + '<button onclick="_resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
+                    + '<button onclick="window._resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
+                    + '<button onclick="window._applySweetPointMs()" title="一键采用系统甜蜜点 ms (2026-07-05 IC 网格扫描): 趋势85/涨停38/反转0/炸板75/翘板75" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e;border-radius:4px;cursor:pointer">⭐ 用甜蜜点 ms</button>'
                     + '</div>'
                     + '<div id="tomorrowSignals" style="display:none;margin:8px 0;padding:12px;background:var(--card-bg);border:1px solid #f59e0b;border-radius:8px"></div>';
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
