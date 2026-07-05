@@ -1716,6 +1716,28 @@ def api_backtest_tab_full(tab: str,
     """
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
+
+    # 2026-07-05: 强制纠正旧前端遗留的过时参数 (浏览器缓存旧 app.js 时 localStorage 迁移不执行)
+    # 旧默认: trend ms=85 sn=3, limit-up ms=80 sn=3, reversal ms=0 sn=3, dtqiaoban ms=75 sn=3
+    # 新默认: 见 TAB_DEFAULT_BT_PARAMS
+    _corrected = False
+    if tab in TAB_DEFAULT_BT_PARAMS:
+        dft = TAB_DEFAULT_BT_PARAMS[tab]
+        # 检测旧默认值组合 (min_score 或 sell_n 与新默认不符, 且等于已知的旧默认)
+        old_defaults = {
+            'trend':      [{'min_score': 85, 'sell_n': 3}, {'min_score': 85, 'sell_n': 2}],
+            'limit-up':   [{'min_score': 80, 'sell_n': 3}, {'min_score': 38, 'sell_n': 3}, {'min_score': 60, 'sell_n': 2}],
+            'reversal':   [{'min_score': 0, 'sell_n': 3}],
+            'dtqiaoban':  [{'min_score': 75, 'sell_n': 3}, {'min_score': 0, 'sell_n': 3}],
+            'zhaban':     [{'min_score': 75, 'sell_n': 3}, {'min_score': 50, 'sell_n': 3}],
+        }
+        for old in old_defaults.get(tab, []):
+            if min_score == old['min_score'] and sell_n == old['sell_n']:
+                min_score = dft['min_score']
+                sell_n = dft['sell_n']
+                _corrected = True
+                break
+
     try:
         result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
                                    capital=capital, use_cache=not force, strategy=strategy)
@@ -1746,6 +1768,7 @@ def api_backtest_tab_full(tab: str,
 
         return {
             "ok": True, "tab": tab,
+            "params_corrected": _corrected,  # 标记是否纠正了旧前端参数
             "backtest": {
                 "summary": result.get("summary", {}),
                 "summary_30d": result.get("summary_30d", {}),
