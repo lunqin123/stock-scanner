@@ -590,10 +590,10 @@ TAB_EV_ESTIMATES = TAB_EV_ESTIMATES_FALLBACK
 _REAL_TAB_EVS_CACHE = {}
 _REAL_TAB_EVS_TTL = 1800  # 秒
 
-def _fetch_real_tab_evs(refresh: bool = False) -> dict:
+def _fetch_real_tab_evs(refresh: bool = False, user_bt_params: dict = None) -> dict:
     """拉取 5 tab 当前默认参数下的真实回测 EV (与回测面板对齐).
 
-    返回 {tab: {win_rate, ev_pct, note, days_avail, ev_pnl_per_trade_20000_capital}}
+    返回 {tab: {win_rate, ev_pct, note, days_avail, capital}}
     30 分钟内复用 (in-memory cache + daily_get_pkl 跨重启).
 
     BUG-修复 (2026-07-05):
@@ -602,16 +602,37 @@ def _fetch_real_tab_evs(refresh: bool = False) -> dict:
       -1.58% 或更新 v2 后的 +4.59%). 用户反馈"炸板回测是正的, 但明日信
       号显示负的" 即来源于此. 现在每个 tab 用其默认回测参数跑一次, 跟
       回测面板保持一致.
+
+    BUG-修复 #2 (2026-07-05):
+      之前完全忽略前端传来的 min_score/top_n/sell_n/capital, 永远用
+      TAB_DEFAULT_BT_PARAMS 默认值 → 明日信号里 EV 跟用户在回测面板里
+      手动设的参数对不上. 现在接 user_bt_params 覆盖默认,
+      让"明日信号的 EV" = "当前回测面板里看到的 EV".
     """
     now = time.time()
-    if not refresh and _REAL_TAB_EVS_CACHE and (now - _REAL_TAB_EVS_CACHE.get('ts', 0)) < _REAL_TAB_EVS_TTL:
+
+    # 合并默认 + 用户覆盖
+    bt_params = {}
+    for tab in ['limit-up', 'trend', 'reversal', 'zhaban', 'dtqiaoban']:
+        merged = dict(TAB_DEFAULT_BT_PARAMS[tab])
+        if user_bt_params and tab in user_bt_params:
+            merged.update({k: v for k, v in user_bt_params[tab].items() if v is not None})
+        bt_params[tab] = merged
+
+    # cache key 包含参数 hash (不同参数不同 cache)
+    import hashlib
+    param_hash = hashlib.md5(json.dumps(bt_params, sort_keys=True).encode()).hexdigest()[:8]
+    mem_cache_key = f'{now // _REAL_TAB_EVS_TTL}:{param_hash}'
+    if not refresh and _REAL_TAB_EVS_CACHE.get('_mem_key') == mem_cache_key:
         return _REAL_TAB_EVS_CACHE
 
-    cache_key = make_key('app', 'real_tab_evs', date=_today_trading())
+    disk_cache_key = make_key('app', 'real_tab_evs', date=_today_trading(), ph=param_hash)
     if not refresh:
-        cached = daily_get_pkl(cache_key)
+        cached = daily_get_pkl(disk_cache_key)
         if cached and cached.get('ts') and (now - cached['ts']) < _REAL_TAB_EVS_TTL:
+            _REAL_TAB_EVS_CACHE.clear()
             _REAL_TAB_EVS_CACHE.update(cached)
+            _REAL_TAB_EVS_CACHE['_mem_key'] = mem_cache_key
             return cached
 
     # 调用 server 自己的 /api/bt/{tab}/full 拿 tab_info.ev / win_rate (与回测面板一致)
@@ -620,10 +641,10 @@ def _fetch_real_tab_evs(refresh: bool = False) -> dict:
         from fastapi.testclient import TestClient
         client = TestClient(app)
         for tab in ['limit-up', 'trend', 'reversal', 'zhaban', 'dtqiaoban']:
-            params = TAB_DEFAULT_BT_PARAMS.get(tab, {'min_score': 50, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'})
+            params = bt_params[tab]
             try:
                 # 不带 force=false: 让 server 复用自身 cache (跑过的就快)
-                url = (f"/api/bt/{tab}/full?days=60&top_n=3"
+                url = (f"/api/bt/{tab}/full?days=60&top_n={params.get('top_n', 3)}"
                        f"&min_score={params['min_score']}&sell_n={params['sell_n']}"
                        f"&capital={params['capital']}&strategy={params['strategy']}")
                 r = client.get(url, timeout=180)
@@ -634,12 +655,13 @@ def _fetch_real_tab_evs(refresh: bool = False) -> dict:
                     ev_pct = float(ti.get('ev') or sm.get('ev') or 0)
                     win_rate = float(ti.get('win_rate') or sm.get('win_rate') or 0)
                     days_avail = int(ti.get('days_available') or 0)
-                    note = f"WR {win_rate:.1f}% / EV {ev_pct:+.2f}% / {days_avail}天采样"
+                    note = f"WR {win_rate:.1f}% / EV {ev_pct:+.2f}% / {days_avail}天采样 (ms={params['min_score']})"
                     result[tab] = {
                         'win_rate': win_rate,
                         'ev_pct': ev_pct,
                         'note': note,
                         'days_avail': days_avail,
+                        'capital': params['capital'],
                     }
                 else:
                     print(f'  [real_tab_evs] {tab}: HTTP {r.status_code}', file=sys.stderr)
@@ -652,10 +674,11 @@ def _fetch_real_tab_evs(refresh: bool = False) -> dict:
         result = {tab: dict(TAB_EV_ESTIMATES_FALLBACK[tab]) for tab in TAB_DEFAULT_BT_PARAMS}
 
     result['ts'] = now
+    result['_mem_key'] = mem_cache_key
     _REAL_TAB_EVS_CACHE.clear()
     _REAL_TAB_EVS_CACHE.update(result)
     try:
-        daily_set_pkl(cache_key, result, force=True)  # 强制写以覆盖旧版
+        daily_set_pkl(disk_cache_key, result, force=True)
     except Exception:
         pass
     return result
@@ -781,19 +804,23 @@ def _find_pass_after_filter(items: list, tab: str, today_dt=None) -> dict | None
     return None
 
 
-def _signals_today_inner(refresh: bool = False) -> dict:
+def _signals_today_inner(refresh: bool = False, user_bt_params: dict = None) -> dict:
     """调 5 个 tab cards 端点的内部 lambda, 对每 tab items 应用实盘可行
     preset-like filter (weekday + score 甜蜜区), 留下的最高分 = 今日 best.
     综合排序: 40% 历史 EV (sample-shrinkage + rare-event) + 60% 当日评分.
 
     关键修复 (用户反馈): "经过过滤后的回测选中的哪些交易". 不再用 cards top 1,
     改用 *经过 weekday + Q2/Q3 甜蜜区过滤后能留下的票* 作 best.
-    顶部 cache: 30 分钟内复用.
 
-    EV 数据源: _fetch_real_tab_evs() 调内部 /api/bt/{tab}/full 拿真实回测 EV,
-    与回测面板数字严格对齐 (修复"炸板回测正 vs 信号负"的不一致).
+    user_bt_params: dict[tab] = {min_score, sell_n, top_n, capital, strategy}
+                   来自前端用户在回测面板设置的参数. 为 None 时用
+                   TAB_DEFAULT_BT_PARAMS 默认值 (现在甜蜜点版本).
     """
-    cache_key = make_key('app', 'signals_today', date=_today_trading())
+    import hashlib
+    param_hash = hashlib.md5(
+        json.dumps(user_bt_params or {}, sort_keys=True).encode()
+    ).hexdigest()[:8]
+    cache_key = make_key('app', 'signals_today', date=_today_trading(), ph=param_hash)
     if not refresh:
         cached = daily_get(cache_key)
         if cached and cached.get('candidates'):
@@ -801,7 +828,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
             return cached
 
     # 一次性拉真实 EV (所有 5 tab 共享一次回测调用, 30 分钟 cache 复用)
-    real_evs = _fetch_real_tab_evs(refresh=refresh)
+    real_evs = _fetch_real_tab_evs(refresh=refresh, user_bt_params=user_bt_params)
 
     from fastapi.testclient import TestClient
     client = TestClient(app)
@@ -829,6 +856,12 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 filter_passed = False
 
             ev = real_evs.get(tab) or TAB_EV_ESTIMATES_FALLBACK[tab]
+            # EV 单笔金额: 用该 tab 实际 capital (而不是固定 20000)
+            cap = (ev.get('capital') if isinstance(ev, dict) else None) or 20000
+            ev_pct = ev.get('ev_pct', 0) if isinstance(ev, dict) else 0
+            win_rate = ev.get('win_rate', 0) if isinstance(ev, dict) else 0
+            note = ev.get('note', '') if isinstance(ev, dict) else ''
+
             candidates.append({
                 'tab': tab,
                 'code': best.get('code'),
@@ -841,9 +874,9 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 'advice': best.get('advice', ''),
                 'tags': best.get('signals', []),
                 'auction_check': best.get('auction_check', ''),
-                'expected_pnl_per_trade': round(ev['ev_pct'] * 20000 / 100, 0),
-                'win_rate_estimate': ev['win_rate'],
-                'strategy_note': ev['note'],
+                'expected_pnl_per_trade': round(ev_pct * cap / 100, 0),
+                'win_rate_estimate': win_rate,
+                'strategy_note': note,
                 # 标注 best 是否经过实盘 filter
                 'filter_passed': filter_passed,
                 'top10_count': len(items),
@@ -868,23 +901,40 @@ def _signals_today_inner(refresh: bool = False) -> dict:
     return result
 
 
+# 兼容旧路径: /api/signals/today (复数) 也接 bt 参数
 @app.get('/api/signals/today')
-def api_signals_today(refresh: bool = Query(False, description='强制刷新 (跳过 cache)')):
+def api_signals_today(
+    refresh: bool = Query(False, description='强制刷新 (跳过 cache)'),
+    limit_up_min_score: float = Query(None, description='涨停 ms'),
+    trend_min_score: float = Query(None, description='趋势 ms'),
+    reversal_min_score: float = Query(None, description='反转 ms'),
+    zhaban_min_score: float = Query(None, description='炸板 ms'),
+    dtqiaoban_min_score: float = Query(None, description='翘板 ms'),
+    limit_up_sell_n: int = Query(None),
+    trend_sell_n: int = Query(None),
+    reversal_sell_n: int = Query(None),
+    zhaban_sell_n: int = Query(None),
+    dtqiaoban_sell_n: int = Query(None),
+    capital: float = Query(None),
+    top_n: int = Query(None),
+):
     """今日信号综合面板 - 5 tab 各取今日 top 1 候选 + 综合打分.
 
-    综合打分逻辑:
-        历史 EV (40%, 含 Bayesian sample-shrinkage + rare-event 加成)
-      + 当日评分 (60%, 票分 0-100)
-      = recommendation_score (综合, 越大越推荐)
-
-    返回:
-        best:           #1 推荐 (排序最高)
-        candidates:     5 tab top 1 列表 (含 recommendation_score 等明细)
-        tab_estimates:  tab → 历史胜率/期望说明
-
-    cache: 30 分钟内复用上一次结果 (避免 5 tab 重复扫描触发 akshare 限流).
+    EV 来源: 调 /api/bt/{tab}/full 拿真实回测 EV. 如果前端传 min_score /
+    sell_n / capital / top_n 参数, 则 EV 跟你回测面板看到的一致 (前端
+    localStorage 里的值).
     """
-    return _signals_today_inner(refresh=refresh)
+    ubp = {
+        'limit-up':  {'min_score': limit_up_min_score, 'sell_n': limit_up_sell_n,  'top_n': top_n, 'capital': capital},
+        'trend':     {'min_score': trend_min_score,     'sell_n': trend_sell_n,     'top_n': top_n, 'capital': capital},
+        'reversal':  {'min_score': reversal_min_score,  'sell_n': reversal_sell_n,  'top_n': top_n, 'capital': capital},
+        'zhaban':    {'min_score': zhaban_min_score,    'sell_n': zhaban_sell_n,    'top_n': top_n, 'capital': capital},
+        'dtqiaoban': {'min_score': dtqiaoban_min_score, 'sell_n': dtqiaoban_sell_n, 'top_n': top_n, 'capital': capital},
+    }
+    return _signals_today_inner(refresh=refresh, user_bt_params=ubp)
+
+
+@app.get('/api/signals/today')
 
 
 @app.get("/api/scan/sector/cards")
@@ -1713,13 +1763,24 @@ def api_backtest_tab_full(tab: str,
 
 @app.get("/api/signal/tomorrow")
 def api_signal_tomorrow(
-    zhaban_top_n: int = Query(3, description="(legacy 兼容参数, 新逻辑忽略)"),
-    zhaban_min_score: float = Query(50, description="(legacy 兼容参数)"),
-    zhaban_sell_n: int = Query(5, description="(legacy 兼容参数)"),
-    limit_up_top_n: int = Query(3, description="(legacy 兼容参数)"),
-    limit_up_min_score: float = Query(38, description="(legacy 兼容参数)"),
-    trend_top_n: int = Query(1, description="(legacy 兼容参数)"),
-    trend_min_score: float = Query(45, description="(legacy 兼容参数)"),
+    # 5 tab 的回测参数 (来自前端 btMinScores / btSellNs / btTopN / btCapital)
+    limit_up_min_score: float = Query(None),
+    trend_min_score: float = Query(None),
+    reversal_min_score: float = Query(None),
+    zhaban_min_score: float = Query(None),
+    dtqiaoban_min_score: float = Query(None),
+    limit_up_sell_n: int = Query(None),
+    trend_sell_n: int = Query(None),
+    reversal_sell_n: int = Query(None),
+    zhaban_sell_n: int = Query(None),
+    dtqiaoban_sell_n: int = Query(None),
+    top_n: int = Query(None),
+    capital: float = Query(None),
+    refresh: bool = Query(False),
+    # legacy 兼容:
+    zhaban_top_n: int = Query(3, description="(legacy, 已用 top_n 替代)"),
+    limit_up_top_n: int = Query(3, description="(legacy, 已用 top_n 替代)"),
+    trend_top_n: int = Query(1, description="(legacy, 已用 top_n 替代)"),
 ):
     """明日买入信号 — 复用 _signals_today_inner 综合推荐.
 
@@ -1747,7 +1808,16 @@ def api_signal_tomorrow(
       }
     """
     try:
-        sig = _signals_today_inner(refresh=False)
+        # 把前端传来的 bt 参数组装成 user_bt_params 传给 _signals_today_inner
+        # 这样明日信号里的 EV 跟用户在回测面板看到的一致
+        ubp = {
+            'limit-up':  {'min_score': limit_up_min_score, 'sell_n': limit_up_sell_n,  'top_n': top_n or zhaban_top_n or limit_up_top_n or trend_top_n, 'capital': capital},
+            'trend':     {'min_score': trend_min_score,     'sell_n': trend_sell_n,     'top_n': top_n or zhaban_top_n or limit_up_top_n or trend_top_n, 'capital': capital},
+            'reversal':  {'min_score': reversal_min_score,  'sell_n': reversal_sell_n,  'top_n': top_n or zhaban_top_n or limit_up_top_n or trend_top_n, 'capital': capital},
+            'zhaban':    {'min_score': zhaban_min_score,    'sell_n': zhaban_sell_n,    'top_n': top_n or zhaban_top_n or limit_up_top_n or trend_top_n, 'capital': capital},
+            'dtqiaoban': {'min_score': dtqiaoban_min_score, 'sell_n': dtqiaoban_sell_n, 'top_n': top_n or zhaban_top_n or limit_up_top_n or trend_top_n, 'capital': capital},
+        }
+        sig = _signals_today_inner(refresh=refresh, user_bt_params=ubp)
         today = _today_trading()
 
         # BUG-fix: buy_date 必须是 today 的"下一个交易日", 而非 today 本身
