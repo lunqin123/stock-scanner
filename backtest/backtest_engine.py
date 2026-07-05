@@ -125,8 +125,9 @@ def _detect_available_days(tab: str) -> int:
 
     数据源优先级:
       1. data/cache/engine_{pool_type}_*.pkl (回测引擎池缓存, 最准确)
-      2. archive_pools/{pool_type}_*.pkl (归档目录)
-      3. akshare 可用窗口 fallback (10天)
+      2. archive.db daily_stocks 表 (每日存档, 数据丰富)
+      3. archive_pools/{pool_type}_*.pkl (归档目录)
+      4. akshare 可用窗口 fallback (10天)
     """
     import os as _os
     import re as _re
@@ -148,7 +149,34 @@ def _detect_available_days(tab: str) -> int:
     except Exception:
         pass
 
-    # 2. fallback: archive_pools 目录
+    # 2. archive.db daily_stocks 表 (用户实际存储的每日数据)
+    try:
+        _db_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'archive.db')
+        if _os.path.exists(_db_path):
+            import sqlite3
+            conn = sqlite3.connect(_db_path, timeout=2)
+            cur = conn.cursor()
+            # pool_type → archive.db stock_type 映射
+            _stock_type_map = {
+                'limit_up': 'limit_up',
+                'prev_pool': 'limit_up',   # 反转也用 limit_up
+                'strong': 'trend',
+                'zhaban': 'zhaban',
+                'dtqiaoban': 'dtqiaoban',
+            }
+            st = _stock_type_map.get(pool_type, pool_type)
+            cur.execute(
+                "SELECT COUNT(DISTINCT trade_date) FROM daily_stocks WHERE stock_type=?",
+                (st,)
+            )
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] >= 5:
+                return max(10, min(row[0], 120))
+    except Exception:
+        pass
+
+    # 3. fallback: archive_pools 目录
     try:
         from archiver import _ARCHIVE_POOL_DIR
         if not _os.path.exists(_ARCHIVE_POOL_DIR):
