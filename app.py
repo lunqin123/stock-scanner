@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import asyncio
+import time
 import threading
 import queue
 from contextlib import redirect_stdout, redirect_stderr
@@ -552,14 +553,101 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 
 # tab → 60 天回测基线: 胜率 & 平均收益 (commit cfe36f1 验证)
 # limit-up / trend 走 auto preset (limit-prime / trend-elite)
-# 其他 tab 暂无 preset, 用全量基线
-TAB_EV_ESTIMATES = {
-    'limit-up':   {'win_rate': 1.00,  'ev_pct': 7.39,  'note': 'limit-prime (3/3 100%)'},
-    'trend':      {'win_rate': 0.33,  'ev_pct': 3.04,  'note': 'trend-elite (1/3 胜, 但 avg=+3.04)'},
-    'reversal':   {'win_rate': 0.49,  'ev_pct': -0.55, 'note': '全量基线'},
-    'zhaban':     {'win_rate': 0.31,  'ev_pct': -2.31, 'note': '全量基线'},
-    'dtqiaoban':  {'win_rate': 0.41,  'ev_pct': -0.56, 'note': '全量基线'},
+# 各 tab 默认回测参数 (对应前端 _TAB_DEFAULT_MIN_SCORE / _TAB_DEFAULT_SELL_N)
+# 用于 _fetch_real_tab_evs() 算出"和回测面板一致"的真实 EV
+TAB_DEFAULT_BT_PARAMS = {
+    'limit-up':   {'min_score': 38, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
+    'trend':      {'min_score': 55, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
+    'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
+    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},
+    'dtqiaoban':  {'min_score': 70, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
 }
+
+# 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
+TAB_EV_ESTIMATES_FALLBACK = {
+    'limit-up':   {'win_rate': 1.00,  'ev_pct': 7.39,  'note': 'limit-prime (3/3 100%, fallback)'},
+    'trend':      {'win_rate': 0.33,  'ev_pct': 3.04,  'note': 'trend-elite (1/3 胜, avg=+3.04, fallback)'},
+    'reversal':   {'win_rate': 0.49,  'ev_pct': -0.55, 'note': '全量基线 (fallback)'},
+    'zhaban':     {'win_rate': 0.31,  'ev_pct': -2.31, 'note': '全量基线 (fallback)'},
+    'dtqiaoban':  {'win_rate': 0.41,  'ev_pct': -0.56, 'note': '全量基线 (fallback)'},
+}
+
+# 兼容: 旧名仍指向 fallback, 防止其他地方误引用
+TAB_EV_ESTIMATES = TAB_EV_ESTIMATES_FALLBACK
+
+# 真实 EV 内存缓存 (30 分钟), {tab: {win_rate, ev_pct, note, ts}}
+_REAL_TAB_EVS_CACHE = {}
+_REAL_TAB_EVS_TTL = 1800  # 秒
+
+def _fetch_real_tab_evs(refresh: bool = False) -> dict:
+    """拉取 5 tab 当前默认参数下的真实回测 EV (与回测面板对齐).
+
+    返回 {tab: {win_rate, ev_pct, note, days_avail, ev_pnl_per_trade_20000_capital}}
+    30 分钟内复用 (in-memory cache + daily_get_pkl 跨重启).
+
+    BUG-修复 (2026-07-05):
+      之前 _signals_today_inner 一直用 TAB_EV_ESTIMATES 硬编码的"经验估计",
+      与回测面板数字常不对齐 (例如 zhaban 经验估 -2.31% 但回测真实可能是
+      -1.58% 或更新 v2 后的 +4.59%). 用户反馈"炸板回测是正的, 但明日信
+      号显示负的" 即来源于此. 现在每个 tab 用其默认回测参数跑一次, 跟
+      回测面板保持一致.
+    """
+    now = time.time()
+    if not refresh and _REAL_TAB_EVS_CACHE and (now - _REAL_TAB_EVS_CACHE.get('ts', 0)) < _REAL_TAB_EVS_TTL:
+        return _REAL_TAB_EVS_CACHE
+
+    cache_key = make_key('app', 'real_tab_evs', date=_today_trading())
+    if not refresh:
+        cached = daily_get_pkl(cache_key)
+        if cached and cached.get('ts') and (now - cached['ts']) < _REAL_TAB_EVS_TTL:
+            _REAL_TAB_EVS_CACHE.update(cached)
+            return cached
+
+    # 调用 server 自己的 /api/bt/{tab}/full 拿 tab_info.ev / win_rate (与回测面板一致)
+    result = {}
+    try:
+        from fastapi.testclient import TestClient
+        client = TestClient(app)
+        for tab in ['limit-up', 'trend', 'reversal', 'zhaban', 'dtqiaoban']:
+            params = TAB_DEFAULT_BT_PARAMS.get(tab, {'min_score': 50, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'})
+            try:
+                # 不带 force=false: 让 server 复用自身 cache (跑过的就快)
+                url = (f"/api/bt/{tab}/full?days=60&top_n=3"
+                       f"&min_score={params['min_score']}&sell_n={params['sell_n']}"
+                       f"&capital={params['capital']}&strategy={params['strategy']}")
+                r = client.get(url, timeout=180)
+                if r.status_code == 200:
+                    body = r.json()
+                    ti = body.get('tab_info', {}) or {}
+                    sm = body.get('backtest', {}).get('summary', {}) or {}
+                    ev_pct = float(ti.get('ev') or sm.get('ev') or 0)
+                    win_rate = float(ti.get('win_rate') or sm.get('win_rate') or 0)
+                    days_avail = int(ti.get('days_available') or 0)
+                    note = f"WR {win_rate:.1f}% / EV {ev_pct:+.2f}% / {days_avail}天采样"
+                    result[tab] = {
+                        'win_rate': win_rate,
+                        'ev_pct': ev_pct,
+                        'note': note,
+                        'days_avail': days_avail,
+                    }
+                else:
+                    print(f'  [real_tab_evs] {tab}: HTTP {r.status_code}', file=sys.stderr)
+                    result[tab] = dict(TAB_EV_ESTIMATES_FALLBACK[tab])
+            except Exception as e:
+                print(f'  [real_tab_evs] {tab}: {type(e).__name__}: {str(e)[:80]}', file=sys.stderr)
+                result[tab] = dict(TAB_EV_ESTIMATES_FALLBACK[tab])
+    except Exception as e:
+        print(f'  [real_tab_evs] TestClient init fail: {e}', file=sys.stderr)
+        result = {tab: dict(TAB_EV_ESTIMATES_FALLBACK[tab]) for tab in TAB_DEFAULT_BT_PARAMS}
+
+    result['ts'] = now
+    _REAL_TAB_EVS_CACHE.clear()
+    _REAL_TAB_EVS_CACHE.update(result)
+    try:
+        daily_set_pkl(cache_key, result, force=True)  # 强制写以覆盖旧版
+    except Exception:
+        pass
+    return result
 
 # ── 各 tab 历史有效样本数 (来自上次 60 天回测: trade_count) ─────────
 # 用 sample_size 给 Beta-shrinkage 强度, 越少样本折扣越大. 但用户原话:
@@ -690,6 +778,9 @@ def _signals_today_inner(refresh: bool = False) -> dict:
     关键修复 (用户反馈): "经过过滤后的回测选中的哪些交易". 不再用 cards top 1,
     改用 *经过 weekday + Q2/Q3 甜蜜区过滤后能留下的票* 作 best.
     顶部 cache: 30 分钟内复用.
+
+    EV 数据源: _fetch_real_tab_evs() 调内部 /api/bt/{tab}/full 拿真实回测 EV,
+    与回测面板数字严格对齐 (修复"炸板回测正 vs 信号负"的不一致).
     """
     cache_key = make_key('app', 'signals_today', date=_today_trading())
     if not refresh:
@@ -697,6 +788,10 @@ def _signals_today_inner(refresh: bool = False) -> dict:
         if cached and cached.get('candidates'):
             cached['cached'] = True
             return cached
+
+    # 一次性拉真实 EV (所有 5 tab 共享一次回测调用, 30 分钟 cache 复用)
+    real_evs = _fetch_real_tab_evs(refresh=refresh)
+
     from fastapi.testclient import TestClient
     client = TestClient(app)
     today_dt = datetime.strptime(_today_trading(), '%Y%m%d')
@@ -722,7 +817,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
                 best = items[0]
                 filter_passed = False
 
-            ev = TAB_EV_ESTIMATES.get(tab, {'win_rate': 0.5, 'ev_pct': 0, 'note': ''})
+            ev = real_evs.get(tab) or TAB_EV_ESTIMATES_FALLBACK[tab]
             candidates.append({
                 'tab': tab,
                 'code': best.get('code'),
@@ -754,7 +849,7 @@ def _signals_today_inner(refresh: bool = False) -> dict:
         'ok': True,
         'best': candidates[0] if candidates else None,
         'candidates': candidates,
-        'tab_estimates': TAB_EV_ESTIMATES,
+        'tab_estimates': real_evs,  # 真实 EV (而非 fallback)
         'fetched_at': _fetched_at(),
         'cached': False,
     }
