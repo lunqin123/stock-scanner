@@ -1569,8 +1569,9 @@ def run_tab_backtest(
             'top_n': top_n, 'min_score': min_score, 'sell_n': sell_n, 'capital': capital,
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
-            'strategy': 'T+1 真实 (信号日 → D+1 开盘买 → D+N 开盘卖)',
+            'strategy': '尾盘买 T收→T+1开' if buy_time == 'close' else '开盘买 T+1开→T+N开',
             'fill_slots': fill_slots,
+            'buy_time': buy_time,
         },
         'comparison': {
             'open_buy': {'summary': sum_open, 'trades': records_open},
