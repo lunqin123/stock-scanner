@@ -106,22 +106,42 @@ _TAB_POOL_TYPE = {
 
 
 def _detect_available_days(tab: str) -> int:
-    """扫描本地归档目录, 返回该 tab 实际可用的历史天数。
+    """扫描本地数据源, 返回该 tab 实际可用的历史天数。
 
-    优先用本地 pickle 数量 (自动增长),
-    无归档时回退到 akshare 可用窗口 (10天, P8 从 5 放宽)。
+    数据源优先级:
+      1. data/cache/engine_{pool_type}_*.pkl (回测引擎池缓存, 最准确)
+      2. archive_pools/{pool_type}_*.pkl (归档目录)
+      3. akshare 可用窗口 fallback (10天)
     """
+    import os as _os
+    import re as _re
+    pool_type = _TAB_POOL_TYPE.get(tab, 'limit_up')
+
+    # 1. 统计 data/cache/engine_{pool_type}_*.pkl 的不同日期数
     try:
-        import os as _os
+        cache_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data', 'cache')
+        engine_prefix = f'engine_{pool_type}_'
+        dates = set()
+        if _os.path.exists(cache_dir):
+            for f in _os.listdir(cache_dir):
+                if f.startswith(engine_prefix) and f.endswith('.pkl') and not f.startswith('persistent_'):
+                    m = _re.search(r'(\d{8})', f)
+                    if m:
+                        dates.add(m.group(1))
+        if dates:
+            return max(10, min(len(dates), 120))
+    except Exception:
+        pass
+
+    # 2. fallback: archive_pools 目录
+    try:
         from archiver import _ARCHIVE_POOL_DIR
-        pool_type = _TAB_POOL_TYPE.get(tab, 'limit_up')
         if not _os.path.exists(_ARCHIVE_POOL_DIR):
             return 10
-        # 统计该 pool_type 的 pickle 文件数
         prefix = f'{pool_type}_'
         count = sum(1 for f in _os.listdir(_ARCHIVE_POOL_DIR)
                     if f.startswith(prefix) and f.endswith('.pkl'))
-        return max(10, min(count, 120))  # 至少10天 (匹配 akshare 窗口), 最多120天
+        return max(10, min(count, 120))
     except Exception:
         return 10
 # P1.2.1.2: akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天),
