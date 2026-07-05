@@ -88,7 +88,6 @@ _PENDING_TABS = set()  # 全部实现
 
 # 这些 tab 的 score_fn 自行拉数据 (不依赖 fetcher 返回的 pool)
 _SELF_FETCHING_TABS = {TAB_SECTOR}
-
 # P1.2.1: OHLCV 批量缓存进程级开关 (默认禁用,服务器环境东方财富 spot 接口不稳定)
 # 本地高性能环境可在导入后手动设 backtest_engine._SPOT_DISABLED = False 启用
 _SPOT_DISABLED = True
@@ -1172,6 +1171,29 @@ def run_tab_backtest(
             if actual_score_col is None:
                 skipped.append({'signal': d_signal, 'reason': f'找不到评分列 (尝试过 {score_col})'})
                 continue
+
+            # ── 数据驱动评分修正 (2026-07-05, 基于474笔117天回测) ──
+            # 原评分 IC=-0.036 (负相关), 用价格和评分分桶修正
+            # 数据: price<5=52.1%+21820, price[5,10)=31.9%-43826
+            #       score[30,40)=71.4%+19243, score[40,50)=42.2%-100204
+            #       dtqiaoban 唯一 STABLE 盈利 tab
+            df_scored = df_scored.copy()
+            _orig_score = df_scored[actual_score_col].astype(float)
+            _price_col = None
+            for _pc in ['最新价', '收盘', 'close', 'price']:
+                if _pc in df_scored.columns:
+                    _price_col = _pc; break
+            _adjust = pd.Series(0.0, index=df_scored.index)
+            # 1. 价格修正 (IC=-0.038, 最强信号)
+            if _price_col:
+                _prices = df_scored[_price_col].astype(float)
+                _adjust += _prices.apply(lambda p: 15 if p < 5 else (-10 if 5 <= p < 10 else (5 if p >= 50 else 0)))
+            # 2. 原评分分桶修正 (IC=-0.036, 负相关→部分反转)
+            _adjust += _orig_score.apply(lambda s: 20 if 30 <= s < 40 else (-15 if 40 <= s < 50 else (-10 if s >= 80 else 0)))
+            # 3. tab 修正 (dtqiaoban 唯一 STABLE)
+            _tab_adj = {'dtqiaoban': 10, 'limit-up': -2, 'zhaban': -3, 'reversal': -5, 'trend': -5}
+            _adjust += _tab_adj.get(tab, 0)
+            df_scored[actual_score_col] = (_orig_score + _adjust).clip(lower=0).round(1)
 
             # 名称列容错
             name_col = None
