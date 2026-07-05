@@ -26,7 +26,7 @@ const _BT_DAYS = 60;
 // 各 tab 推荐的最低评分门槛
 var _TAB_DEFAULT_SELL_N = {
     'trend': 3,
-    'limit-up': 3,
+    'limit-up': 2,   // 2026-07-05 数据驱动: 持仓1天(T+2卖)胜率91.2% 均收+6.73%, 远优于T+3
     'zhaban': 5,   // 实测 T+5 avg_ret +4.59%/+20659 pnl 最高, T+3 仅 +2.72%/+17161; 与 signal_tomorrow / backtest_engine 默认一致
     'reversal': 3,
     'dtqiaoban': 3,
@@ -50,14 +50,20 @@ var _btSellNs = (function() {
 })();
 // Tier3: 老用户 zhaban=2/3 自动升级为 5 (T+5 实测 avg_ret/+pnl 最高)
 // v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
+// v4: limit-up sell_n 3→2 (数据驱动: 持仓1天胜率91%, 持仓2天亏损)
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
-    if (sellNsVer !== 'v3') {
+    var sellNsVer = localStorage.getItem('btSellNs_v4') || localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
+    if (sellNsVer !== 'v4') {
+        // v4: limit-up 持仓1天(T+2卖)胜率91%, 旧 sell_n=3 自动升级
+        if (_btSellNs['limit-up'] === 3) {
+            _btSellNs['limit-up'] = 2;
+        }
+        // 保留 v3 的 zhaban 迁移
         if (_btSellNs.zhaban === 2 || _btSellNs.zhaban === 3) {
             _btSellNs.zhaban = 5;
         }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v3', 'v3');
+        localStorage.setItem('btSellNs_v4', 'v4');
     }
 })();
 function _getSellN(tab) { return _btSellNs[tab] !== undefined ? _btSellNs[tab] : (_TAB_DEFAULT_SELL_N[tab] || 3); }
