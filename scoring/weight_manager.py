@@ -504,12 +504,12 @@ _REV_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "reversal_weights.json"
 )
 
-# IC优化(保守): consecutive(+0.42) pullback(-0.28) turnover(-0.08) sector(-0.08)
+# 反转权重（回退原始值）
 REV_DEFAULT_WEIGHTS = {
-    'turnover': 30,     # (保守: 40+20)/2
-    'consecutive': 38,  # (保守: 35+40)/2
-    'pullback': 15,     # IC: -0.28不变
-    'sector': 10,       # IC: -0.08不变
+    'turnover': 40,
+    'consecutive': 35,
+    'pullback': 15,
+    'sector': 10,
 }
 
 
@@ -586,36 +586,28 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
 #  炸板 + 翘板 因子权重 (P5)
 # ═══════════════════════════════════════════
 
-# 炸板权重——基于60天IC优化 (2026-07-05):
-#   IC: turnover(+0.29) feature(+0.25) seal(+0.20) money(-0.14) sector(-0.09)
-#   封板质量实际有正IC(r=+0.20), 提权; 资金/板块为噪声
-ZB_DEFAULT_WEIGHTS = {'seal': 15, 'money': 0, 'feature': 35, 'turnover': 35, 'sector': 0}
+# 炸板权重（回退原始值，IC优化后实测亏损加大）
+ZB_DEFAULT_WEIGHTS = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
 ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
 
-# 翘板权重——基于60天IC优化 (2026-07-05):
-#   IC: turnover(+0.56) cont(+0.07) deal(-0.11) seal(-0.43)
-#   换手率IC=+0.56是最强因子; 封单资金IC=-0.43强负相关
-DT_DEFAULT_WEIGHTS = {'deal': 15, 'seal': 10, 'cont': 20, 'turnover': 30, 'time': 5}
+# 翘板权重（回退原始值）
+DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
 DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
 
-# 涨停专用权重——基于60天IC优化 (2026-07-05):
-#   IC: tech(+0.49) seal(-0.29) sector(-0.27) stock_sentiment(-0.04)
-#   量价结构(tech)是唯一强正相关因子, 提权至22;
-#   封板/seal=12,sector=10: 负IC降权; money/history 回测无真实数据, 降权
+# 涨停专用权重（回退原始值）
 DEFAULT_WEIGHTS_LIMIT_UP = {
-    'seal': 12.0,       # IC: -0.29 (封板越强越买不到, 降权)
-    'sector': 10.0,     # IC: -0.27 (板块越热回调越快)
-    'money': 8.0,       # 回测无真实资金流数据
-    'tech': 22.0,       # IC: +0.49 (最强正相关, 大幅提权!!)
-    'history': 5.0,     # 回测无历史股性真实数据
-    'stock_sentiment': 8.0,  # IC: -0.04 (噪声级)
+    'seal': 20.0,
+    'sector': 25.0,
+    'money': 15.0,
+    'tech': 10.0,
+    'history': 10.0,
+    'stock_sentiment': 15.0,
     'principal_score': 5.0,
-    'north_flow': 3.0,  # 回测无北向数据
+    'north_flow': 5.0,
 }
 
-# 反转专用权重——基于60天IC优化 (2026-07-05, 保守):
-#   IC: consecutive(+0.42) pullback(-0.28) turnover(-0.08) sector(-0.08)
-REV_DEFAULT_WEIGHTS = {'turnover': 22, 'consecutive': 35, 'pullback': 20, 'sector': 12, 'retention': 5}
+# 反转专用权重（回退原始值）
+REV_DEFAULT_WEIGHTS = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
 REV_FACTOR_NAMES = {'turnover': '换手', 'consecutive': '连板', 'pullback': '回调', 'sector': '板块', 'retention': '留存'}
 
 _WEIGHTS_FILES = {

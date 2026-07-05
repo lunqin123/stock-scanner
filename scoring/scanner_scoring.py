@@ -44,8 +44,8 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     """
     df = df.copy()
 
-    # IC优化: turnover(+0.29) feature(+0.25) seal(+0.20) money(-0.14) sector(-0.09)
-    defaults = {'seal': 15, 'money': 0, 'feature': 35, 'turnover': 35, 'sector': 0}
+    # 原始权重 (回退 IC 优化, 保持正收益)
+    defaults = {'seal': 5, 'money': 5, 'feature': 35, 'turnover': 35, 'sector': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -151,8 +151,8 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     if pullback is None or pullback.empty:
         return pullback
 
-    # IC优化(保守): consecutive(+0.42) pullback(-0.28) turnover(-0.08) sector(-0.08)
-    defaults = {'turnover': 22, 'consecutive': 35, 'pullback': 20, 'sector': 12, 'retention': 5}
+    # 原始权重 (回退 IC 优化)
+    defaults = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -611,8 +611,8 @@ def _score_sector(date_str: str, top_n: int = TOP_N) -> pd.DataFrame:
 def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     """翘板反抽评分 (P5: 5因子可调权)。"""
     df = df.copy()
-    # IC优化: turnover(+0.56) cont(+0.07) deal(-0.11) seal(-0.43)
-    defaults = {'deal': 15, 'seal': 10, 'cont': 20, 'turnover': 30, 'time': 5}
+    # 原始权重 (回退 IC 优化)
+    defaults = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
