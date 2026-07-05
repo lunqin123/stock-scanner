@@ -572,7 +572,7 @@ TAB_DEFAULT_BT_PARAMS = {
     'trend':      {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
     'reversal':   {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
     'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 30000, 'strategy': None},
-    'dtqiaoban':  {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # 唯一全量盈利tab: 479笔 45.5% +17509
+    'dtqiaoban':  {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 唯一STABLE盈利: 87笔49%+11782, sn=3胜率优于sn=2
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
@@ -740,15 +740,16 @@ def compute_recommendation_score(cand: dict) -> dict:
     # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
     combined = 0.4 * historical_component + 0.6 * today_component
 
-    # 2026-07-05: 基于服务器真实回测数据 (top1, 3w, ms=50, 26天)
-    # 盈利: 跌停+4575 炸板+3778 涨停+3044
-    # 亏损: 趋势-9289 反转-4568
+    # 2026-07-05: 基于服务器474笔117天回测 + 时间交叉验证
+    # dtqiaoban 是唯一 STABLE 盈利 tab (H1+H2都正), 其他 tab UNSTABLE
+    # dtqiaoban sn=3: 87笔 49.4% +11782 (sn=2: 88笔 43.2% +12495, sn=3胜率更高)
+    # 最优子集: dtqiaoban score>=60 sn=3 → 19笔 58% +19777
     tab_weight = {
-        'zhaban':    1.3,   # +3778 EV+1.26% 胜率60% (最佳EV)
-        'dtqiaoban': 1.3,   # +4575 EV+1.17% (最多盈利)
-        'limit-up':  1.1,   # +3044 EV+0.85% 胜率66.7% (最高胜率)
-        'reversal':  0.4,   # -4568 EV-1.27% (亏损)
-        'trend':     0.2,   # -9289 EV-2.58% (最差)
+        'dtqiaoban': 1.5,   # 唯一STABLE盈利 tab (+11782, H1+H2都正)
+        'limit-up':  0.5,   # UNSTABLE (-27551, H1亏H2也亏)
+        'zhaban':    0.3,   # UNSTABLE (-19862)
+        'reversal':  0.3,   # UNSTABLE (-14321)
+        'trend':     0.2,   # UNSTABLE (-11485, 最差胜率)
     }
     combined *= tab_weight.get(tab, 1.0)
 
