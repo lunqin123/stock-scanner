@@ -519,7 +519,7 @@ def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
 
 @app.get("/api/scan/limit-up/cards")
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
-                              principal: float = Query(20000, description="本金(元)"),
+                              principal: float = Query(30000, description="本金(元)"),
                               plan: str = Query(None, description="评分方案(A/B/...)"),
                               use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子(A/B 对比用)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）

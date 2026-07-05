@@ -232,7 +232,9 @@ def daily_set_pkl(key: str, data, force=False):
     """pickle 模式缓存(支持 DataFrame/set/dict 等任意 Python 对象)。
     用于缓存原始数据(akshare 返回的 df),而非计算结果。
     这样改评分逻辑后,可用缓存原始数据 + 新逻辑重算,不用 bump _CACHE_VER。"""
-    if not _is_market_frozen():
+    if force:
+        pass  # force=true 时跳过所有冻结检查, 允许写缓存
+    elif not _is_market_frozen():
         return
     try:
         if not force:
