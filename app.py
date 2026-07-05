@@ -517,7 +517,10 @@ def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
     return data, False, None
 
 
+_CARDS_CACHE_VER = 2
+
 @app.get("/api/scan/limit-up/cards")
+
 def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
                               principal: float = Query(30000, description="本金(元)"),
                               plan: str = Query(None, description="评分方案(A/B/...)"),
