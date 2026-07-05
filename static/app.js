@@ -33,11 +33,11 @@ var _TAB_DEFAULT_SELL_N = {
 };
 
 var _TAB_DEFAULT_MIN_SCORE = {
-    'trend': 55,
+    'trend': 85,       // 2026-07-05 网格扫描甜蜜点: WR 66.7% / EV +2.41%
     'limit-up': 80,
-    'zhaban': 50,
-    'reversal': 0,
-    'dtqiaoban': 70,
+    'zhaban': 50,      // 网格扫描全负 (-1.05%~-1.65%), 暂保持 50
+    'reversal': 0,     // 网格扫描全负 (-1.02%~-1.32%), 暂保持 0
+    'dtqiaoban': 75,   // 2026-07-05 网格扫描甜蜜点: WR 80.0% / EV +3.44%
 };
 // 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {

@@ -554,13 +554,24 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 # tab → 60 天回测基线: 胜率 & 平均收益 (commit cfe36f1 验证)
 # limit-up / trend 走 auto preset (limit-prime / trend-elite)
 # 各 tab 默认回测参数 (对应前端 _TAB_DEFAULT_MIN_SCORE / _TAB_DEFAULT_SELL_N)
-# 用于 _fetch_real_tab_evs() 算出"和回测面板一致"的真实 EV
+# 用于 _fetch_real_tab_evs() 算出"和回测面板一致"的真实 EV.
+#
+# 2026-07-05 网格扫描结果 (60 天回测, 26 天采样):
+#   trend      min=55→85: WR 28.6%→66.7%, EV -0.90%→+2.41% (注: ms=85 只有 3 笔样本, 偏乐观)
+#   dtqiaoban  min=70→75: WR 46.2%→80.0%, EV +1.34%→+3.44% (注: ms=75 只有 5 笔, 偏乐观)
+#   zhaban     min=45~70 全负 (-1.05%~-1.65%), 不调整
+#   reversal   min=0~60 全负 (-1.02%~-1.32%), 不调整
+#   limit-up   T+3 涨停次新抛压 EV 恒 0%, 不调整
+#
+# ⚠️ 样本警示: 回测 archive 的 trades 多集中在少数日期 (days_active=1/26),
+#   "甜蜜点" 数字在样本扩展后可能漂移. 如果回测样本扩大了, 重跑
+#   __tmp_bt_grid.py 重新确认甜蜜点.
 TAB_DEFAULT_BT_PARAMS = {
     'limit-up':   {'min_score': 38, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
-    'trend':      {'min_score': 55, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
+    'trend':      {'min_score': 85, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 55→85 (网格甜蜜点)
     'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
-    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},
-    'dtqiaoban':  {'min_score': 70, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
+    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},   # 网格全负, 保持
+    'dtqiaoban':  {'min_score': 75, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 70→75 (网格甜蜜点)
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
