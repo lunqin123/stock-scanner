@@ -689,10 +689,10 @@ def _fetch_real_tab_evs(refresh: bool = False, user_bt_params: dict = None) -> d
 # "少样本但胜率高的 tab 在每日信号里着重加分以便挑选上" — 因此加了
 # rare_event_boost 弥补折扣 (见 compute_recommendation_score).
 TAB_SAMPLE_SIZE = {
-    'limit-up':   3,    # limit-prime 严过滤
-    'trend':      3,    # trend-elite 严过滤
-    'reversal':   63,   # baseline
-    'dtqiaoban':  51,   # baseline
+    'limit-up':   42,   # score_new+尾盘买 30天回测
+    'trend':      36,   # 开仓买 30天
+    'reversal':   36,   # 开仓买 30天
+    'dtqiaoban':  31,   # 开仓买 30天
     'zhaban':     68,   # baseline
 }
 
@@ -740,16 +740,15 @@ def compute_recommendation_score(cand: dict) -> dict:
     # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
     combined = 0.4 * historical_component + 0.6 * today_component
 
-    # 2026-07-05: 基于服务器474笔117天回测 + 时间交叉验证
-    # dtqiaoban 是唯一 STABLE 盈利 tab (H1+H2都正), 其他 tab UNSTABLE
-    # dtqiaoban sn=3: 87笔 49.4% +11782 (sn=2: 88笔 43.2% +12495, sn=3胜率更高)
-    # 最优子集: dtqiaoban score>=60 sn=3 → 19笔 58% +19777
+    # 2026-07-05 v3.1: 基于 score_new + 尾盘买 30天回测
+    # limit-up 42笔 83.3%WR +252%累计 +75,702PnL (best tab!)
+    # tab 权重按 30天回测总PnL比例分配
     tab_weight = {
-        'dtqiaoban': 1.5,   # 唯一STABLE盈利 tab (+11782, H1+H2都正)
-        'limit-up':  0.5,   # UNSTABLE (-27551, H1亏H2也亏)
-        'zhaban':    0.3,   # UNSTABLE (-19862)
-        'reversal':  0.3,   # UNSTABLE (-14321)
-        'trend':     0.2,   # UNSTABLE (-11485, 最差胜率)
+        'limit-up':  1.5,   # +75,702 ✅ BEST (score_new+尾盘买)
+        'dtqiaoban': 1.0,   # -2,237 (持平)
+        'zhaban':    0.8,   # -2,727 (持平)
+        'reversal':  0.5,   # -16,265 (亏损)
+        'trend':     0.5,   # -5,504 (亏损)
     }
     combined *= tab_weight.get(tab, 1.0)
 
