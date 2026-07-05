@@ -1172,28 +1172,6 @@ def run_tab_backtest(
                 skipped.append({'signal': d_signal, 'reason': f'找不到评分列 (尝试过 {score_col})'})
                 continue
 
-            # ── 数据驱动评分修正 (2026-07-05, 基于474笔117天回测) ──
-            # 原评分 IC=-0.036 (负相关), 用价格和评分分桶修正
-            # 数据: price<5=52.1%+21820, price[5,10)=31.9%-43826
-            #       score[30,40)=71.4%+19243, score[40,50)=42.2%-100204
-            #       dtqiaoban 唯一 STABLE 盈利 tab
-            df_scored = df_scored.copy()
-            _orig_score = df_scored[actual_score_col].astype(float)
-            _price_col = None
-            for _pc in ['最新价', '收盘', 'close', 'price']:
-                if _pc in df_scored.columns:
-                    _price_col = _pc; break
-            # 新评分 = 价格主导(0-60) + tab加成 + 原评分微调
-            if _price_col:
-                _prices = df_scored[_price_col].astype(float)
-                _new_score = _prices.apply(lambda p: 60 if p < 5 else 15 if p < 10 else 25 if p < 15 else 30 if p < 20 else 20 if p < 30 else 10 if p < 50 else 35)
-            else:
-                _new_score = pd.Series(30.0, index=df_scored.index)
-            _tab_adj2 = {'dtqiaoban': 20, 'limit-up': 0, 'zhaban': -5, 'reversal': -10, 'trend': -10}
-            _new_score = _new_score + _tab_adj2.get(tab, 0)
-            _orig = df_scored[actual_score_col].astype(float)
-            _new_score = _new_score + _orig.apply(lambda s: 5 if 30 <= s < 40 else (-5 if s >= 80 else 0))
-            df_scored[actual_score_col] = _new_score.clip(lower=0, upper=100).round(1)
 
             # 名称列容错
             name_col = None
