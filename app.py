@@ -527,7 +527,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     每次用最新 _make_cache_entry 重新组装 items。改组装逻辑后直接 reload 即可。
     """
     plan_name = plan or None
-    raw_key = make_key("app", "limit_up_raw", version=_CARDS_CACHE_VER, principal=int(principal), plan=plan_name or "default",
+    raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default",
                        v2=use_v2)
 
     print("  [涨停卡片] 开始扫描", file=sys.stderr)

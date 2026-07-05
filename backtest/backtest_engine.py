@@ -860,18 +860,7 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
         pass
     # NOTE: V2 因子只在 limit-up tab 注入, 不在此 tab 扰动排序 (数据验证:
     # 全 tab 接入 V2 让总 PnL 净亏 -5K, 因为独立评分函数被 0.95 缩放扰乱)
-    result = score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
-    # v3.1: 叠加 score_new (炸板池有封板时间/换手率/炸板次数等字段)
-    if result is not None and not result.empty:
-        try:
-            from scoring.score_new import score_new as _sn
-            sn_df = _sn(result)
-            if sn_df is not None and not sn_df.empty and '新评分' in sn_df.columns:
-                result['总分'] = sn_df['新评分']
-                result = result.sort_values('总分', ascending=False)
-        except Exception:
-            pass
-    return result
+    return score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
 
 
 def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
