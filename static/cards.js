@@ -1086,8 +1086,6 @@ function renderBacktestTabFull(data) {
     html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px">📊 策略对比</div>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
     html += _cmpCard('开盘买', (cmp.open_buy||{}).summary, '#3b82f6', '🌅');
-    html += _cmpCard('尾盘买', (cmp.close_buy||{}).summary, '#a855f7', '🌇');
-    html += _cmpCard('休盘+止损', (cmp.stop_loss||{}).summary, '#f59e0b', '🛑');
     html += '</div></div>';
 
     // ═══ 第3行: 因子权重 — 带进度条的精致卡片 ═══
@@ -1183,17 +1181,15 @@ function renderBacktestTabFull(data) {
         html += '</div>';
     }
 
-    // ═══ 全部交易明细 (按策略分 3 张表) ═══
+    // ═══ 全部交易明细 (策略A: 开盘买) ═══
     var strategies = [
-        { key: 'open_buy', label: 'A 开盘买', color: '#3b82f6', icon: '🌅' },
-        { key: 'close_buy', label: 'B 尾盘买', color: '#a855f7', icon: '🌇' },
-        { key: 'stop_loss', label: 'C 休盘+止损', color: '#f59e0b', icon: '🛑' }
+        { key: 'open_buy', label: 'A 开盘买', color: '#3b82f6', icon: '🌅' }
     ];
     var totalAll = 0;
     strategies.forEach(function(st) { totalAll += ((cmp[st.key] && cmp[st.key].trades) || []).length; });
     if (totalAll > 0) {
         html += '<div class="card" style="margin:0 12px;padding:12px">';
-        html += '<div style="font-size:13px;font-weight:600;color:var(--text-muted);margin-bottom:10px">📋 全部交易明细 (' + totalAll + '笔, 按策略分列)</div>';
+        html += '<div style="font-size:13px;font-weight:600;color:var(--text-muted);margin-bottom:10px">📋 全部交易明细 (' + totalAll + '笔)</div>';
 
         strategies.forEach(function(st) {
             var trades = ((cmp[st.key] && cmp[st.key].trades) || []).slice();

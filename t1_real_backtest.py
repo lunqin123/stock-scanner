@@ -320,7 +320,6 @@ def run_t1_backtest(
                 'error': '区间内无交易日'}
 
     records_open = []    # 策略A: D+1 开盘买
-    records_close = []   # 策略B: D+1 尾盘买（收盘买）
     skipped = []
     unbuyable_count = 0  # 因涨停开盘无法买入的笔数
 
@@ -404,18 +403,6 @@ def run_t1_backtest(
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
                     })
-
-                # ── 策略B: 尾盘买（D+1 收盘买入，D+2 开盘卖出） ──
-                close_buy_px = buy_ohlcv['close']
-                raw_ret_c = (sell_px / close_buy_px - 1) * 100
-                net_ret_c = raw_ret_c - _COMMISSION_PCT - _SLIPPAGE_PCT
-                records_close.append({
-                    'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
-                    'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
-                    'buy_price': round(close_buy_px, 2), 'sell_price': round(sell_px, 2),
-                    'raw_ret_pct': round(raw_ret_c, 2), 'net_ret_pct': round(net_ret_c, 2),
-                    'pnl': round(capital * net_ret_c / 100, 0), **intraday,
-                })
         except Exception as e:
             skipped.append({'signal': d_signal, 'reason': f'错误: {str(e)[:50]}'})
         time.sleep(0.5)
@@ -450,10 +437,9 @@ def run_t1_backtest(
         }
 
     sum_open = _aggregate(records_open, '开盘买')
-    sum_close = _aggregate(records_close, '尾盘买')
 
-    # 两个策略都空才返回空
-    if sum_open is None and sum_close is None:
+    # 无有效交易返回空
+    if sum_open is None:
         return {
             'summary': {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0,
                         'total_pnl': 0, 'plr': 0, 'max_dd': 0, 'best': 0,
@@ -470,8 +456,8 @@ def run_t1_backtest(
     bot5 = sorted_trades[-5:][::-1]
 
     result = {
-        'summary': sum_open or sum_close,
-        'trades': records_open or records_close,
+        'summary': sum_open,
+        'trades': records_open,
         'top5': top5, 'bottom5': bot5,
         'skipped': skipped,
         'generated_at': datetime.now().isoformat(),
@@ -482,15 +468,10 @@ def run_t1_backtest(
             'strategy': 'T+1 真实 (信号日涨停 → D+1 开盘买入 → D+2 开盘卖出)',
             'scoring': 'backtest_score_prev (回测评分, 6 因子)',
         },
-        # 新增：双策略对比
         'comparison': {
             'open_buy': {
                 'summary': sum_open,
                 'trades': records_open,
-            },
-            'close_buy': {
-                'summary': sum_close,
-                'trades': records_close,
             },
             'unbuyable_count': unbuyable_count,
         },
@@ -530,7 +511,6 @@ if __name__ == '__main__':
     res = run_t1_backtest(max_days=30, top_n=3)
     cmp = res.get('comparison', {})
     ob = cmp.get('open_buy', {}).get('summary', {})
-    cb = cmp.get('close_buy', {}).get('summary', {})
     uc = cmp.get('unbuyable_count', 0)
 
     # ── 大大大的胜率横幅 ──
@@ -538,16 +518,12 @@ if __name__ == '__main__':
         print(_big_winrate_banner(
             ob['win_rate'], '策略A: 开盘买 (D+1开盘 -> D+2开盘)',
             ob['trade_count'], ob['cumulative_ret']))
-    if cb:
-        print(_big_winrate_banner(
-            cb['win_rate'], '策略B: 尾盘买 (D+1收盘 -> D+2开盘)',
-            cb['trade_count'], cb['cumulative_ret']))
     if uc:
         print(f'  [!] 因一字涨停无法买入: {uc} 笔')
 
     sep = '=' * 55
     print(f'\n{sep}')
-    print(f'  策略对比: 开盘买 vs 尾盘买')
+    print(f'  策略A: 开盘买')
     print(f'  区间: {res["config"]["start"]} ~ {res["config"]["end"]}')
     print(f'  TOP{res["config"]["top_n"]} | 因涨停开盘无法买入: {uc} 笔')
     print(f'{sep}')
@@ -565,18 +541,6 @@ if __name__ == '__main__':
         print(f'  {"最优:":<8} {ob["best"]:+.2f}%  最差: {ob["worst"]:+.2f}%')
     else:
         print(f'\n  策略A: 开盘买 — 无有效交易（全部涨停开盘无法买入）')
-
-    if cb:
-        print(f'\n  策略B: 尾盘买（D+1 收盘 → D+2 开盘）')
-        print(f'  {"笔数:":<8} {cb["trade_count"]}')
-        print(f'  {"胜率:":<8} {cb["win_rate"]}% ({cb["win_count"]}赢/{cb["loss_count"]}亏)')
-        print(f'  {"总盈亏:":<8} ¥{cb["total_pnl"]:+,.0f}')
-        print(f'  {"累计收益:":<8} {cb["cumulative_ret"]:+.2f}%')
-        print(f'  {"平均收益:":<8} {cb["avg_ret"]:+.2f}%')
-        print(f'  {"盈亏比:":<8} {cb["plr"]}')
-        print(f'  {"最大回撤:":<8} {cb["max_dd"]:.2f}%')
-        print(f'  {"期望值:":<8} {cb["ev"]:+.2f}%')
-        print(f'  {"最优:":<8} {cb["best"]:+.2f}%  最差: {cb["worst"]:+.2f}%')
     print(f'\n{sep}')
     print(f'  跳过: {len(res.get("skipped", []))} 个信号日')
     print(f'{sep}\n')

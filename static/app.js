@@ -232,7 +232,7 @@ function onBacktestParamChange() {
             var bt = newData.backtest;
             if (bt) {
                 var cmp = bt.comparison || {};
-                ['open_buy', 'close_buy', 'stop_loss'].forEach(function(k) {
+                ['open_buy'].forEach(function(k) {
                     var group = cmp[k];
                     if (group && group.trades) {
                         group.trades.forEach(function(t) {
@@ -246,7 +246,7 @@ function onBacktestParamChange() {
                     var s = bt[sk];
                     if (s && s.trade_count) {
                         var totalPnl = 0;
-                        var src = cmp.open_buy && cmp.open_buy.trades ? cmp.open_buy.trades : (cmp.close_buy && cmp.close_buy.trades ? cmp.close_buy.trades : []);
+                        var src = cmp.open_buy && cmp.open_buy.trades ? cmp.open_buy.trades : [];
                         src.forEach(function(t) { totalPnl += (t.pnl || 0); });
                         s.total_pnl = totalPnl;
                     }

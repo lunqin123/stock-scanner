@@ -3,7 +3,7 @@
 提供统一的批量回测入口 run_tab_backtest(tab, ...),按 tab 维度调度:
 1. 信号池获取 (signal_pool_fetcher)
 2. 评分函数 (score_func)  -返回带 score 列的 DataFrame
-3. 双策略模拟 (开盘买 / 尾盘买) -复用 t1_real_backtest 的 OHLCV / 聚合
+3. 策略模拟 (开盘买) -复用 t1_real_backtest 的 OHLCV / 聚合
 4. 缓存 + 持久化
 
 向后兼容: run_tab_backtest('limit-up', ...) 等价于 t1_real_backtest.run_t1_backtest(...)
@@ -1090,9 +1090,8 @@ def run_tab_backtest(
     fetcher = SIGNAL_POOL_FETCHERS[tab]
     score_fn = SCORE_FUNCS[tab]
     score_col = SCORE_COLUMNS[tab]
-    records_open, records_close, records_stop, skipped, unbuyable_count = [], [], [], [], 0
-    # 休盘买策略仅适用于趋势/反转 (信号日非涨停, 可买入)
-    _close_buy_tabs = {TAB_TREND, TAB_REVERSAL}
+    # 2026-07-05: 删除策略B(尾盘买)/策略C(休盘+止损), 仅保留策略A(开盘买)
+    records_open, skipped, unbuyable_count = [], [], 0
 
     for d_signal in trade_dates:
         d_buy = _next_trading_date(d_signal)
@@ -1111,13 +1110,8 @@ def run_tab_backtest(
         if d_sell is None:
             skipped.append({'signal': d_signal, 'reason': '卖出日无效'})
             continue
-        # 趋势/反转: 策略C(休盘买)只需D+1, d_sell超区间也继续跑
-        # 但策略A/B需要真正的T+1卖出日, d_sell被兜底时跳过(否则同日买卖无意义)
-        d_sell_fallback = False
-        if tab in _close_buy_tabs and (d_sell is None or d_sell > trade_dates[-1]):
-            d_sell = d_buy
-            d_sell_fallback = True  # 仅策略C可用
-        elif d_sell is None or d_sell > trade_dates[-1]:
+        # 策略A需要真正的T+N卖出日, d_sell超区间则跳过(否则同日买卖无意义)
+        if d_sell is None or d_sell > trade_dates[-1]:
             skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
             continue
 
@@ -1261,8 +1255,8 @@ def run_tab_backtest(
                 sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
 
                 # ── 策略A: 开盘买 ──
-                # d_sell_fallback=T时跳过: 同日买卖buy=sell同价, ret≈0是数据假象非真实结果
-                if buyable and not d_sell_fallback:
+                # D+1 开盘买入, D+N 开盘卖出
+                if buyable:
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
@@ -1283,74 +1277,19 @@ def run_tab_backtest(
                             rec[fk] = round(float(val), 1)
                     records_open.append(rec)
 
-                    # ── 策略B: 尾盘买 ──
-                    close_buy_px = buy_ohlcv['close']
-                    raw_ret_c = (sell_px / close_buy_px - 1) * 100
-                    net_ret_c = raw_ret_c - _COMMISSION_PCT - _SLIPPAGE_PCT
-                    rec_c = {
-                        'signal_date': d_signal, 'buy_date': d_buy, 'sell_date': d_sell,
-                        'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
-                        'buy_price': round(close_buy_px, 2), 'sell_price': round(sell_px, 2),
-                        'raw_ret_pct': round(raw_ret_c, 2), 'net_ret_pct': round(net_ret_c, 2),
-                        'pnl': round(capital * net_ret_c / 100, 0), **intraday,
-                    }
-                    records_close.append(rec_c)
-
-                # ── 策略C: 休盘买+止损 (趋势/反转专用) ──
-                # 信号日收盘买入 → 次日低开≥3%止损开盘卖, 否则收盘卖
-                if tab in _close_buy_tabs:
-                    stop_loss_pct = -3.0  # 止损线: 低开3%
-                    close_buy_price = signal_ohlcv['close']
-                    d1_open = buy_ohlcv['open']
-                    d1_close = buy_ohlcv['close']
-                    gap_from_buy = (d1_open / close_buy_price - 1) * 100
-
-                    if gap_from_buy <= stop_loss_pct:
-                        sell_price_c = d1_open
-                        exit_type = '止损'
-                    else:
-                        sell_price_c = d1_close
-                        exit_type = '收盘'
-
-                    raw_ret_s = (sell_price_c / close_buy_price - 1) * 100
-                    net_ret_s = raw_ret_s - _COMMISSION_PCT - _SLIPPAGE_PCT
-                    records_stop.append({
-                        'signal_date': d_signal, 'buy_date': d_signal, 'sell_date': d_buy,
-                        'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
-                        'buy_price': round(close_buy_price, 2),
-                        'sell_price': round(sell_price_c, 2),
-                        'raw_ret_pct': round(raw_ret_s, 2),
-                        'net_ret_pct': round(net_ret_s, 2),
-                        'pnl': round(capital * net_ret_s / 100, 0),
-                        'exit_type': exit_type,
-                        'gap_from_buy': round(gap_from_buy, 1),
-                        'buy_high': round(buy_ohlcv['high'], 2),
-                        'buy_low': round(buy_ohlcv['low'], 2),
-                        'buy_close': round(d1_close, 2),
-                        'signal_close': round(close_buy_price, 2),
-                        'gap_open_pct': round(gap_from_buy, 1),
-                        'buyable': True,
-                    })
-
         except Exception as e:
             skipped.append({'signal': d_signal, 'reason': f'错误: {str(e)[:80]}'})
         time.sleep(0.5)
 
     # ── 聚合 ──
     sum_open = _aggregate(records_open, '开盘买')
-    sum_close = _aggregate(records_close, '尾盘买')
-    sum_stop = _aggregate(records_stop, '休盘买+止损')
 
     # ── 近30天聚合 ──
     cutoff_30d = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
     records_open_30d = [r for r in records_open if r['signal_date'] >= cutoff_30d]
-    records_close_30d = [r for r in records_close if r['signal_date'] >= cutoff_30d]
-    records_stop_30d = [r for r in records_stop if r['signal_date'] >= cutoff_30d]
     sum_open_30d = _aggregate(records_open_30d, '开盘买(近30天)')
-    sum_close_30d = _aggregate(records_close_30d, '尾盘买(近30天)')
-    sum_stop_30d = _aggregate(records_stop_30d, '休盘买+止损(近30天)')
 
-    if sum_open is None and sum_close is None and sum_stop is None:
+    if sum_open is None:
         empty_summary = {'trade_count': 0, 'win_rate': 0, 'avg_ret': 0,
                     'total_pnl': 0, 'plr': 0, 'max_dd': 0, 'best': 0,
                     'worst': 0, 'ev': 0, 'cumulative_ret': 0}
@@ -1387,9 +1326,9 @@ def run_tab_backtest(
         bot5 = sorted_trades[-5:][::-1]
 
     result = {
-        'summary': sum_open or sum_close,
-        'summary_30d': sum_open_30d or sum_close_30d,
-        'trades': records_open or records_close,
+        'summary': sum_open,
+        'summary_30d': sum_open_30d,
+        'trades': records_open,
         'top5': top5, 'bottom5': bot5,
         'skipped': skipped,
         'generated_at': datetime.now().isoformat(),
@@ -1398,12 +1337,10 @@ def run_tab_backtest(
             'top_n': top_n, 'min_score': min_score, 'sell_n': sell_n, 'capital': capital,
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
-            'strategy': 'T+1 真实 (信号日 → D+1 开盘/尾盘买 → D+3 开盘卖(持2日))',
+            'strategy': 'T+1 真实 (信号日 → D+1 开盘买 → D+N 开盘卖)',
         },
         'comparison': {
             'open_buy': {'summary': sum_open, 'trades': records_open},
-            'close_buy': {'summary': sum_close, 'trades': records_close},
-            'stop_loss': {'summary': sum_stop, 'trades': records_stop},
             'unbuyable_count': unbuyable_count,
         },
     }
