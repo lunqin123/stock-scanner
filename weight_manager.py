@@ -256,15 +256,10 @@ def daily_adjust_weights(current_weights: dict, lr: float = None, plan_name: str
             'icir': round(icir, 2),
         }
 
-    if plan_name.upper() == 'B':
-        # ── Plan B: ICIR 加权 + 噪声剔除 ──
-        from plans.plan_b import PLAN_B_WEIGHTS as defaults_b
-        factor_list = BACKTEST_FACTORS_B
-        defaults = defaults_b
-    else:
-        # ── Plan A: 保持原有 delta-based ──
-        factor_list = BACKTEST_FACTORS
-        defaults = DEFAULT_WEIGHTS
+    # 2026-07-05: 只保留 Plan A. Plan B 已删除 (plans/plan_b.py)
+    # ICIR 加权 + 噪声剔除功能并入 Plan A 的 ICIR+EMA 路径里
+    factor_list = BACKTEST_FACTORS
+    defaults = DEFAULT_WEIGHTS
 
     # ICIR 加权
     valid_factors = [f for f in factor_list if f in ic_stats]

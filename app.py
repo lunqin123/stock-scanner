@@ -82,9 +82,10 @@ def _capture(fn, *args, **kwargs):
 
 @app.get("/api/plans")
 def api_list_plans():
-    """列出所有可用评分方案"""
-    from plans import list_plans
-    return {"ok": True, "plans": list_plans()}
+    """列出所有可用评分方案 (2026-07-05: 只剩 Plan A)"""
+    return {"ok": True, "plans": [
+        {"name": "A", "description": "9因子加权 + 危险信号 + 龙头检测", "is_default": True}
+    ]}
 
 
 @app.get("/api/scan/limit-up")
@@ -567,11 +568,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 #   "甜蜜点" 数字在样本扩展后可能漂移. 如果回测样本扩大了, 重跑
 #   __tmp_bt_grid.py 重新确认甜蜜点.
 TAB_DEFAULT_BT_PARAMS = {
-    'limit-up':   {'min_score': 38, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
-    'trend':      {'min_score': 85, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 55→85 (网格甜蜜点)
-    'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
-    'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},   # 改 50→75 (IC-重加权后甜蜜点, WR 54.3% EV +0.34%)
-    'dtqiaoban':  {'min_score': 75, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 70→75 (网格甜蜜点)
+    'limit-up':   {'min_score': 38, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # capital=3w 与前端一致
+    'trend':      {'min_score': 85, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 改 55→85 (网格甜蜜点)
+    'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 30000, 'strategy': None},
+    'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 30000, 'strategy': None},  # 改 50→75 (IC-重加权后甜蜜点, WR 54.3% EV +0.34%)
+    'dtqiaoban':  {'min_score': 75, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 改 70→75 (网格甜蜜点)
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
@@ -770,21 +771,22 @@ def _item_score(item: dict) -> float:
 def _passes_preset_like_filter(item: dict, tab: str, today_dt=None) -> bool:
     """实盘可达的 preset 等价过滤 (不含未来数据).
 
-    Returns True 表示"今日大概率能像 limit-prime/trend-elite 选中".
+    Returns True 表示"今日大概率能像 plan_a 评分上限选中".
+    历史 (commit c8f7f14 等): IC-driven 选出的 ms 甜蜜点对应此 filter 的 Q2/Q3 范围.
     """
     if today_dt is None:
         today_dt = datetime.strptime(_today_trading(), '%Y%m%d')
     score = _item_score(item)
     if tab == 'limit-up':
-        # Q2+Q3 甜蜜区 (避开 Q4 > 75 陷阱, 见 strategy_filters.py 注释 2026-06-14)
-        # 实测: limit-prime 选中票 score 51/57/82, 故上限放宽到 85.
+        # Q2+Q3 甜蜜区 (避开 Q4 > 75 陷阱)
+        # 上限放到 85 (避免误杀 limit-up 涨停日 90+ 分票)
         if not (38 <= score <= 85):
             return False
-        # 周二/周五 (策略预设 weekday)
+        # 周二/周五 (实测胜率最高的 weekday)
         if today_dt.weekday() not in (1, 4):
             return False
     elif tab == 'trend':
-        # 实测 trend-elite 选中票 score 80/81/94, 故下限放宽到 60.
+        # 趋势 tab 通过 ms=85 甜蜜点过滤 (>=85)
         if not (60 <= score <= 100):
             return False
         # 周一/周二
@@ -1697,7 +1699,7 @@ def api_backtest_tab_full(tab: str,
                            sell_n: int = Query(3, description="卖出日偏移(2=T+2,3=T+3,4=T+4,5=T+5)"),
                            capital: float = Query(30000, description="单笔本金"),
                            force: bool = Query(False, description="强制重算(跳过缓存)"),
-                           strategy: str = Query(None, description="策略过滤器: trend-elite/limit-sweet/limit-prime")):
+                           strategy: str = Query(None, description="(已忽略) 历史 preset 名, 现仅 min_score + sell_n 过滤")):
     """P6: 单 tab 完整回测面板 — 一次返回回测+因子权重+调权历史
 
     cache key 包含 end_date (前一个 completed 交易日)

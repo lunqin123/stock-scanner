@@ -2,16 +2,12 @@
 """
 评分方案注册表
 
+A 策略是唯一可用方案 (2026-07-05: 用户反馈其他策略始终不如 A, 移除 B 等).
+
 用法：
     from plans import get_plan
-    plan = get_plan("A")  # 或 get_plan() 使用默认方案
+    plan = get_plan()  # A
     result = plan.score(inputs)
-
-添加新方案：
-    1. 新建 plans/plan_X.py
-    2. 实现 score(inputs: dict) -> dict 函数
-    3. 设置模块级常量 PLAN_NAME, PLAN_DESC
-    4. 在 _PLANS 字典里注册
 """
 
 import importlib
@@ -20,7 +16,6 @@ import os as _os
 
 _PLANS = {
     "A": "plans.plan_a",
-    "B": "plans.plan_b",
 }
 
 _DEFAULT = "A"

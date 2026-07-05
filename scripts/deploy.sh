@@ -23,7 +23,6 @@ FILES=(
     "community.py"
     "ak_utils.py"
     "plans/plan_a.py"
-    "plans/plan_b.py"
     "plans/datasource.py"
     "static/app.js"
     "static/cards.js"

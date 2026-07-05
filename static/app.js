@@ -270,12 +270,9 @@ function onBacktestParamChange() {
     loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
-function onBacktestStrategyChange() {
-    var sel = document.getElementById('btStrategy');
-    _btStrategy = sel ? sel.value : '';
-    _saveBacktestParams();
-    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
-}
+// 2026-07-05: 删除 strategy preset, 该函数已废 (UI 元素不再存在)
+// 保留空函数以防外部模板调用, 不实际生效
+function onBacktestStrategyChange() { /* no-op */ }
 
 function onBacktestMinScoreChange() {
     var inp = document.getElementById('btMinScore');
@@ -512,37 +509,14 @@ function updateV2Button() {
     btn.style.borderColor = on ? '#22c55e' : 'var(--border)';
     btn.title = on ? '持续性+回撤位置因子已启用 (关掉=老评分)' : '已回退老评分 (点开=新评分)';
 }
-function getPlan() {
-    var el = document.getElementById('plan-select');
-    return el ? el.value || '' : '';
-}
-function savePlan() {
-    var el = document.getElementById('plan-select');
-    if (el) localStorage.setItem('_plan', el.value || '');
-}
+// 2026-07-05: 仅剩 Plan A, 所有 getPlan/savePlan/loadPlans 改为永远返 'A'
+function getPlan() { return 'A'; }
+function savePlan() { /* no-op */ }
 function loadPlans() {
     var sel = document.getElementById('plan-select');
-    fetch('/api/plans')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (!data.ok || !data.plans || !data.plans.length) return;
-            if (!sel) return;
-            sel.innerHTML = '';
-            data.plans.forEach(function(p) {
-                var opt = document.createElement('option');
-                opt.value = p.name;
-                opt.textContent = (p.is_default ? '⭐ ' : '') + 'Plan ' + p.name + ' — ' + p.description;
-                sel.appendChild(opt);
-            });
-            var saved = localStorage.getItem('_plan');
-            if (saved && sel.querySelector('option[value="' + saved + '"]')) {
-                sel.value = saved;
-            }
-        })
-        .catch(function() {
-            // API 不可用时保留默认选项, 不破坏 UI
-            if (sel) sel.innerHTML = '<option value="A">Plan A (离线)</option>';
-        });
+    if (sel) {
+        sel.innerHTML = '<option value="A" selected>⭐ Plan A — 9因子加权 + 危险信号 + 龙头检测</option>';
+    }
 }
 // 回测面板分页按钮（事件委托）
 document.addEventListener('click', function(e) {
@@ -907,13 +881,9 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '</select>'
                     + '<input id="btCapital" type="number" value="' + _btCapital + '" onchange="onBacktestParamChange()" style="width:80px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5000" min="10000">'
                     + '<span style="color:var(--text-muted)">元</span>'
-                    + '<span style="color:var(--text-muted);margin-left:4px">(单只本金)</span>'
-                    + '<select id="btStrategy" onchange="onBacktestStrategyChange()" style="margin-left:8px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);font-size:11px">'
-                    + '<option value=""' + (!_btStrategy ? ' selected' : '') + '>全量(无过滤)</option>'
-                    + '<option value="trend-elite"' + (_btStrategy === 'trend-elite' ? ' selected' : '') + '>🎯 趋势精选</option>'
-                    + '<option value="limit-sweet"' + (_btStrategy === 'limit-sweet' ? ' selected' : '') + '>🍯 涨停甜点</option>'
-                    + '<option value="limit-prime"' + (_btStrategy === 'limit-prime' ? ' selected' : '') + '>🥇 涨停黄金</option>'
-                    + '</select>'
+                    + '<span style="color:var(--text-muted);margin-left:4px">(单只本金, 单笔 EV 跟回测对齐)</span>'
+                    // 2026-07-05: 删除 strategy preset 下拉 (limit-prime/trend-elite/limit-sweet)
+                    // 唯一过滤逻辑 = plan_a 评分 + min_score 阈值 + sell_n 卖出日.
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
                     + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="window._resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
