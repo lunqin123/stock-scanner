@@ -127,6 +127,15 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     df['板块热度'] = sector_raw.round(1)
     df['净流入'] = raw_money
 
+    # v3.1: 叠加 score_new (炸板池有封板时间/换手等, 缺封板资金则 seal_ratio 降级)
+    try:
+        from scoring.score_new import score_new as _sn
+        sn_df = _sn(df)
+        if sn_df is not None and not sn_df.empty and '新评分' in sn_df.columns:
+            df['总分'] = sn_df['新评分']
+    except Exception:
+        pass
+
     return df.sort_values('总分', ascending=False).head(TOP_N)
 
 
@@ -293,7 +302,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
 
     # 默认权重 (可被 weights 参数覆盖)
     # 回退原版权重 (IC优化实测 1W/6L 恶化)
-    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
+    # v3.1: IC调权 — amount(-0.36)↓ turnover(-0.32)↓ vr(+0.57)↑(谨慎) chg(+0.10) nh(+0.06)
+    defaults = {'chg': 40, 'turnover': 20, 'amount': 15, 'vol_ratio': 10, 'new_high': 5, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
