@@ -1,2 +1,6 @@
 """兼容shim - 实际模块已移至 backtest/"""
-from backtest.strategy_filters_v2 import *
+from backtest.strategy_filters_v2 import *  # noqa
+import backtest.strategy_filters_v2 as _orig
+for _k in dir(_orig):
+    if _k.startswith('_') and not _k.startswith('__'):
+        globals()[_k] = getattr(_orig, _k)

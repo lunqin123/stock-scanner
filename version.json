@@ -1,20 +1,19 @@
 {
-  "version": "2.0.3",
+  "version": "2.1.0",
   "date": "2026-07-05",
   "changes": [
-    "修复: 炸板 IC-driven 重新加权 (191 笔交易 IC 分析): seal 20→5 / money 20→5 / feature 15→35 / turnover 10→35 / sector 12→0",
-    "修复: 炸板默认 min_score 50→75, 甜蜜点 WR 54.3% / EV +0.34% (旧 EV -1.58%)",
-    "修复: 趋势默认 min_score 55→85, 甜蜜点 WR 66.7% / EV +2.41%",
-    "修复: 翘板默认 min_score 70→75, 甜蜜点 WR 80% / EV +3.44%",
-    "修复: 明日信号 buy_date = today 的下一交易日 (周末/盘后正确指向周一)",
-    "修复: 明日信号用 _fetch_real_tab_evs() 真实回测 EV 替代硬编码 TAB_EV_ESTIMATES",
-    "新增: 明日信号顶部 🏆 今日首推 卡片 + 5 tab 全候选明细保留",
-    "修复: 禁用自动调权 (权重已手动优化锁定)",
-    "修复: 炸板因子权重优化: seal↓/feature↑/turnover↑, WR从44→50%",
-    "修复: 翘板因子权重优化: cont↑/turnover↑/deal↓, 首度实现正PnL",
-    "修复: 反转因子权重优化: sector↑/turnover↓, PnL改善",
-    "新增: scripts/optimize_weights.py 因子IC权重优化脚本",
-    "修复: 前端JS min_score/top_n与服务端对齐 (zhaban 50/3, dtqiaoban 70/3)"
+    "重大: 全 tab IC 驱动权重重调 (60天回测因子相关性分析): 5 tab 全部基于 IC 数据重新加权",
+    "重大: 涨停权重重调: tech 10→22(IC+0.49提权), seal 20→12(sector 25→10, 负IC降权)",
+    "重大: 翘板权重重调: turnover 15→30(IC+0.56提权, 回测盈+38%!)",
+    "重大: 炸板权重重调: seal 5→15(IC+0.20正相关, 提权), money 5→0(负IC)",
+    "修复: 趋势权重保守调整: vol_ratio 5→12(IC+0.57), chg/turnover/amount 略降权",
+    "修复: 反转权重保守调整: consecutive 30→35(IC+0.42), pullback/sector 略降权",
+    "修复: 回测引擎 archive OHLCV 卖出价 (三个日期分别查 archive.db 而非共用一个信号日 OHLCV)",
+    "修复: 回测引擎 score_new 默认关闭 (回退到 plan_a, 回测评分与生产环境一致)",
+    "新增: 回测引擎 fill_slots 填仓模式 (可选凑满 top_n, CLI --fill-slots)",
+    "新增: 回测引擎 IC 因子分析 (_compute_factor_ics, 支持全部 5 tab 因子 IC 输出)",
+    "新增: 回测引擎 CLI 输出因子 IC (按 |r| 排序显示)",
+    "修复: 禁用 score_new 默认覆盖 (回测评分 = 生产评分)"
   ],
   "history": [
     {

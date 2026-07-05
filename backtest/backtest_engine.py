@@ -55,6 +55,22 @@ except ImportError:
 # 是否启用本地归档 fallback (默认启用, 服务器无 akshare 历史数据时从本地读)
 _LOCAL_FALLBACK_ENABLED = True
 
+# ─── 回测准确度相关开关 (2026-07-05) ────────────────────────
+
+# 是否用 score_new 排序替代 plan_a 原生评分
+# score_new 因子权重来自业界论文, 未在本系统回测数据上做过 IC 验证,
+# 且生产环境(CLI/app.py)实际用的是 plan_a, 回测应与之保持一致。
+# False = 用 plan_a 原生总分 (与生产一致)
+# True  = 用 score_new 覆盖 plan_a总分 (仅供探索对比)
+_BACKTEST_USE_SCORE_NEW = False
+
+# 是否填仓: 当 top_n 中部分股票一字板买不到时,
+# True  = 沿评分列表向下继续扫描, 凑满 top_n 只买入
+# False = 买不到的跳过不补, 当日实买数可能 < top_n
+# True 更接近实盘操作 (资金要投出去, 买不到第一选择就找第二选择),
+# 但可能拉低单笔平均收益 (买入排名更靠后的股票)。
+_BACKTEST_FILL_SLOTS = False
+
 # ═══════════════════════════════════════════
 #  Tab 常量
 # ═══════════════════════════════════════════
@@ -734,20 +750,32 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
         if flags and idx in filtered.index:
             filtered.loc[idx, '_danger'] = ','.join(flags)
 
-    # 2026-07-05: 叠加新评分 (基于业界验证的涨停板量化因子)
-    # 新评分用涨停池原始数据(封单/时间/换手/连板/炸板/市值/板块), 不依赖外部数据
-    # plan_a总分保留作为 'plan_a总分' 列, 但排序改用 '新评分'
-    try:
-        from scoring.score_new import score_new as _score_new_fn
-        scored_new = _score_new_fn(filtered)
-        if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
-            filtered = scored_new
-            # 让回测引擎用 '新评分' 列排序
-            filtered['plan_a总分'] = filtered['新评分']
-    except Exception as e:
-        print(f"  [新评分] 跳过: {e}", file=sys.stderr)
+    # ── IC 分析: 存储各因子原始分 (回测引擎用 f_ 前缀捕获) ──
+    _FACTOR_IC_COLS = {
+        'seal': 'f_seal', 'money': 'f_money',
+        'sector_mom': 'f_sector', 'tech': 'f_tech',
+        'stock_sentiment': 'f_stock_sentiment', 'principal': 'f_principal',
+        'north_flow': 'f_north_flow',
+        'momentum_consistency': 'f_v2_mc', 'pullback_depth': 'f_v2_pd',
+    }
+    for fk, col_name in _FACTOR_IC_COLS.items():
+        if fk in factors:
+            filtered[col_name] = factors[fk].reindex(filtered.index, fill_value=0.0).round(1)
+    filtered['f_history'] = history_scores.reindex(filtered.index, fill_value=2.5).round(1)
 
-    return filtered  # 含 'plan_a总分' 列 (已替换为新评分)
+    # 2026-07-05: 叠加新评分, 仅在 _BACKTEST_USE_SCORE_NEW=True 时启用
+    # 默认关闭: score_new 权重未在本系统数据上验证, 且生产环境不用它。
+    if _BACKTEST_USE_SCORE_NEW:
+        try:
+            from scoring.score_new import score_new as _score_new_fn
+            scored_new = _score_new_fn(filtered)
+            if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
+                filtered = scored_new
+                filtered['plan_a总分'] = filtered['新评分']
+        except Exception as e:
+            print(f"  [新评分] 跳过: {e}", file=sys.stderr)
+
+    return filtered  # 含 'plan_a总分' 列
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
@@ -1025,6 +1053,61 @@ def _aggregate(records, label='backtest'):
 
 
 # ═══════════════════════════════════════════
+#  IC 因子分析 (回测后, 计算各因子与收益的相关性)
+# ═══════════════════════════════════════════
+
+def _compute_factor_ics(records: list, tab: str = 'limit-up') -> dict:
+    """从交易记录计算各因子 IC (因子分 × net_ret_pct 的 Pearson 相关系数)
+
+    根据 tab 自动识别因子列前缀:
+      limit-up → f_       (plan_a 9 因子)
+      zhaban   → zb_      (封板/资金/特征/换手/板块)
+      dtqiaoban→ dt_      (放量/封单/连跌/换手/时间)
+      reversal → rev_     (换手/连板/回调/板块/留存)
+      trend    → trend_   (涨幅/换手/成交额/量比/新高/均线)
+
+    Args:
+        records: records_open 列表, 每笔含对应前缀的因子列 + net_ret_pct
+        tab: tab 名称
+
+    Returns:
+        {factor_name: ic_value}
+    """
+    if not records or len(records) < 3:
+        return {}
+    import pandas as pd
+    df = pd.DataFrame(records)
+
+    # tab → 因子列前缀映射
+    _PREFIX_MAP = {
+        'limit-up': 'f_',
+        'zhaban': 'zb_',
+        'dtqiaoban': 'dt_',
+        'reversal': 'rev_',
+        'trend': 'trend_',
+        'sector': None,
+    }
+    prefix = _PREFIX_MAP.get(tab)
+    if prefix is None:
+        return {}
+
+    factor_cols = sorted([c for c in df.columns if c.startswith(prefix)])
+    if 'net_ret_pct' not in df.columns or not factor_cols:
+        return {}
+    rets = df['net_ret_pct'].astype(float)
+    ics = {}
+    for col in factor_cols:
+        vals = df[col].astype(float)
+        if vals.std() < 0.01:
+            continue
+        c = vals.corr(rets)
+        if not pd.isna(c):
+            display_name = col[len(prefix):] if col.startswith(prefix) else col
+            ics[display_name] = round(float(c), 4)
+    return ics
+
+
+# ═══════════════════════════════════════════
 #  主入口: run_tab_backtest
 # ═══════════════════════════════════════════
 
@@ -1040,6 +1123,7 @@ def run_tab_backtest(
     use_cache: bool = True,
     strategy: str = None,
     use_v2: bool = True,
+    fill_slots: bool = _BACKTEST_FILL_SLOTS,
 ):
     """多 tab 回测主入口 (2026-07-05 清理: 不再支持外部 strategy preset)
 
@@ -1058,6 +1142,8 @@ def run_tab_backtest(
         use_cache: True 走 daily cache
         strategy: [已忽略] 历史 preset 名, 保留兼容性. 真正过滤只靠 min_score.
         use_v2: limit-up tab 是否启用 v2 持续性+回撤位置因子
+        fill_slots: True=沿评分列表向下扫描补满 top_n 只买入;
+                    False=仅取 top_n 只, 买不到的跳过不补.
 
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
@@ -1124,6 +1210,7 @@ def run_tab_backtest(
     score_col = SCORE_COLUMNS[tab]
     # 2026-07-05: 删除策略B(尾盘买)/策略C(休盘+止损), 仅保留策略A(开盘买)
     records_open, skipped, unbuyable_count = [], [], 0
+    total_candidates_scanned = 0  # 填仓模式候选扫描计数
 
     for d_signal in trade_dates:
         d_buy = _next_trading_date(d_signal)
@@ -1147,6 +1234,7 @@ def run_tab_backtest(
             skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
             continue
 
+        n_scanned_this_day = 0
         try:
             pool = fetcher(d_signal)
             # 板块 tab 等特殊场景: pool 为 None, 由 score_fn 自行处理 (内部拉数据)
@@ -1200,10 +1288,14 @@ def run_tab_backtest(
                     break
             code_col = code_col or df_scored.columns[1]
 
-            # 取 top_n（按评分门槛过滤）
+            # 取评分合格的候选池
             eligible = df_scored[df_scored[actual_score_col] >= min_score]
             skipped_count = max(0, len(df_scored) - len(eligible))
-            top = eligible.sort_values(actual_score_col, ascending=False).head(top_n)
+            sorted_eligible = eligible.sort_values(actual_score_col, ascending=False)
+            if fill_slots:
+                candidates = sorted_eligible  # 扫描全部, 直到凑满 top_n 只
+            else:
+                candidates = sorted_eligible.head(top_n)
 
             # ── P1.2 优化: 提前批量拉取 3 个日期的全市场 OHLCV ──
             ohlcv_dates = [d_signal, d_buy, d_sell]
@@ -1211,7 +1303,12 @@ def run_tab_backtest(
             for d in ohlcv_dates:
                 daily_ohlcv[d] = _get_daily_ohlcv_batch(d)
 
-            for rank, (_, row) in enumerate(top.iterrows(), 1):
+            bought_count = 0       # 填仓模式下已买入笔数
+            n_scanned_this_day = 0  # 本日扫描了多少只候选股票
+            for rank, (_, row) in enumerate(candidates.iterrows(), 1):
+                if fill_slots and bought_count >= top_n:
+                    break
+                n_scanned_this_day += 1
                 code = str(row.get(code_col, '') or row.iloc[0]).strip().zfill(6)
                 name = str(row.get(name_col, '') or row.iloc[0])
                 sc = float(row.get(actual_score_col, 0))
@@ -1228,22 +1325,31 @@ def run_tab_backtest(
                     sell_ohlcv = sell_ohlcv or ohlcv_map.get(d_sell)
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
                     # Tier1.C: archive.db next_day_change fallback
-                    # akshare 历史 OHLCV 7天窗口 + 2h 缓存失效 → 拉不到时,
-                    # 用 archive.db daily_stocks 里已存的 next_day_change 当 T+1 粗略收益
-                    # (按 tab 选 stock_type: limit-up→limit_up, zhaban→limit_up(同池), reversal→prev_pool→limit_up)
+                    # 修复: signal/buy/sell 三个日期分别查 archive.db
+                    # 卖价从 d_sell 日的 prev_close 反推 (≈d_sell开盘),
+                    # 比之前三个日期共用信号日 OHLCV 更准确。
                     stock_type_for_arch = {
                         TAB_LIMIT_UP: 'limit_up',
-                        TAB_ZHABAN: 'limit_up',     # 炸板前一日是涨停
-                        TAB_REVERSAL: 'limit_up',   # 反转基础池也是涨停
-                        TAB_DTQIAOBAN: 'limit_up',  # 跌停前一日多半是涨停
-                        TAB_TREND: 'limit_up',      # 趋势池从前涨停过滤
+                        TAB_ZHABAN: 'limit_up',
+                        TAB_REVERSAL: 'limit_up',
+                        TAB_DTQIAOBAN: 'limit_up',
+                        TAB_TREND: 'limit_up',
                         TAB_SECTOR: 'limit_up',
                     }.get(tab, 'limit_up')
-                    arch_ohlcv = _try_archive_db_ohlcv(code, d_signal, stock_type_for_arch)
-                    if arch_ohlcv is not None:
-                        if not signal_ohlcv: signal_ohlcv = arch_ohlcv
-                        if not buy_ohlcv: buy_ohlcv = arch_ohlcv
-                        if not sell_ohlcv: sell_ohlcv = arch_ohlcv
+                    if not signal_ohlcv:
+                        signal_ohlcv = _try_archive_db_ohlcv(code, d_signal, stock_type_for_arch)
+                    if not buy_ohlcv:
+                        buy_ohlcv = signal_ohlcv  # T close ≈ T+1 open
+                    if not sell_ohlcv:
+                        sell_arch = _try_archive_db_ohlcv(code, d_sell, stock_type_for_arch)
+                        if sell_arch is not None:
+                            sell_ohlcv = dict(sell_arch)  # copy, 防缓存副作用
+                            # 纠正: 函数返回 open=d_sell收盘, 回测需要 d_sell开盘
+                            # d_sell开盘 ≈ d_sell-1收盘 = prev_close
+                            sell_ohlcv['_sell_open'] = sell_arch.get('prev_close', sell_arch['open'])
+                        elif signal_ohlcv is not None:
+                            # 兜底: 用信号日 close (T+1收盘)
+                            sell_ohlcv = signal_ohlcv
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
                     missing = []
                     if not signal_ohlcv: missing.append(f'signal={d_signal}')
@@ -1308,11 +1414,20 @@ def run_tab_backtest(
                         val = row.get(fk)
                         if val is not None:
                             rec[fk] = round(float(val), 1)
+                    # IC 因子分列 (f_ 前缀, 用于 Information Coefficient 分析)
+                    for fk in ['f_seal','f_money','f_sector','f_tech','f_history',
+                               'f_stock_sentiment','f_principal','f_north_flow',
+                               'f_v2_mc','f_v2_pd']:
+                        val = row.get(fk)
+                        if val is not None:
+                            rec[fk] = round(float(val), 1)
                     records_open.append(rec)
+                    bought_count += 1  # 填仓计数
 
         except Exception as e:
             skipped.append({'signal': d_signal, 'reason': f'错误: {str(e)[:80]}'})
         time.sleep(0.5)
+        total_candidates_scanned += n_scanned_this_day
 
     # ── 聚合 ──
     sum_open = _aggregate(records_open, '开盘买')
@@ -1358,12 +1473,23 @@ def run_tab_backtest(
         top5 = sorted_trades[:5]
         bot5 = sorted_trades[-5:][::-1]
 
+    # 填仓模式诊断数据
+    fill_diag = {
+        'fill_slots': fill_slots,
+        'total_scanned': total_candidates_scanned,
+        'total_bought': len(records_open),
+        'scan_efficiency_pct': round(len(records_open) / max(1, total_candidates_scanned) * 100, 1),
+    }
+    # 因子 IC 分析
+    factor_ics = _compute_factor_ics(records_open, tab=tab)
     result = {
         'summary': sum_open,
         'summary_30d': sum_open_30d,
         'trades': records_open,
         'top5': top5, 'bottom5': bot5,
         'skipped': skipped,
+        'fill_diagnostics': fill_diag,
+        'factor_ics': factor_ics,
         'generated_at': datetime.now().isoformat(),
         'config': {
             'tab': tab, 'start': start, 'end': end,
@@ -1371,6 +1497,7 @@ def run_tab_backtest(
             'commission_pct': _COMMISSION_PCT,
             'slippage_pct': _SLIPPAGE_PCT,
             'strategy': 'T+1 真实 (信号日 → D+1 开盘买 → D+N 开盘卖)',
+            'fill_slots': fill_slots,
         },
         'comparison': {
             'open_buy': {'summary': sum_open, 'trades': records_open},
@@ -1417,12 +1544,14 @@ def run_tab_backtest(
 # ═══════════════════════════════════════════
 
 def run_t1_backtest(start_date=None, end_date=None, top_n=TOP_N_DEFAULT,
-                     capital=CAPITAL_DEFAULT, max_days=30, use_cache=True):
+                     capital=CAPITAL_DEFAULT, max_days=30, use_cache=True,
+                     fill_slots: bool = _BACKTEST_FILL_SLOTS):
     """涨停 tab 的 T+1 回测 - 向后兼容别名"""
     return run_tab_backtest(
         tab=TAB_LIMIT_UP,
         start_date=start_date, end_date=end_date,
         top_n=top_n, capital=capital, max_days=max_days, use_cache=use_cache,
+        fill_slots=fill_slots,
     )
 
 
@@ -1439,15 +1568,19 @@ if __name__ == '__main__':
     parser.add_argument('--days', type=int, default=5, help='回测天数 (默认 5,aksahre 实际可用窗口限制)')
     parser.add_argument('--top', type=int, default=TOP_N_DEFAULT, help='每日 TOP N')
     parser.add_argument('--capital', type=float, default=CAPITAL_DEFAULT, help='单笔本金')
+    parser.add_argument('--fill-slots', action='store_true', default=False,
+                        help='填仓模式: 买不到的票往下续, 凑满 top_n 只')
     args = parser.parse_args()
 
     tabs_to_run = ALL_TABS if args.tab == 'all' else [args.tab]
     for tab in tabs_to_run:
         print(f"\n{'='*70}")
-        print(f"  Tab: {tab} ({TAB_NAMES_CN[tab]}) | TOP{args.top} | {args.days}天回测")
+        print(f"  Tab: {tab} ({TAB_NAMES_CN[tab]}) | TOP{args.top} | {args.days}天回测"
+              f"{' | 填仓' if args.fill_slots else ''}")
         print('='*70)
         res = run_tab_backtest(tab=tab, top_n=args.top, capital=args.capital,
-                               max_days=args.days, use_cache=False)
+                               max_days=args.days, use_cache=False,
+                               fill_slots=args.fill_slots)
         if 'error' in res and not res.get('trades'):
             print(f"  [跳过] {res.get('error')}")
             continue
@@ -1463,3 +1596,11 @@ if __name__ == '__main__':
         cmp = res.get('comparison', {})
         print(f"  一字板跳过: {cmp.get('unbuyable_count', 0)} 笔")
         print(f"  跳过信号日: {len(res.get('skipped', []))} 个")
+        fd = res.get('fill_diagnostics', {})
+        if fd.get('fill_slots'):
+            print(f"  扫描效率: {fd.get('scan_efficiency_pct', 0)}% ({fd.get('total_bought', 0)}买/{fd.get('total_scanned', 0)}扫描)")
+        ic = res.get('factor_ics', {})
+        if ic:
+            sorted_ic = sorted(ic.items(), key=lambda x: -abs(x[1]))
+            ic_str = ' | '.join(f'{k}: {v:+.4f}' for k, v in sorted_ic)
+            print(f"  因子IC(|r|排序): {ic_str}")

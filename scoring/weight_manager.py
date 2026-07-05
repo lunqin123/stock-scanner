@@ -504,11 +504,12 @@ _REV_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "reversal_weights.json"
 )
 
+# IC优化(保守): consecutive(+0.42) pullback(-0.28) turnover(-0.08) sector(-0.08)
 REV_DEFAULT_WEIGHTS = {
-    'turnover': 40,     # 换手率
-    'consecutive': 35,  # 连板位置
-    'pullback': 15,     # 回调深度
-    'sector': 10,       # 板块支撑
+    'turnover': 30,     # (保守: 40+20)/2
+    'consecutive': 38,  # (保守: 35+40)/2
+    'pullback': 15,     # IC: -0.28不变
+    'sector': 10,       # IC: -0.08不变
 }
 
 
@@ -585,26 +586,36 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
 #  炸板 + 翘板 因子权重 (P5)
 # ═══════════════════════════════════════════
 
-ZB_DEFAULT_WEIGHTS = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+# 炸板权重——基于60天IC优化 (2026-07-05):
+#   IC: turnover(+0.29) feature(+0.25) seal(+0.20) money(-0.14) sector(-0.09)
+#   封板质量实际有正IC(r=+0.20), 提权; 资金/板块为噪声
+ZB_DEFAULT_WEIGHTS = {'seal': 15, 'money': 0, 'feature': 35, 'turnover': 35, 'sector': 0}
 ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
 
-DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+# 翘板权重——基于60天IC优化 (2026-07-05):
+#   IC: turnover(+0.56) cont(+0.07) deal(-0.11) seal(-0.43)
+#   换手率IC=+0.56是最强因子; 封单资金IC=-0.43强负相关
+DT_DEFAULT_WEIGHTS = {'deal': 15, 'seal': 10, 'cont': 20, 'turnover': 30, 'time': 5}
 DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
 
-# 涨停专用权重（板块热度为核心，封板强度降低）
+# 涨停专用权重——基于60天IC优化 (2026-07-05):
+#   IC: tech(+0.49) seal(-0.29) sector(-0.27) stock_sentiment(-0.04)
+#   量价结构(tech)是唯一强正相关因子, 提权至22;
+#   封板/seal=12,sector=10: 负IC降权; money/history 回测无真实数据, 降权
 DEFAULT_WEIGHTS_LIMIT_UP = {
-    'seal': 20.0,       # 封板强度（降权，对T+3预测力弱）
-    'sector': 25.0,     # 板块热度（涨停持续性的核心预测因子）
-    'money': 15.0,      # 资金驱动（重新启用）
-    'tech': 10.0,       # 量价结构
-    'history': 10.0,    # 历史股性
-    'stock_sentiment': 15.0,  # 个股情绪（板块龙头溢价）
-    'principal_score': 5.0,   # 本金适配
-    'north_flow': 5.0,   # v2.0: 北向资金市场级因子
+    'seal': 12.0,       # IC: -0.29 (封板越强越买不到, 降权)
+    'sector': 10.0,     # IC: -0.27 (板块越热回调越快)
+    'money': 8.0,       # 回测无真实资金流数据
+    'tech': 22.0,       # IC: +0.49 (最强正相关, 大幅提权!!)
+    'history': 5.0,     # 回测无历史股性真实数据
+    'stock_sentiment': 8.0,  # IC: -0.04 (噪声级)
+    'principal_score': 5.0,
+    'north_flow': 3.0,  # 回测无北向数据
 }
 
-# 反转专用权重（连板为王、换手率符号修正）
-REV_DEFAULT_WEIGHTS = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
+# 反转专用权重——基于60天IC优化 (2026-07-05, 保守):
+#   IC: consecutive(+0.42) pullback(-0.28) turnover(-0.08) sector(-0.08)
+REV_DEFAULT_WEIGHTS = {'turnover': 22, 'consecutive': 35, 'pullback': 20, 'sector': 12, 'retention': 5}
 REV_FACTOR_NAMES = {'turnover': '换手', 'consecutive': '连板', 'pullback': '回调', 'sector': '板块', 'retention': '留存'}
 
 _WEIGHTS_FILES = {
@@ -692,13 +703,17 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
+# 趋势动量权重——基于60天IC优化 (2026-07-05, 保守调整):
+#   IC: vr(+0.57) chg(+0.10) nh(+0.06) amount(-0.36) turnover(-0.32)
+#   量比(vr)IC=+0.57最强, 保守提权至12 (原5→20的一半);
+#   成交额/换手负IC, 保守降权
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 40,       # 涨幅分
-    'turnover': 30,  # 换手分
-    'amount': 30,    # 成交额分
-    'vol_ratio': 5,  # 量比加分
-    'new_high': 3,   # 新高加分
-    'ma_rev': 0,     # MA回归分 (IC无效, 暂关闭)
+    'chg': 35,       # (保守: 40+30)/2
+    'turnover': 22,  # (保守: 30+15)/2, IC负
+    'amount': 22,    # (保守: 30+15)/2, IC负
+    'vol_ratio': 12, # (保守: 5+20)/2, IC强正
+    'new_high': 4,   # (保守: 3+5)/2
+    'ma_rev': 0,     # (已关闭)
 }
 
 TREND_FACTOR_NAMES = {
