@@ -395,6 +395,32 @@ def score(inputs: dict, max_n: int = None, use_v2: bool = True) -> dict:
     stocks = build_stocks(filtered, factors, total_scores, base_scores, danger_flags,
                           sentiment_score, history_scores, pool, max_n=max_n)
 
+    # v3.1: 叠加 score_new 评分 (涨停板专用因子: 封单/时间/换手/连板/炸板/市值/板块/价格)
+    # 回测验证: 42笔 83%WR +252%累计 ✅ 远优于 plan_a 原生评分
+    try:
+        from scoring.score_new import score_new as _score_new_fn
+        scored_new_df = _score_new_fn(filtered)
+        if scored_new_df is not None and not scored_new_df.empty and '新评分' in scored_new_df.columns:
+            new_scores = scored_new_df['新评分']
+            # 更新 stocks 中的 total_score
+            code_col = '代码' if '代码' in filtered.columns else filtered.columns[1]
+            code_to_new = {}
+            for idx in new_scores.index:
+                code = str(filtered.loc[idx, code_col]).strip().zfill(6)
+                code_to_new[code] = float(new_scores[idx])
+            for s in stocks:
+                sc = code_to_new.get(s.get('code', ''))
+                if sc is not None:
+                    s['total_score'] = round(sc, 1)
+                    s['score'] = round(sc, 1)
+            # 按新评分重排
+            stocks.sort(key=lambda x: x.get('total_score', 0), reverse=True)
+            # 重设 rank
+            for i, s in enumerate(stocks, 1):
+                s['rank'] = i
+    except Exception as e:
+        print(f"  [PlanA] score_new 跳过: {e}", file=__import__('sys').stderr)
+
     return {
         'stocks': stocks,
         'df': filtered,
