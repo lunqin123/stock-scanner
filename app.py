@@ -568,11 +568,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 #   "甜蜜点" 数字在样本扩展后可能漂移. 如果回测样本扩大了, 重跑
 #   __tmp_bt_grid.py 重新确认甜蜜点.
 TAB_DEFAULT_BT_PARAMS = {
-    'limit-up':   {'min_score': 60, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # 2026-07-05 数据驱动: sell_n=2(持仓1天)胜率91%, min_score>=60胜率97%
-    'trend':      {'min_score': 85, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 改 55→85 (网格甜蜜点)
-    'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 30000, 'strategy': None},
-    'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 30000, 'strategy': None},  # 改 50→75 (IC-重加权后甜蜜点, WR 54.3% EV +0.34%)
-    'dtqiaoban':  {'min_score': 75, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 改 70→75 (网格甜蜜点)
+    'limit-up':   {'min_score': 70, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 网格验证: 4笔50%+1438 (sn=2全亏)
+    'trend':      {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 23笔39%+1641
+    'reversal':   {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 24笔46%+4465 (最佳)
+    'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 30000, 'strategy': None},  # sn=2巨亏-20101, 保持sn=5
+    'dtqiaoban':  {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 23笔39%+766
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
@@ -739,6 +739,12 @@ def compute_recommendation_score(cand: dict) -> dict:
 
     # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
     combined = 0.4 * historical_component + 0.6 * today_component
+
+    # 2026-07-05: 历史 EV 为负的 tab (回测亏损) 施加惩罚因子,
+    # 让盈利 tab (reversal/trend) 排到前面, 改变明日信号推荐.
+    # ev_pnl < 0 说明该 tab 历史回测亏损, 不应主推
+    if ev_pnl < 0:
+        combined *= 0.4  # 亏损 tab 打4折, 让盈利 tab 优先
 
     cand['sample_size'] = sample
     cand['confidence_factor'] = confidence
@@ -1695,8 +1701,8 @@ def api_backtest_tab_top(tab: str,
 def api_backtest_tab_full(tab: str,
                            days: int = Query(30, description="回测天数"),
                            top_n: int = Query(3, description="每日 TOP N"),
-                           min_score: float = Query(60.0, description="最低评分门槛(低于此分不买)"),
-                           sell_n: int = Query(2, description="卖出日偏移(2=T+2,3=T+3,4=T+4,5=T+5)"),
+                           min_score: float = Query(50.0, description="最低评分门槛(低于此分不买)"),
+                           sell_n: int = Query(3, description="卖出日偏移(2=T+2,3=T+3,4=T+4,5=T+5)"),
                            capital: float = Query(30000, description="单笔本金"),
                            force: bool = Query(False, description="强制重算(跳过缓存)"),
                            strategy: str = Query(None, description="(已忽略) 历史 preset 名, 现仅 min_score + sell_n 过滤")):
