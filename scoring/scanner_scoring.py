@@ -291,9 +291,10 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     if df is None or df.empty:
         return df
 
-    # 默认权重 (可被 weights 参数覆盖)
-    # 回退原版权重 (IC优化实测 1W/6L 恶化)
-    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
+    # v3.1 趋势权重: 基于 archive.db 406条原始 IC + win/loss diff
+    # IC: change_pct(+0.08) price(+0.08) turnover(~0)
+    # win/loss: amount(-4.11) vr(+0.77) chg(+2.06) turnover(+1.10)
+    defaults = {'chg': 45, 'turnover': 15, 'amount': 8, 'vol_ratio': 15, 'new_high': 5, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
