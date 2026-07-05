@@ -276,14 +276,20 @@ async function loadTomorrowSignals() {
     try {
         var _sigTopN = _btTopN || 3;
         var _sigCap = _btCapital || 30000;
+        // 把 5 tab 全部参数传给后端, 让明日信号里的 EV 跟回测面板对齐
         var url = '/api/signal/tomorrow'
-            + '?zhaban_top_n=' + _btTopN
+            + '?top_n=' + _btTopN
+            + '&capital=' + _sigCap
+            + '&limit_up_min_score=' + _getMinScore('limit-up')
+            + '&limit_up_sell_n=' + _getSellN('limit-up')
+            + '&trend_min_score=' + _getMinScore('trend')
+            + '&trend_sell_n=' + _getSellN('trend')
+            + '&reversal_min_score=' + _getMinScore('reversal')
+            + '&reversal_sell_n=' + _getSellN('reversal')
             + '&zhaban_min_score=' + _getMinScore('zhaban')
             + '&zhaban_sell_n=' + _getSellN('zhaban')
-            + '&limit_up_top_n=' + _btTopN
-            + '&limit_up_min_score=' + _getMinScore('limit-up')
-            + '&trend_top_n=' + _btTopN
-            + '&trend_min_score=' + _getMinScore('trend');
+            + '&dtqiaoban_min_score=' + _getMinScore('dtqiaoban')
+            + '&dtqiaoban_sell_n=' + _getSellN('dtqiaoban');
         var resp = await fetch(url);
         var data = await resp.json();
         if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
