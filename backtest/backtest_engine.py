@@ -100,6 +100,24 @@ TAB_NAMES_CN = {
     TAB_SECTOR: '板块联动',
 }
 
+# v3.0: 各 tab 最优买入策略 (tab → buy_time)
+#   close ↔ T日尾盘买 T+1开盘卖 (隔夜超短线)
+#   open  ↔ T+1开盘买 T+N开盘卖 (原策略)
+# 基于30天回测 PnL 对比选定:
+#   limit-up: close  (+2,343) > open (-1,795)
+#   dtqiaoban: open  (-2,237) > close (-24,923) 翘板不能隔夜!
+#   trend:    open  (-5,504) > close (-9,363)
+#   zhaban:   close (-2,727) ≈ open (-3,051)  close略优
+#   reversal: open  (-9,212) > close (-12,525)
+_TAB_BUY_TIME = {
+    TAB_LIMIT_UP: 'close',
+    TAB_DTQIAOBAN: 'open',
+    TAB_TREND: 'open',
+    TAB_ZHABAN: 'close',
+    TAB_REVERSAL: 'open',
+    TAB_SECTOR: 'open',
+}
+
 # 各 tab 的实现状态 (P1.1 之后逐步点亮)
 _PENDING_TABS = set()  # 全部实现
 # 已实现: limit-up / zhaban / dtqiaoban / reversal / trend / sector (P1.1 + P2.1 + P2.2 + P2.3)
@@ -1597,6 +1615,14 @@ def run_tab_backtest(
 # ═══════════════════════════════════════════
 #  向后兼容: run_t1_backtest = run_tab_backtest('limit-up', ...)
 # ═══════════════════════════════════════════
+
+def run_tab_backtest_auto(tab: str, **kwargs):
+    """按 tab 自动选择最优买入策略后跑回测 (v3.0)
+    覆盖: 显式传 buy_time 则使用传入值
+    """
+    bt = kwargs.pop('buy_time', _TAB_BUY_TIME.get(tab, 'open'))
+    return run_tab_backtest(tab=tab, buy_time=bt, **kwargs)
+
 
 def run_t1_backtest(start_date=None, end_date=None, top_n=TOP_N_DEFAULT,
                      capital=CAPITAL_DEFAULT, max_days=30, use_cache=True,

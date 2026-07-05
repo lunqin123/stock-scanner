@@ -1638,7 +1638,7 @@ def api_backtest(tab: str = Query('limit-up', description="回测 tab"),
 
 
 # ─── P6: 多 Tab T+1 真实回测 API (结构化 JSON) ───
-from backtest_engine import run_tab_backtest, TAB_LIMIT_UP, ALL_TABS
+from backtest_engine import run_tab_backtest_auto as run_tab_backtest, TAB_LIMIT_UP, ALL_TABS, _TAB_BUY_TIME
 
 
 from fastapi import Path as FastAPIPath
