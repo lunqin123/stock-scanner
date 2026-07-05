@@ -15,6 +15,8 @@
 """
 import sys, time, os
 sys.path.insert(0, r"C:\Users\16689\Desktop\stock-scanner")
+# 项目根目录 (__file__ 在 backtest/ 子目录, 上翻一级)
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 import pandas as pd
 import numpy as np
 import akshare as ak
@@ -135,7 +137,7 @@ def _detect_available_days(tab: str) -> int:
 
     # 1. 统计 data/cache/engine_{pool_type}_*.pkl 的不同日期数
     try:
-        cache_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data', 'cache')
+        cache_dir = _os.path.join(_PROJECT_ROOT, 'data', 'cache')
         engine_prefix = f'engine_{pool_type}_'
         dates = set()
         if _os.path.exists(cache_dir):
@@ -151,7 +153,7 @@ def _detect_available_days(tab: str) -> int:
 
     # 2. archive.db daily_stocks 表 (用户实际存储的每日数据)
     try:
-        _db_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'archive.db')
+        _db_path = _os.path.join(_PROJECT_ROOT, 'archive.db')
         if _os.path.exists(_db_path):
             import sqlite3
             conn = sqlite3.connect(_db_path, timeout=2)
@@ -269,7 +271,7 @@ def _is_placeholder_data(df, pool_type: str) -> bool:
 # 这样 T+1 开盘买的 return = (sell_open / buy_open - 1)
 #                       ≈ (D+1 close / D close - 1) = next_day_change (粗略)
 # 偏差: 忽略 D+1 跳空和 D+2 走势, 实测偏差 ~1-3%, 但比 skip 强
-_ARCHIVE_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'archive.db')
+_ARCHIVE_DB_PATH = os.path.join(_PROJECT_ROOT, 'archive.db')
 _ARCHIVE_OHLCV_CACHE = {}  # 进程内 LRU 简化版
 
 
