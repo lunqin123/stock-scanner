@@ -17,63 +17,56 @@ akshare API → scanner_data.py(拉数据) → scanner_filters.py(过滤)
 
 ## 三、文件职责（按层级）
 
-### 基础层
-| 文件 | 职责 | 大小 |
-|------|------|------|
-| `config.py` | 全局常量（手续费/阈值/时间） | 4KB |
-| `cache.py` | 2h短期+每日持久缓存 | 13KB |
-| `ak_utils.py` | akshare重试封装 | 2KB |
+> 2026-07-05: 文件已按功能分到子目录, 根目录保留兼容shim, 所有现有import不用改。
 
-### 数据层
-| 文件 | 职责 |
-|------|------|
-| `scanner_data.py` | 拉涨停池/资金流（带降级） |
-| `scanner_filters.py` | 过滤（板块/除权/价格/一字板） |
-| `archiver.py` | 每日数据归档到SQLite+pickle |
-| `scanner_utils.py` | 纯工具函数 |
-
-### 评分层
-| 文件 | 职责 |
-|------|------|
-| `scanner_factors.py` | 15+个评分因子纯函数（封板/资金/板块/技术等） |
-| `scanner_scoring.py` | 5个tab专用评分函数（调用factors） |
-| `plans/plan_a.py` | 涨停tab的9因子加权+危险信号 |
-| `plans/factors_v2.py` | v2因子（持续性+回撤位置） |
-| `weight_manager.py` | 权重管理+IC驱动自动调权 |
-| `weight_scheduler.py` | 盘后自动调权调度 |
-
-### 回测层
-| 文件 | 职责 |
-|------|------|
-| `backtest_engine.py` | **主回测引擎**：多tab统一入口，策略A(开盘买) |
-| `t1_real_backtest.py` | 旧版T+1回测（limit-up专用，被backtest_engine兼容包装） |
-| `scanner_backtest.py` | 旧版回测+评分验证（CLI入口） |
-| `compare_strategies.py` | 多方案对比框架 |
-| `strategy_filters_v2.py` | v2硬过滤器 |
-
-### 信号层
-| 文件 | 职责 |
-|------|------|
-| `signal_tomorrow.py` | 明日买入信号决策 |
-| `recommendation_tracker.py` | 推荐追踪+次日胜率统计 |
-
-### 辅助层
-| 文件 | 职责 |
-|------|------|
-| `premarket.py` | 盘前多空信号（美股/A50/汇率） |
-| `market_regime.py` | 市场状态分类（5种） |
-| `north_flow_tracker.py` | 北向资金追踪 |
-| `community.py` | 舆情+新闻聚合 |
-| `indicators.py` | 增强指标（封成比/龙虎榜） |
-
-### 入口层
-| 文件 | 职责 |
-|------|------|
-| `app.py` | **FastAPI后端**（158KB，所有API路由） |
-| `scanner.py` | CLI入口+公共API re-export |
-| `scanner_scans.py` | 5种扫描模式主流程 |
-| `scanner_format.py` | 文本输出格式化 |
-| `data_manager.py` | 数据持久化+总结 |
+### 目录结构
+```
+stock-scanner/
+├── app.py              # FastAPI 后端 (入口, 不移动)
+├── scanner.py          # CLI 入口 + 公共 re-export (入口, 不移动)
+├── core/               # 核心基础设施
+│   ├── config.py       # 全局常量
+│   ├── cache.py        # 缓存 (2h+持久)
+│   ├── ak_utils.py     # akshare 重试封装
+│   ├── scanner_utils.py # 纯工具函数
+│   └── scanner_filters.py # 过滤器
+├── data_layer/         # 数据获取与持久化
+│   ├── scanner_data.py # 拉涨停池/资金流
+│   ├── archiver.py     # 每日归档
+│   ├── data_manager.py # 持久化+总结
+│   ├── scanner_scans.py # 5种扫描主流程
+│   └── scanner_format.py # 文本格式化
+├── scoring/            # 评分因子与权重
+│   ├── scanner_factors.py # 15+评分因子
+│   ├── scanner_scoring.py # 5个tab专用评分
+│   ├── weight_manager.py  # 权重管理+IC调权
+│   ├── weight_scheduler.py # 自动调权调度
+│   └── indicators.py   # 增强指标
+├── backtest/           # 回测引擎
+│   ├── backtest_engine.py # 主回测引擎 (策略A)
+│   ├── t1_real_backtest.py # 旧版T+1回测
+│   ├── scanner_backtest.py # 旧版回测+CLI
+│   ├── compare_strategies.py # 方案对比
+│   └── strategy_filters_v2.py # v2硬过滤
+├── signals/            # 信号生成
+│   ├── signal_tomorrow.py # 明日买入信号
+│   ├── recommendation_tracker.py # 推荐追踪
+│   ├── premarket.py    # 盘前多空信号
+│   ├── market_regime.py # 市场状态分类
+│   ├── north_flow_tracker.py # 北向资金
+│   └── community.py    # 舆情+新闻
+├── plans/              # 评分方案
+│   ├── plan_a.py       # 9因子加权+危险信号
+│   ├── factors_v2.py   # v2因子
+│   └── datasource.py   # 数据源接口
+├── utils/              # 工具与测试
+│   └── test_invariants.py
+├── scripts/            # 运维脚本
+├── static/             # 前端 JS/CSS
+├── templates/          # HTML 模板
+├── data/               # 数据存储 (cache/db/json)
+└── 根目录 *.py          # 兼容shim (1行re-export, 保持旧import可用)
+```
 
 ## 四、回测系统现状
 
