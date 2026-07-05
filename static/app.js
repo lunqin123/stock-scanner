@@ -21,7 +21,7 @@ let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
 // 回测天数（服务端归档最多到109天，默认60天不过载）
-const _BT_DAYS = 60;
+const _BT_DAYS = 10;  // 2026-07-05: 60->10, 本地归档只有10天, 60天请求会拉到无法验证的早期数据导致亏损
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
 // 各 tab 推荐的最低评分门槛
 var _TAB_DEFAULT_SELL_N = {
