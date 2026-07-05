@@ -1243,16 +1243,11 @@ def run_tab_backtest(
                 gap_pct = round((buy_ohlcv['open'] / signal_close - 1) * 100, 1)
                 # 买入过滤: 一字板排除; 跳空高开出货陷阱
                 # Tier1.D: stock_daily fallback 用归一化价格 (基准100), 跳空不可信 → 跳过该过滤
-                # Plan B: gap_trap 过滤与 Plan B 的 gap 规则冲突 (Plan B 认为 gap[3,5)最赚),
-                #         Plan B 启用时禁用 gap_trap, 由 should_buy_plan_b 统一判断
                 is_normalized = signal_ohlcv.get('_normalized', False)
                 limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)
-                _plan_b_active = True  # Plan B 启用, gap_trap 交给 should_buy_plan_b 判断
-                if _plan_b_active:
-                    gap_trap = False
-                else:
-                    _gap_trap_threshold = 8.0 if tab == TAB_ZHABAN else 5.0
-                    gap_trap = (not is_normalized) and (gap_pct > _gap_trap_threshold)
+                # 炸板次日跳空高开>8%才视为陷阱(可能是反包起跳)，其他tab >5%视为陷阱
+                _gap_trap_threshold = 8.0 if tab == TAB_ZHABAN else 5.0
+                gap_trap = (not is_normalized) and (gap_pct > _gap_trap_threshold)
                 buyable = not limit_open and not gap_trap
                 if not buyable:
                     unbuyable_count += 1
@@ -1263,17 +1258,6 @@ def run_tab_backtest(
                     missing.append(f'sell={d_sell}')
                     skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: sell={d_sell}'})
                     continue
-
-                # ── Plan B: 数据驱动硬过滤 (2026-07-05) ──
-                # 基于服务器1872笔26天回测分析, 用实盘可知特征过滤
-                if not is_normalized:
-                    try:
-                        from plans.plan_b import should_buy_plan_b
-                        if not should_buy_plan_b(gap_pct, signal_close, tab):
-                            skipped.append({'signal': d_signal, 'reason': f'{name} plan_b过滤: gap={gap_pct:+.1f}% price={signal_close:.1f} tab={tab}'})
-                            continue
-                    except ImportError:
-                        pass
 
                 intraday = {
                     'buy_high': round(buy_ohlcv['high'], 2),

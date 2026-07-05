@@ -25,19 +25,19 @@ const _BT_DAYS = 15;  // 本地 engine 缓存有15-19天数据, 用15天覆盖�
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
 // 各 tab 推荐的最低评分门槛
 var _TAB_DEFAULT_SELL_N = {
-    'trend': 2,       // Plan B: T+2卖
-    'limit-up': 2,    // Plan B: T+2卖
-    'zhaban': 5,      // Plan B: T+5卖 (zhaban sn=5优于sn=2)
-    'reversal': 2,    // Plan B: T+2卖
-    'dtqiaoban': 2,   // Plan B: T+2卖
+    'trend': 3,
+    'limit-up': 3,
+    'zhaban': 5,
+    'reversal': 3,
+    'dtqiaoban': 2,   // 唯一盈利tab, sn=2
 };
 
 var _TAB_DEFAULT_MIN_SCORE = {
-    'trend': 50,       // Plan B: 统一50 (plan_b硬过滤做主要筛选)
-    'limit-up': 50,    // Plan B: 统一50
-    'zhaban': 50,      // Plan B: 统一50
-    'reversal': 50,    // Plan B: 统一50
-    'dtqiaoban': 50,   // Plan B: 统一50
+    'trend': 50,
+    'limit-up': 50,
+    'zhaban': 50,
+    'reversal': 50,
+    'dtqiaoban': 50,
 };
 // 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {
@@ -51,16 +51,16 @@ var _btSellNs = (function() {
 // Tier3: 老用户 zhaban=2/3 自动升级为 5 (T+5 实测 avg_ret/+pnl 最高)
 // v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
 // v4: limit-up sell_n 3→2 (数据驱动: 持仓1天胜率91%, 持仓2天亏损)
-// v7: Plan B 数据驱动评分, 全tab统一 ms=50, sell_n=2(zhaban=5)
+// v8: 删除Plan B, dtqiaoban为唯一盈利tab优先推荐
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v7') || localStorage.getItem('btSellNs_v6') || localStorage.getItem('btSellNs_v5') || 'v1';
-    if (sellNsVer !== 'v7') {
+    var sellNsVer = localStorage.getItem('btSellNs_v8') || localStorage.getItem('btSellNs_v7') || 'v1';
+    if (sellNsVer !== 'v8') {
         _btSellNs = {};
         for (var k in _TAB_DEFAULT_SELL_N) {
             _btSellNs[k] = _TAB_DEFAULT_SELL_N[k];
         }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v7', 'v7');
+        localStorage.setItem('btSellNs_v8', 'v8');
         _btMinScores = {};
         for (var k2 in _TAB_DEFAULT_MIN_SCORE) {
             _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2];

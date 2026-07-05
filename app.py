@@ -568,11 +568,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 #   "甜蜜点" 数字在样本扩展后可能漂移. 如果回测样本扩大了, 重跑
 #   __tmp_bt_grid.py 重新确认甜蜜点.
 TAB_DEFAULT_BT_PARAMS = {
-    'limit-up':   {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # Plan B: gap[0,5)+price>=5
-    'trend':      {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # Plan B: 仅gap[3,5)
-    'reversal':   {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # Plan B: gap>=0+price>=10
-    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 30000, 'strategy': None},  # Plan B: 仅gap[3,5) sn=5
-    'dtqiaoban':  {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # Plan B: 全量(唯一盈利tab)
+    'limit-up':   {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
+    'trend':      {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
+    'reversal':   {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
+    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 30000, 'strategy': None},
+    'dtqiaoban':  {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # 唯一全量盈利tab: 479笔 45.5% +17509
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
@@ -740,11 +740,16 @@ def compute_recommendation_score(cand: dict) -> dict:
     # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
     combined = 0.4 * historical_component + 0.6 * today_component
 
-    # 2026-07-05: 历史 EV 为负的 tab (回测亏损) 施加惩罚因子,
-    # 让盈利 tab (reversal/trend) 排到前面, 改变明日信号推荐.
-    # ev_pnl < 0 说明该 tab 历史回测亏损, 不应主推
-    if ev_pnl < 0:
-        combined *= 0.4  # 亏损 tab 打4折, 让盈利 tab 优先
+    # 2026-07-05: 数据驱动 tab 加权 (1872笔26天回测)
+    # dtqiaoban 唯一全量盈利 (+17509), 其他 tab 全亏 → 大幅提权 dtqiaoban
+    tab_weight = {
+        'dtqiaoban': 1.5,   # 唯一盈利 tab, 加权
+        'reversal':  0.8,   # 接近持平 (-10683)
+        'limit-up':  0.5,   # 亏损 (-46976)
+        'zhaban':    0.3,   # 大亏 (-56716)
+        'trend':     0.2,   # 最差 (-56045)
+    }
+    combined *= tab_weight.get(tab, 1.0)
 
     cand['sample_size'] = sample
     cand['confidence_factor'] = confidence
