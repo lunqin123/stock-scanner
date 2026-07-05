@@ -1245,8 +1245,8 @@ def run_tab_backtest(
                 # Tier1.D: stock_daily fallback 用归一化价格 (基准100), 跳空不可信 → 跳过该过滤
                 is_normalized = signal_ohlcv.get('_normalized', False)
                 limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)
-                # 炸板次日跳空高开>8%才视为陷阱(可能是反包起跳)，其他tab >5%视为陷阱
-                _gap_trap_threshold = 8.0 if tab == TAB_ZHABAN else 5.0
+                # 跳空高开>9.5%视为陷阱 (接近一字板买不到), 数据验证gap[3,5)最赚不能过滤
+                _gap_trap_threshold = 9.5
                 gap_trap = (not is_normalized) and (gap_pct > _gap_trap_threshold)
                 buyable = not limit_open and not gap_trap
                 if not buyable:
