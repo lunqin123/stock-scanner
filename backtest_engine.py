@@ -1183,17 +1183,17 @@ def run_tab_backtest(
             for _pc in ['最新价', '收盘', 'close', 'price']:
                 if _pc in df_scored.columns:
                     _price_col = _pc; break
-            _adjust = pd.Series(0.0, index=df_scored.index)
-            # 1. 价格修正 (IC=-0.038, 最强信号)
+            # 新评分 = 价格主导(0-60) + tab加成 + 原评分微调
             if _price_col:
                 _prices = df_scored[_price_col].astype(float)
-                _adjust += _prices.apply(lambda p: 15 if p < 5 else (-10 if 5 <= p < 10 else (5 if p >= 50 else 0)))
-            # 2. 原评分分桶修正 (IC=-0.036, 负相关→部分反转)
-            _adjust += _orig_score.apply(lambda s: 20 if 30 <= s < 40 else (-15 if 40 <= s < 50 else (-10 if s >= 80 else 0)))
-            # 3. tab 修正 (dtqiaoban 唯一 STABLE)
-            _tab_adj = {'dtqiaoban': 10, 'limit-up': -2, 'zhaban': -3, 'reversal': -5, 'trend': -5}
-            _adjust += _tab_adj.get(tab, 0)
-            df_scored[actual_score_col] = (_orig_score + _adjust).clip(lower=0).round(1)
+                _new_score = _prices.apply(lambda p: 60 if p < 5 else 15 if p < 10 else 25 if p < 15 else 30 if p < 20 else 20 if p < 30 else 10 if p < 50 else 35)
+            else:
+                _new_score = pd.Series(30.0, index=df_scored.index)
+            _tab_adj2 = {'dtqiaoban': 20, 'limit-up': 0, 'zhaban': -5, 'reversal': -10, 'trend': -10}
+            _new_score = _new_score + _tab_adj2.get(tab, 0)
+            _orig = df_scored[actual_score_col].astype(float)
+            _new_score = _new_score + _orig.apply(lambda s: 5 if 30 <= s < 40 else (-5 if s >= 80 else 0))
+            df_scored[actual_score_col] = _new_score.clip(lower=0, upper=100).round(1)
 
             # 名称列容错
             name_col = None
