@@ -504,12 +504,12 @@ _REV_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "reversal_weights.json"
 )
 
-# 反转权重（回退原始值）
+# v3.0 反转权重: consecutive(-)↓ pullback(+)↑ sector(+)↑
 REV_DEFAULT_WEIGHTS = {
-    'turnover': 40,
-    'consecutive': 35,
-    'pullback': 15,
-    'sector': 10,
+    'turnover': 30,
+    'consecutive': 20,
+    'pullback': 25,
+    'sector': 25,
 }
 
 
@@ -586,28 +586,28 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
 #  炸板 + 翘板 因子权重 (P5)
 # ═══════════════════════════════════════════
 
-# 炸板权重（回退原始值，IC优化后实测亏损加大）
-ZB_DEFAULT_WEIGHTS = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+# v3.0 权重 (基于 win/loss 因子均值差异重构)
+ZB_DEFAULT_WEIGHTS = {'seal': 3, 'money': 12, 'feature': 35, 'turnover': 35, 'sector': 0}
 ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
 
 # 翘板权重（回退原始值）
-DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+DT_DEFAULT_WEIGHTS = {'deal': 12, 'seal': 15, 'cont': 30, 'turnover': 25, 'time': 5}
 DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
 
-# 涨停专用权重（回退原始值）
+# v3.0 涨停权重: seal(-IC)↓ sector(-IC)↓ tech(+IC)↑↑ history(常量)↓ stock_sentiment(-IC)↓
 DEFAULT_WEIGHTS_LIMIT_UP = {
-    'seal': 20.0,
-    'sector': 25.0,
-    'money': 15.0,
-    'tech': 10.0,
-    'history': 10.0,
-    'stock_sentiment': 15.0,
-    'principal_score': 5.0,
-    'north_flow': 5.0,
+    'seal': 8.0,
+    'sector': 8.0,
+    'money': 5.0,
+    'tech': 35.0,
+    'history': 3.0,
+    'stock_sentiment': 5.0,
+    'principal_score': 3.0,
+    'north_flow': 2.0,
 }
 
-# 反转专用权重（回退原始值）
-REV_DEFAULT_WEIGHTS = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
+# v3.0 反转权重
+REV_DEFAULT_WEIGHTS = {'turnover': 20, 'consecutive': 20, 'pullback': 28, 'sector': 22, 'retention': 5}
 REV_FACTOR_NAMES = {'turnover': '换手', 'consecutive': '连板', 'pullback': '回调', 'sector': '板块', 'retention': '留存'}
 
 _WEIGHTS_FILES = {
@@ -695,15 +695,14 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
-# 趋势动量权重——回退到原版 (IC 优化后实测 1W/6L，恶化):
-# 原版 60 天回测 +12.30% EV+0.59%，IC 优化后 -38.44%
+# v3.0 趋势权重: chg(+)↑ turnover(+) amount(-)↓↓ vr(+)↑↑ nh(≈)
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 40,       # 涨幅分
-    'turnover': 30,  # 换手分
-    'amount': 30,    # 成交额分
-    'vol_ratio': 5,  # 量比加分
-    'new_high': 3,   # 新高加分
-    'ma_rev': 0,     # MA回归分 (已关闭)
+    'chg': 35,       # 涨幅分 (win_avg 37 > loss_avg 35)
+    'turnover': 25,  # 换手分 (win_avg 28 > loss_avg 27)
+    'amount': 8,     # 成交额分 (win_avg 21 < loss_avg 25, 负预测力!)
+    'vol_ratio': 15, # 量比加分 (win_avg 1.4 > loss_avg 0.6)
+    'new_high': 5,   # 新高加分
+    'ma_rev': 0,     # (已关闭)
 }
 
 TREND_FACTOR_NAMES = {

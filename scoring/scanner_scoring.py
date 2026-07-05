@@ -44,8 +44,9 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     """
     df = df.copy()
 
-    # 原始权重 (回退 IC 优化, 保持正收益)
-    defaults = {'seal': 5, 'money': 5, 'feature': 35, 'turnover': 35, 'sector': 0}
+    # v3.0: 基于 win/loss 因子均值差异重构
+    # seal(-0.94)↓ money(+0.89)↑ feature(+0.66) turnover(+1.07)↑ sector(-1.30)↓
+    defaults = {'seal': 3, 'money': 12, 'feature': 35, 'turnover': 35, 'sector': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -151,8 +152,9 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     if pullback is None or pullback.empty:
         return pullback
 
-    # 原始权重 (回退 IC 优化)
-    defaults = {'turnover': 25, 'consecutive': 30, 'pullback': 25, 'sector': 15, 'retention': 5}
+    # v3.0: 基于 win/loss 因子均值差异重构
+    # turnover(+0.14) consecutive(-0.84) pullback(+0.43) sector(+0.86)
+    defaults = {'turnover': 20, 'consecutive': 20, 'pullback': 28, 'sector': 22, 'retention': 5}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -292,8 +294,10 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
         return df
 
     # 默认权重 (可被 weights 参数覆盖)
-    # 回退原版权重 (IC优化实测 1W/6L 恶化)
-    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
+    # v3.0: 基于 win/loss 因子均值差异重构
+    # chg(+2.06) turnover(+1.10) amount(-4.11) vr(+0.77) nh(-0.02)
+    # amount 负预测力最强, 大幅降权; vol_ratio 正预测力, 提权
+    defaults = {'chg': 35, 'turnover': 25, 'amount': 8, 'vol_ratio': 15, 'new_high': 5, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -611,8 +615,9 @@ def _score_sector(date_str: str, top_n: int = TOP_N) -> pd.DataFrame:
 def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     """翘板反抽评分 (P5: 5因子可调权)。"""
     df = df.copy()
-    # 原始权重 (回退 IC 优化)
-    defaults = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+    # v3.0: 基于 win/loss 因子均值差异重构
+    # deal(-1.56) seal(-0.89) cont(+2.60) turnover(+1.55) time(-0.71)
+    defaults = {'deal': 12, 'seal': 15, 'cont': 30, 'turnover': 25, 'time': 5}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
