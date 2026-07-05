@@ -1622,22 +1622,39 @@ def api_signal_tomorrow(
     前端 loadTomorrowSignals() 直接渲染此端点 (单数路径); /api/signals/today
     (复数) 保留为同样逻辑的独立端点.
 
+    BUG-修复 (2026-07-05): buy_date 之前误写为 today (= 当前交易日),
+    周日访问应显示"周一可买", 但 cache 里 buy_date 是上一交易日 (周五),
+    用户看到的"买入日"是周五而不是下周一.
+    正确逻辑: buy_date = today 的下一个交易日.
+    (signal_tomorrow.py:184 也是这么处理的.)
+
     返回格式 (供前端 static/app.js:271 loadTomorrowSignals 渲染):
       {
         ok: true,
-        date: 'YYYYMMDD',
-        weekday: '周一/.../周日',
-        alerts: [str],      # 跳过原因列表 (best 之外的提醒)
+        date: 'YYYYMMDD',          # 信号产生日 (= today / _today_trading)
+        signal_weekday: '周一/...', # 信号产生日是周几
+        buy_date: 'YYYYMMDD',      # 实际买入日 (today 的下一交易日)
+        buy_weekday: '周一/...',    # 买入日是周几
+        alerts: [str],
         signals: [{tab, tab_cn, name, code, score, buy_date, reason}],
-        summary: str        # 当 signals 为空时显示
+        summary: str
       }
     """
     try:
         sig = _signals_today_inner(refresh=False)
         today = _today_trading()
-        weekday_cn = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][
-            datetime.strptime(today, '%Y%m%d').weekday()
-        ]
+
+        # BUG-fix: buy_date 必须是 today 的"下一个交易日", 而非 today 本身
+        # 周日 -> 周一, 周五 -> 下周一, 周一(盘后) -> 周二
+        from t1_real_backtest import _next_trading_date as _next_td
+        buy_date = _next_td(today) or today  # fallback to today if fails
+
+        def _wk(d):
+            return ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][
+                datetime.strptime(d, '%Y%m%d').weekday()
+            ]
+        weekday_cn = _wk(today)
+        buy_weekday_cn = _wk(buy_date)
 
         # 转成前端期望的 signals 格式
         tab_cn_map = {
@@ -1663,7 +1680,7 @@ def api_signal_tomorrow(
                 'name': c.get('name') or '?',
                 'code': c.get('code') or '?',
                 'score': score,
-                'buy_date': today,
+                'buy_date': buy_date,
                 'reason': reason,
             })
 
@@ -1680,18 +1697,22 @@ def api_signal_tomorrow(
         # best (candidates[0]) 是否提示性输出
         summary_msg = ''
         if not signals:
-            summary_msg = f"{weekday_cn} — 综合打分无合适候选"
+            summary_msg = f"{weekday_cn} 信号 → 建议买入日 {buy_date}({buy_weekday_cn}): 综合打分无合适候选"
         else:
             b = signals[0]
             summary_msg = (
-                f"{weekday_cn} — 综合分最高: {b['name']}({b['code']}) "
-                f"建议关注"
+                f"{weekday_cn} 信号 → 买入日 {buy_date}({buy_weekday_cn}): "
+                f"综合分最高: {b['name']}({b['code']}) 建议关注"
             )
 
         return {
             'ok': True,
+            # 信号产生日 (盘后/周末 = 上一交易日, 如周五盘后 = 0703)
             'date': today,
             'weekday': weekday_cn,
+            # 实际买入日 (today 的下一交易日, 如周日信号 → 下周一可买)
+            'buy_date': buy_date,
+            'buy_weekday': buy_weekday_cn,
             'alerts': alerts,
             'signals': signals,
             'summary': summary_msg,

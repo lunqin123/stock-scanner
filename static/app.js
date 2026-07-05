@@ -287,7 +287,7 @@ async function loadTomorrowSignals() {
         var resp = await fetch(url);
         var data = await resp.json();
         if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
-        var h = '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📡 明日买入信号 (' + data.date + ' ' + data.weekday + ')</div>';
+        var h = '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📡 明日买入信号 · 信号日 ' + data.date + ' ' + data.weekday + ' → 买入日 ' + (data.buy_date || data.date) + ' ' + (data.buy_weekday || data.weekday) + '</div>';
         if (data.alerts && data.alerts.length > 0) {
             h += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">';
             data.alerts.forEach(function(a) { h += '⏭ ' + a + '<br>'; });
