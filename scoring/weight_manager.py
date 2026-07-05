@@ -24,7 +24,8 @@ DEFAULT_WEIGHTS = {
     'buyability': 0.0, # DEPRECATED: 降为纯过滤器(can_buy_filter)，不参与加权
     'stock_sentiment': 13.0,  # 个股情绪（资金态度+确定性+板块领先度）
     'principal_score': 8.0,   # 本金适配（提权，增强低价小市值标的区分度）
-    'north_flow': 5.0, # v2.0: 北向资金市场级因子（聪明钱方向，盘中实时可追踪）
+    'north_flow': 5.0, # v2.0: 北向资金市场级因子
+    'alpha': 8.0,   # v3.1: GTJA Alpha 5 因子组合 (动量+波动+量价+反转+筹码)
 }
 TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 105
 # 注: 实际"加权和"是 102 (8 个非零因子: seal+money+sector+tech+history+stock_sentiment+principal_score+north_flow
@@ -35,7 +36,7 @@ TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 105
 # 回测中可调权的因子 (P2-3: 扩展到 8 个, 涵盖全部 Plan A 实际加权因子)
 BACKTEST_FACTORS = [
     'seal', 'money', 'sector', 'tech', 'history',
-    'stock_sentiment', 'principal_score', 'north_flow',
+    'stock_sentiment', 'principal_score', 'north_flow', 'alpha',
 ]
 
 # Plan B 可调权因子 (所有16个因子都参与IC检验, 弱因子自动归零)
@@ -102,13 +103,14 @@ def save_weights(weights: dict, plan_name: str = 'A'):
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 15.0, 'sentiment': 10.0,
             'sector_res': 8.0, 'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
-            'stock_sentiment': 10.0, 'principal_score': 10.0, 'north_flow': 10.0}
+            'stock_sentiment': 10.0, 'principal_score': 10.0, 'north_flow': 10.0, 'alpha': 10.0}
 
 
 def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                   history_scores, sentiment_score,
                   stock_sentiment_scores=None, principal_scores=None,
                   north_flow_scores=None,  # v2.0: 北向资金因子
+                  alpha_scores=None,   # v3.1: GTJA Alpha 因子
                   sector_res=None, sector_mom=None,  # DEPRECATED: 向后兼容
                   buyability_scores=None, weights=None):
     """
@@ -123,6 +125,8 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
         principal_scores = pd.Series(5.0, index=seal_scores.index)
     if north_flow_scores is None:
         north_flow_scores = pd.Series(5.0, index=seal_scores.index)
+    if alpha_scores is None:
+        alpha_scores = pd.Series(5.0, index=seal_scores.index)
     # 向后兼容：如果传了sector_res/sector_mom但没传sector_scores，自动合并
     if sector_scores is None:
         if sector_res is not None and sector_mom is not None:
@@ -137,7 +141,7 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
 
     # 8因子加权 (v2.0: +north_flow)
     non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
-                     'stock_sentiment', 'principal_score', 'north_flow']
+                     'stock_sentiment', 'principal_score', 'north_flow', 'alpha', 'alpha']
     actual_sum = sum(w.get(k, 0) for k in non_sentiment)
     weighted = (seal_scores * (w.get('seal', 0) / _RAW_MAX['seal']) +
                 money_scores * (w.get('money', 0) / _RAW_MAX['money']) +
@@ -146,7 +150,8 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                 history_scores * (w.get('history', 0) / _RAW_MAX['history']) +
                 stock_sentiment_scores * (w.get('stock_sentiment', 0) / _RAW_MAX['stock_sentiment']) +
                 principal_scores * (w.get('principal_score', 0) / _RAW_MAX['principal_score']) +
-                north_flow_scores * (w.get('north_flow', 0) / _RAW_MAX['north_flow']))
+                north_flow_scores * (w.get('north_flow', 0) / _RAW_MAX['north_flow']) +
+                alpha_scores * (w.get('alpha', 0) / _RAW_MAX['alpha']))
     base_scores = weighted / max(1, actual_sum) * 100
 
     # 大盘情绪温和系数 (×0.85 ~ ×1.15, 缩小到±15%)

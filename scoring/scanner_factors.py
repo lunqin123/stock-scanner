@@ -979,3 +979,80 @@ def score_stock_history(df: pd.DataFrame, today_str: str, prev_df: pd.DataFrame 
     except Exception as e:
         print(f"  [scanner_factors] history failed: {e}", file=sys.stderr)
     return scores, raw_details
+
+
+# ═══════════════════════════════════════════
+#  GTJA Alpha 因子集 (2026-07-05)
+#  5 个短周期因子, 与现有封板/资金/板块正交
+# ═══════════════════════════════════════════
+
+def score_alpha_factors(df: pd.DataFrame, today_str: str = None) -> pd.Series:
+    """GTJA Alpha 5 因子组合评分 (0-10)
+
+    因子:
+      1. MomRank: 5日涨幅 (动量 Alpha#6)
+      2. Amplitude: 振幅/收盘价 (波动率 Alpha#3)
+      3. VWAPDev: (收-VWAP)/VWAP (量价 Alpha#51)
+      4. MaxDD10: 10日最大回撤 (反转 Alpha#24)
+      5. TurnoverCV: 5日换手CV (筹码 Alpha#101)
+    """
+    if df is None or df.empty:
+        return pd.Series(5.0, index=df.index if df is not None else [])
+    code_col = '代码' if '代码' in df.columns else df.columns[1]
+    codes = [str(c).strip().zfill(6) for c in df[code_col]]
+    scores = pd.Series(0.0, index=df.index)
+    if not codes:
+        return scores
+    today = today_str or datetime.now().strftime('%Y%m%d')
+    try:
+        td = datetime.strptime(today, '%Y%m%d')
+        start_30 = (td - timedelta(days=45)).strftime('%Y%m%d')
+        end_d = td.strftime('%Y%m%d')
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        hist_map = {}
+        def _fetch(code):
+            try:
+                h = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start_30, end_date=end_d, adjust='qfq')
+                if h is not None and len(h) >= 5: return code, h
+            except: pass
+            return code, None
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for f in as_completed({ex.submit(_fetch, c): c for c in codes}):
+                c, h = f.result()
+                if h is not None: hist_map[c] = h
+        if not hist_map:
+            return pd.Series(5.0, index=df.index)
+        import numpy as np
+        factors = {}
+        for idx, code in zip(df.index, codes):
+            hist = hist_map.get(code)
+            if hist is None or len(hist) < 5:
+                factors[idx] = [1.0]*5; continue
+            c = hist['收盘'].astype(float).values
+            h = hist['最高'].astype(float).values
+            lo = hist['最低'].astype(float).values
+            v = hist['成交量'].astype(float).values
+            a = hist['成交额'].astype(float).values if '成交额' in hist.columns else None
+            t = hist['换手率'].astype(float).values if '换手率' in hist.columns else None
+            r5 = (c[-1]/c[-5]-1)*100 if len(c)>=5 else 0
+            ms = min(2.0, max(0, abs(r5)/2.0))
+            amp = (h[-1]-lo[-1])/c[-1]*100 if c[-1]>0 else 0
+            amp_s = min(2.0, amp/2.0)
+            vwap = a[-1]/v[-1] if (a is not None and v[-1]>0) else c[-1]
+            vd = (c[-1]/vwap-1)*100 if vwap>0 else 0
+            vs = min(2.0, abs(vd)/0.5)
+            w = min(10, len(c))
+            pk = np.maximum.accumulate(c[-w:])
+            dd = abs(min((c[-w:]-pk)/pk))*100
+            ds = min(2.0, dd/2.0)
+            if t is not None and len(t)>=5:
+                cv = np.std(t[-5:])/(np.mean(t[-5:])+0.01)
+                cs = min(2.0, cv*2.0)
+            else: cs = 1.0
+            factors[idx] = min(10.0, ms+amp_s+vs+ds+cs)
+        for idx in df.index:
+            scores[idx] = factors.get(idx, 5.0)
+        return scores.round(1)
+    except Exception as e:
+        print(f"  [alpha] {e}", file=sys.stderr)
+        return pd.Series(5.0, index=df.index)

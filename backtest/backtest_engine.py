@@ -805,6 +805,7 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
         'stock_sentiment': 'f_stock_sentiment', 'principal': 'f_principal',
         'north_flow': 'f_north_flow',
         'momentum_consistency': 'f_v2_mc', 'pullback_depth': 'f_v2_pd',
+        'alpha': 'f_alpha',
     }
     for fk, col_name in _FACTOR_IC_COLS.items():
         if fk in factors:
@@ -1488,7 +1489,7 @@ def run_tab_backtest(
                         if val is not None:
                             rec[fk] = round(float(val), 1)
                     # IC 因子分列 (f_ 前缀, 用于 Information Coefficient 分析)
-                    for fk in ['f_seal','f_money','f_sector','f_tech','f_history',
+                    for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
                                'f_stock_sentiment','f_principal','f_north_flow',
                                'f_v2_mc','f_v2_pd']:
                         val = row.get(fk)

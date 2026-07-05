@@ -149,12 +149,22 @@ def compute_factors(filtered, fund_df, principal):
     except Exception as e:
         print(f"  [Plan A] 北向因子获取异常: {e}", file=sys.stderr)
 
+    # v3.1: GTJA Alpha 5 因子组合
+    alpha = pd.Series(5.0, index=filtered.index)
+    try:
+        from scoring.scanner_factors import score_alpha_factors
+        alpha_scores = score_alpha_factors(scoring_base, today_fmt)
+        alpha = alpha_scores.reindex(filtered.index, fill_value=5.0)
+    except Exception as e:
+        print(f"  [Plan A] Alpha因子跳过: {e}", file=sys.stderr)
+
     return {
         'seal': seal, 'money': money, 'raw_money': raw_money,
         'sector_mom': sector_mom, 'sector_res': sector_res,
         'tech': tech, 'buyability': buyability,
         'stock_sentiment': stock_sent, 'principal': pr,
         'north_flow': north_flow,
+        'alpha': alpha,
     }
 
 
@@ -204,6 +214,7 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
         stock_sentiment_scores=factors['stock_sentiment'],
         principal_scores=factors['principal'],
         north_flow_scores=factors.get('north_flow'),
+        alpha_scores=factors.get('alpha'),
         weights=weights)
 
     from scanner import score_danger_signals
