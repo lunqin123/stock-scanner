@@ -1154,8 +1154,12 @@ def run_tab_backtest(
     strategy: str = None,
     use_v2: bool = True,
     fill_slots: bool = _BACKTEST_FILL_SLOTS,
+    buy_time: str = 'open',
 ):
-    """多 tab 回测主入口 (2026-07-05 清理: 不再支持外部 strategy preset)
+    """多 tab 回测主入口 (v3.0: 支持尾盘买)
+
+    buy_time: 'open'  = T+1 开盘买 T+N 开盘卖 (原策略, 有幸存者偏差)
+              'close' = T 日尾盘买 T+1 开盘卖 (隔夜超短线, 评分=T日质量=T+1 gap)
 
     唯一过滤逻辑 = plan_a 评分 + min_score 阈值 + (sell_n 卖出日).
     历史 strategy='limit-prime'/'trend-elite'/'limit-sweet' preset 已删除,
@@ -1223,7 +1227,8 @@ def run_tab_backtest(
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
                              use_v2="v2" if use_v2 else "nov2",
-                             fill_slots="fs" if fill_slots else "nfs")
+                             fill_slots="fs" if fill_slots else "nfs",
+                             buy_time=buy_time)
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
@@ -1245,26 +1250,31 @@ def run_tab_backtest(
     total_candidates_scanned = 0  # 填仓模式候选扫描计数
 
     for d_signal in trade_dates:
-        d_buy = _next_trading_date(d_signal)
-        if d_buy is None or d_buy > trade_dates[-1]:
-            skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
-            continue
-        # 多时点卖出：sell_n=T+N 卖出(N 是信号日后的偏移交易日数)
-        # 例: sell_n=2 → d_buy 后 1 个交易日(T+2) ; sell_n=3 → d_buy 后 2 个交易日(T+3)
-        # BUG-8 修复: 之前 range(sell_n) 实际算到 T+(N+1), 导致默认 sell_n=3 的回测
-        # 把边界最后几天的信号全部 "卖出日超出区间" 跳过, 用户看到"没最新交易"
-        d_sell = d_buy
-        for _si in range(max(0, sell_n - 1)):
-            d_sell = _next_trading_date(d_sell)
+        if buy_time == 'close':
+            # ── 策略B: T日尾盘买 → T+1 开盘卖 (隔夜超短线) ──
+            d_sell = _next_trading_date(d_signal)
+            if d_sell is None or d_sell > trade_dates[-1]:
+                skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
+                continue
+            d_buy = d_signal  # 同日买
+        else:
+            # ── 策略A: T+1 开盘买 → T+N 开盘卖 (原策略) ──
+            d_buy = _next_trading_date(d_signal)
+            if d_buy is None or d_buy > trade_dates[-1]:
+                skipped.append({'signal': d_signal, 'reason': '买入日超出区间'})
+                continue
+            # 多时点卖出：sell_n=T+N 卖出(N 是信号日后的偏移交易日数)
+            d_sell = d_buy
+            for _si in range(max(0, sell_n - 1)):
+                d_sell = _next_trading_date(d_sell)
+                if d_sell is None:
+                    break
             if d_sell is None:
-                break
-        if d_sell is None:
-            skipped.append({'signal': d_signal, 'reason': '卖出日无效'})
-            continue
-        # 策略A需要真正的T+N卖出日, d_sell超区间则跳过(否则同日买卖无意义)
-        if d_sell is None or d_sell > trade_dates[-1]:
-            skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
-            continue
+                skipped.append({'signal': d_signal, 'reason': '卖出日无效'})
+                continue
+            if d_sell is None or d_sell > trade_dates[-1]:
+                skipped.append({'signal': d_signal, 'reason': '卖出日超出区间'})
+                continue
 
         n_scanned_this_day = 0
         try:
@@ -1425,9 +1435,22 @@ def run_tab_backtest(
 
                 sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
 
-                # ── 策略A: 开盘买 ──
-                # D+1 开盘买入, D+N 开盘卖出
-                if buyable:
+                if buy_time == 'close':
+                    # ── 策略B: T日尾盘买 → T+1开盘卖 (隔夜超短线) ──
+                    buy_px = signal_ohlcv['close']
+                    raw_ret = (sell_px / buy_px - 1) * 100
+                    net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
+                    rec = {
+                        'signal_date': d_signal, 'buy_date': d_signal, 'sell_date': d_sell,
+                        'rank': rank, 'code': code, 'name': name, 'score': round(sc, 1),
+                        'buy_price': round(buy_px, 2), 'sell_price': round(sell_px, 2),
+                        'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
+                        'pnl': round(capital * net_ret / 100, 0), **intraday,
+                    }
+                    records_open.append(rec)
+                    bought_count += 1
+                elif buyable:
+                    # ── 策略A: T+1开盘买 → T+N开盘卖 (原策略) ──
                     buy_px = buy_ohlcv['open']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
@@ -1602,6 +1625,8 @@ if __name__ == '__main__':
     parser.add_argument('--capital', type=float, default=CAPITAL_DEFAULT, help='单笔本金')
     parser.add_argument('--fill-slots', action='store_true', default=False,
                         help='填仓模式: 买不到的票往下续, 凑满 top_n 只')
+    parser.add_argument('--close-buy', action='store_true', default=False,
+                        help='尾盘买模式: T日收盘买入 T+1开盘卖出')
     args = parser.parse_args()
 
     tabs_to_run = ALL_TABS if args.tab == 'all' else [args.tab]
@@ -1612,7 +1637,8 @@ if __name__ == '__main__':
         print('='*70)
         res = run_tab_backtest(tab=tab, top_n=args.top, capital=args.capital,
                                max_days=args.days, use_cache=False,
-                               fill_slots=args.fill_slots)
+                               fill_slots=args.fill_slots,
+                               buy_time='close' if args.close_buy else 'open')
         if 'error' in res and not res.get('trades'):
             print(f"  [跳过] {res.get('error')}")
             continue
