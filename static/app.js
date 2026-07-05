@@ -287,7 +287,41 @@ async function loadTomorrowSignals() {
         var resp = await fetch(url);
         var data = await resp.json();
         if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
-        var h = '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📡 明日买入信号 · 信号日 ' + data.date + ' ' + data.weekday + ' → 买入日 ' + (data.buy_date || data.date) + ' ' + (data.buy_weekday || data.weekday) + '</div>';
+        // 头部信息
+        var h = '<div style="font-weight:600;font-size:13px;margin-bottom:8px">📡 明日买入信号 · 信号日 ' + data.date + ' ' + data.weekday + ' → 买入日 ' + (data.buy_date || data.date) + ' ' + (data.buy_weekday || data.weekday) + '</div>';
+
+        // 🏆 顶部「今日首推」卡片：综合打分最高那一只（= data.best）
+        // 服务端已经按 recommendation_score 降序排过，candidates[0]/best 是首推
+        if (data.best && data.best.name) {
+            var b = data.best;
+            var isLimitUp = b.tab === 'limit-up';
+            var accent = isLimitUp ? '#ef4444' : '#22c55e';
+            h += '<div style="position:relative;padding:12px 14px;margin:6px 0 12px 0;'
+              + 'background:linear-gradient(135deg,' + accent + '22,' + accent + '08);'
+              + 'border:2px solid ' + accent + ';border-radius:10px;'
+              + 'box-shadow:0 2px 8px ' + accent + '33;">';
+            h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+              + '<span style="font-size:22px">🏆</span>'
+              + '<span style="font-weight:800;font-size:15px;color:' + accent + '">今日首推</span>'
+              + '<span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;'
+              + 'background:' + accent + ';color:#fff;font-weight:600">综合分 ' + (b.recommendation_score || 0).toFixed(0) + '</span>'
+              + '</div>';
+            h += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">'
+              + '<span style="font-weight:800;font-size:20px">' + b.name + '</span>'
+              + '<span style="font-size:12px;color:var(--text-muted)">' + b.code + '</span>'
+              + '<span style="font-size:11px;padding:3px 8px;border-radius:4px;background:' + accent + ';color:#fff">' + b.tab + '</span>'
+              + '<span style="font-size:11px">当日评分 <b>' + (b.score || 0).toFixed(0) + '</b></span>'
+              + '<span style="font-size:11px">历史 EV <b style="color:' + (b.expected_pnl_per_trade > 0 ? '#22c55e' : '#ef4444') + '">' + (b.expected_pnl_per_trade > 0 ? '+' : '') + (b.expected_pnl_per_trade || 0) + '</b> 元/笔</span>'
+              + (b.filter_passed ? '<span style="font-size:11px;padding:2px 6px;border-radius:3px;background:#22c55e22;color:#22c55e">✓ 已通过实盘 filter</span>' : '<span style="font-size:11px;padding:2px 6px;border-radius:3px;background:#f59e0b22;color:#f59e0b">⚠ filter 未达标(取首推兜底)</span>')
+              + '</div>';
+            h += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">'
+              + '样本 ' + (b.sample_size || '?') + ' | 置信 ' + (b.confidence_factor || '?') + ' | 稀有加成 ' + (b.rare_event_boost || '?')
+              + ' | 策略: ' + (b.strategy_note || '-')
+              + '</div>';
+            h += '</div>';
+            h += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;font-weight:600">📋 5 tab 全部候选（信号日 ' + data.date + ' ' + data.weekday + '）</div>';
+        }
+
         if (data.alerts && data.alerts.length > 0) {
             h += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">';
             data.alerts.forEach(function(a) { h += '⏭ ' + a + '<br>'; });
@@ -295,14 +329,21 @@ async function loadTomorrowSignals() {
         }
         if (data.signals && data.signals.length > 0) {
             data.signals.forEach(function(s) {
-                h += '<div style="display:flex;align-items:center;gap:8px;padding:8px;margin:4px 0;background:' + (s.tab==='limit-up'?'#ef4444':'#22c55e') + '11;border-radius:6px;border-left:3px solid ' + (s.tab==='limit-up'?'#ef4444':'#22c55e') + '">';
+                // 标记"被首推"的那张票（在候选明细里加 ⭐）
+                var isBest = data.best && data.best.code === s.code && data.best.tab === s.tab;
+                var rowBg = isBest ? '#fbbf2422' : (s.tab==='limit-up' ? '#ef444411' : '#22c55e11');
+                var rowBd = isBest ? '#fbbf24' : (s.tab==='limit-up' ? '#ef4444' : '#22c55e');
+                var tagBg = isBest ? '#fbbf24' : 'var(--bg-secondary)';
+                var tagFg = isBest ? '#000' : 'var(--text)';
+                h += '<div style="display:flex;align-items:center;gap:8px;padding:8px;margin:4px 0;background:' + rowBg + ';border-radius:6px;border-left:3px solid ' + rowBd + '">';
+                if (isBest) h += '<span style="font-size:14px" title="今日首推">⭐</span>';
                 h += '<span style="font-weight:700;font-size:14px">' + s.name + '</span>';
                 h += '<span style="font-size:11px;color:var(--text-muted)">' + s.code + '</span>';
-                h += '<span style="font-size:11px;background:var(--bg-secondary);padding:2px 6px;border-radius:3px">' + s.tab_cn + '</span>';
+                h += '<span style="font-size:11px;padding:2px 6px;border-radius:3px;background:' + tagBg + ';color:' + tagFg + '">' + s.tab_cn + '</span>';
                 h += '<span style="font-size:11px">评分 ' + s.score.toFixed(0) + '</span>';
                 h += '<span style="font-size:10px;color:var(--text-muted)">买入日 ' + s.buy_date + '</span>';
                 h += '</div>';
-                h += '<div style="font-size:10px;color:var(--text-muted);margin-left:8px;margin-bottom:6px">' + s.reason + '</div>';
+                h += '<div style="font-size:10px;color:var(--text-muted);margin-left:' + (isBest ? '24' : '8') + 'px;margin-bottom:6px">' + s.reason + '</div>';
             });
         } else {
             h += '<div style="color:var(--text-muted);font-size:12px">今日无符合规则的买入信号 (' + data.summary + ')</div>';
