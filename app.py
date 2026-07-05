@@ -740,14 +740,15 @@ def compute_recommendation_score(cand: dict) -> dict:
     # 综合: 历史 EV 40%, 当日评分 60% (更看重今天的票评分)
     combined = 0.4 * historical_component + 0.6 * today_component
 
-    # 2026-07-05: 数据驱动 tab 加权 (1872笔26天回测)
-    # dtqiaoban 唯一全量盈利 (+17509), 其他 tab 全亏 → 大幅提权 dtqiaoban
+    # 2026-07-05: 基于服务器真实回测数据 (top1, 3w, ms=50, 26天)
+    # 盈利: 跌停+4575 炸板+3778 涨停+3044
+    # 亏损: 趋势-9289 反转-4568
     tab_weight = {
-        'dtqiaoban': 1.5,   # 唯一盈利 tab, 加权
-        'reversal':  0.8,   # 接近持平 (-10683)
-        'limit-up':  0.5,   # 亏损 (-46976)
-        'zhaban':    0.3,   # 大亏 (-56716)
-        'trend':     0.2,   # 最差 (-56045)
+        'zhaban':    1.3,   # +3778 EV+1.26% 胜率60% (最佳EV)
+        'dtqiaoban': 1.3,   # +4575 EV+1.17% (最多盈利)
+        'limit-up':  1.1,   # +3044 EV+0.85% 胜率66.7% (最高胜率)
+        'reversal':  0.4,   # -4568 EV-1.27% (亏损)
+        'trend':     0.2,   # -9289 EV-2.58% (最差)
     }
     combined *= tab_weight.get(tab, 1.0)
 
