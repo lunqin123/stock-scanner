@@ -703,17 +703,15 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
-# 趋势动量权重——基于60天IC优化 (2026-07-05, 保守调整):
-#   IC: vr(+0.57) chg(+0.10) nh(+0.06) amount(-0.36) turnover(-0.32)
-#   量比(vr)IC=+0.57最强, 保守提权至12 (原5→20的一半);
-#   成交额/换手负IC, 保守降权
+# 趋势动量权重——回退到原版 (IC 优化后实测 1W/6L，恶化):
+# 原版 60 天回测 +12.30% EV+0.59%，IC 优化后 -38.44%
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 35,       # (保守: 40+30)/2
-    'turnover': 22,  # (保守: 30+15)/2, IC负
-    'amount': 22,    # (保守: 30+15)/2, IC负
-    'vol_ratio': 12, # (保守: 5+20)/2, IC强正
-    'new_high': 4,   # (保守: 3+5)/2
-    'ma_rev': 0,     # (已关闭)
+    'chg': 40,       # 涨幅分
+    'turnover': 30,  # 换手分
+    'amount': 30,    # 成交额分
+    'vol_ratio': 5,  # 量比加分
+    'new_high': 3,   # 新高加分
+    'ma_rev': 0,     # MA回归分 (已关闭)
 }
 
 TREND_FACTOR_NAMES = {

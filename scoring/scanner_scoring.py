@@ -292,8 +292,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
         return df
 
     # 默认权重 (可被 weights 参数覆盖)
-    # IC优化(保守): vr(+0.57) chg(+0.10) amount(-0.36) turnover(-0.32)
-    defaults = {'chg': 35, 'turnover': 22, 'amount': 22, 'vol_ratio': 12, 'new_high': 4, 'ma_rev': 0}
+    # 回退原版权重 (IC优化实测 1W/6L 恶化)
+    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
