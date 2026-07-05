@@ -734,7 +734,20 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
         if flags and idx in filtered.index:
             filtered.loc[idx, '_danger'] = ','.join(flags)
 
-    return filtered  # 含 'plan_a总分' 列
+    # 2026-07-05: 叠加新评分 (基于业界验证的涨停板量化因子)
+    # 新评分用涨停池原始数据(封单/时间/换手/连板/炸板/市值/板块), 不依赖外部数据
+    # plan_a总分保留作为 'plan_a总分' 列, 但排序改用 '新评分'
+    try:
+        from scoring.score_new import score_new as _score_new_fn
+        scored_new = _score_new_fn(filtered)
+        if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
+            filtered = scored_new
+            # 让回测引擎用 '新评分' 列排序
+            filtered['plan_a总分'] = filtered['新评分']
+    except Exception as e:
+        print(f"  [新评分] 跳过: {e}", file=sys.stderr)
+
+    return filtered  # 含 'plan_a总分' 列 (已替换为新评分)
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
