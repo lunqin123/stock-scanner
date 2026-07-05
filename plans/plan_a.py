@@ -421,6 +421,32 @@ def score(inputs: dict, max_n: int = None, use_v2: bool = True) -> dict:
     except Exception as e:
         print(f"  [PlanA] score_new 跳过: {e}", file=__import__('sys').stderr)
 
+    # v3.1: 尾盘可买性评估 (基于封单成交比)
+    # seal_ratio < 0.3: 封板弱, 很容易买到 → 0.8
+    # seal_ratio 0.3-1.0: 适中, 能买到 → 1.0 (甜蜜点)
+    # seal_ratio 1.0-2.0: 封板强, 难买到 → 0.4
+    # seal_ratio > 2.0: 封死涨停, 极难买到 → 0.1
+    try:
+        _seal_col = '封板资金' if '封板资金' in filtered.columns else None
+        _amt_col = '成交额' if '成交额' in filtered.columns else None
+        if _seal_col and _amt_col:
+            _sr = (filtered[_seal_col].astype(float) / filtered[_amt_col].astype(float)).clip(0, 10)
+            _code_col = '代码' if '代码' in filtered.columns else filtered.columns[1]
+            _code_to_buy = {}
+            for idx in _sr.index:
+                _code = str(filtered.loc[idx, _code_col]).strip().zfill(6)
+                _v = float(_sr[idx])
+                if _v < 0.3: _b = 0.8
+                elif _v < 1.0: _b = 1.0
+                elif _v < 2.0: _b = 0.4
+                else: _b = 0.1
+                _code_to_buy[_code] = _b
+            for s in stocks:
+                s['close_buyability'] = _code_to_buy.get(s.get('code', ''), 0.5)
+    except Exception:
+        for s in stocks:
+            s['close_buyability'] = 0.5
+
     return {
         'stocks': stocks,
         'df': filtered,

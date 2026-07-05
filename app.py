@@ -888,6 +888,7 @@ def _signals_today_inner(refresh: bool = False, user_bt_params: dict = None) -> 
                 'advice': best.get('advice', ''),
                 'tags': best.get('signals', []),
                 'auction_check': best.get('auction_check', ''),
+                'close_buyability': best.get('close_buyability', 0.5),
                 'expected_pnl_per_trade': round(ev_pct * cap / 100, 0),
                 'win_rate_estimate': win_rate,
                 'strategy_note': note,
@@ -1885,7 +1886,7 @@ def api_signal_tomorrow(
                 f"| 当日评分 {score:.1f} | sample={c.get('sample_size', '?')} "
                 f"conf={c.get('confidence_factor', '?')} "
                 f"rare={c.get('rare_event_boost', '?')} "
-                f"| 综合分 {c.get('recommendation_score', '?')}"
+                f"| 综合分 {c.get('recommendation_score', '?')} | 可买性 {c.get('close_buyability', '?')}"
             )
             signals.append({
                 'tab': tab,
