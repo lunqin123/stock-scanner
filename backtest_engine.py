@@ -1259,6 +1259,17 @@ def run_tab_backtest(
                     skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: sell={d_sell}'})
                     continue
 
+                # ── Plan B: 数据驱动硬过滤 (2026-07-05) ──
+                # 基于服务器1872笔26天回测分析, 用实盘可知特征过滤
+                if not is_normalized:
+                    try:
+                        from plans.plan_b import should_buy_plan_b
+                        if not should_buy_plan_b(gap_pct, signal_close, tab):
+                            skipped.append({'signal': d_signal, 'reason': f'{name} plan_b过滤: gap={gap_pct:+.1f}% price={signal_close:.1f} tab={tab}'})
+                            continue
+                    except ImportError:
+                        pass
+
                 intraday = {
                     'buy_high': round(buy_ohlcv['high'], 2),
                     'buy_low': round(buy_ohlcv['low'], 2),

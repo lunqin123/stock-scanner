@@ -25,19 +25,19 @@ const _BT_DAYS = 15;  // 本地 engine 缓存有15-19天数据, 用15天覆盖�
 // 每个 tab 独立的最低评分门槛（评分标准各不相同）
 // 各 tab 推荐的最低评分门槛
 var _TAB_DEFAULT_SELL_N = {
-    'trend': 2,       // 2026-07-05 实测: sn=2 23笔39%+1641
-    'limit-up': 3,    // 2026-07-05 网格: sn=3 ms=70 4笔50%+1438 (sn=2全亏)
-    'zhaban': 5,      // 实测 T+5 avg_ret +4.59%/+20659 pnl 最高, T+3 仅 +2.72%/+17161
-    'reversal': 2,    // 2026-07-05 实测: sn=2 24笔46%+4465 (最佳)
-    'dtqiaoban': 2,   // 2026-07-05 实测: sn=2 23笔39%+766
+    'trend': 2,       // Plan B: T+2卖
+    'limit-up': 2,    // Plan B: T+2卖
+    'zhaban': 5,      // Plan B: T+5卖 (zhaban sn=5优于sn=2)
+    'reversal': 2,    // Plan B: T+2卖
+    'dtqiaoban': 2,   // Plan B: T+2卖
 };
 
 var _TAB_DEFAULT_MIN_SCORE = {
-    'trend': 55,       // TOP3最低74.5, ms=55过滤低质量日
-    'limit-up': 70,    // 网格: ms=70 sn=3 4笔50%+1438
-    'zhaban': 75,      // IC-driven 权重翻新 + 网格扫描: WR 54.3% / EV +0.34%
-    'reversal': 50,    // TOP3最低56.5, ms=50过滤劣质反转
-    'dtqiaoban': 55,   // TOP3最低54.2, ms=55过滤劣质翘板
+    'trend': 50,       // Plan B: 统一50 (plan_b硬过滤做主要筛选)
+    'limit-up': 50,    // Plan B: 统一50
+    'zhaban': 50,      // Plan B: 统一50
+    'reversal': 50,    // Plan B: 统一50
+    'dtqiaoban': 50,   // Plan B: 统一50
 };
 // 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {
@@ -51,17 +51,16 @@ var _btSellNs = (function() {
 // Tier3: 老用户 zhaban=2/3 自动升级为 5 (T+5 实测 avg_ret/+pnl 最高)
 // v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
 // v4: limit-up sell_n 3→2 (数据驱动: 持仓1天胜率91%, 持仓2天亏损)
-// v5: 全 tab 参数重置为实测最优 (limit-up ms70/sn3, reversal/trend/dtqiaoban ms0/sn2)
-// v6: trend/reversal/dtqiaoban 添加低分过滤 (ms 0->55/50/55)
+// v7: Plan B 数据驱动评分, 全tab统一 ms=50, sell_n=2(zhaban=5)
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v6') || localStorage.getItem('btSellNs_v5') || localStorage.getItem('btSellNs_v4') || localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
-    if (sellNsVer !== 'v6') {
+    var sellNsVer = localStorage.getItem('btSellNs_v7') || localStorage.getItem('btSellNs_v6') || localStorage.getItem('btSellNs_v5') || 'v1';
+    if (sellNsVer !== 'v7') {
         _btSellNs = {};
         for (var k in _TAB_DEFAULT_SELL_N) {
             _btSellNs[k] = _TAB_DEFAULT_SELL_N[k];
         }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v6', 'v6');
+        localStorage.setItem('btSellNs_v7', 'v7');
         _btMinScores = {};
         for (var k2 in _TAB_DEFAULT_MIN_SCORE) {
             _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2];
