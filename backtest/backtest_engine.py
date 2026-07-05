@@ -1186,12 +1186,14 @@ def run_tab_backtest(
         start = start_date
 
     # ── 整体结果缓存 ──
-    # 注意: use_v2 必须进 cache_key, use_cache=False 强制重算
+    # 注意: use_v2/fill_slots 必须进 cache_key, version=2 对应 v2.1.0 权重重调
+    # 改权重/评分逻辑时记得递增 version 保证旧缓存失效
     if use_cache:
-        cache_key = make_key("bt", "result", tab=tab,
+        cache_key = make_key("bt", "result", version=2, tab=tab,
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
-                             use_v2="v2" if use_v2 else "nov2")
+                             use_v2="v2" if use_v2 else "nov2",
+                             fill_slots="fs" if fill_slots else "nfs")
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
