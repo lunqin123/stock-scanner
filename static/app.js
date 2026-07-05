@@ -33,11 +33,11 @@ var _TAB_DEFAULT_SELL_N = {
 };
 
 var _TAB_DEFAULT_MIN_SCORE = {
-    'trend': 0,        // 2026-07-05 实测: ms=0 sn=2 23笔39%+1641
-    'limit-up': 70,    // 2026-07-05 网格: ms=70 sn=3 4笔50%+1438
-    'zhaban': 75,      // 2026-07-05 IC-driven 权重翻新 + 网格扫描: WR 54.3% / EV +0.34%
-    'reversal': 0,     // 2026-07-05 实测: ms=0 sn=2 24笔46%+4465
-    'dtqiaoban': 0,    // 2026-07-05 实测: ms=0 sn=2 23笔39%+766
+    'trend': 55,       // TOP3最低74.5, ms=55过滤低质量日
+    'limit-up': 70,    // 网格: ms=70 sn=3 4笔50%+1438
+    'zhaban': 75,      // IC-driven 权重翻新 + 网格扫描: WR 54.3% / EV +0.34%
+    'reversal': 50,    // TOP3最低56.5, ms=50过滤劣质反转
+    'dtqiaoban': 55,   // TOP3最低54.2, ms=55过滤劣质翘板
 };
 // 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {
@@ -52,17 +52,16 @@ var _btSellNs = (function() {
 // v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
 // v4: limit-up sell_n 3→2 (数据驱动: 持仓1天胜率91%, 持仓2天亏损)
 // v5: 全 tab 参数重置为实测最优 (limit-up ms70/sn3, reversal/trend/dtqiaoban ms0/sn2)
+// v6: trend/reversal/dtqiaoban 添加低分过滤 (ms 0->55/50/55)
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v5') || localStorage.getItem('btSellNs_v4') || localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
-    if (sellNsVer !== 'v5') {
-        // v5: 全部重置为实测最优 sell_n
+    var sellNsVer = localStorage.getItem('btSellNs_v6') || localStorage.getItem('btSellNs_v5') || localStorage.getItem('btSellNs_v4') || localStorage.getItem('btSellNs_v3') || localStorage.getItem('btSellNs_v2') || 'v1';
+    if (sellNsVer !== 'v6') {
         _btSellNs = {};
         for (var k in _TAB_DEFAULT_SELL_N) {
             _btSellNs[k] = _TAB_DEFAULT_SELL_N[k];
         }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v5', 'v5');
-        // 同步重置 min_score
+        localStorage.setItem('btSellNs_v6', 'v6');
         _btMinScores = {};
         for (var k2 in _TAB_DEFAULT_MIN_SCORE) {
             _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2];

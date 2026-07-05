@@ -568,11 +568,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
 #   "甜蜜点" 数字在样本扩展后可能漂移. 如果回测样本扩大了, 重跑
 #   __tmp_bt_grid.py 重新确认甜蜜点.
 TAB_DEFAULT_BT_PARAMS = {
-    'limit-up':   {'min_score': 70, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 网格验证: 4笔50%+1438 (sn=2全亏)
-    'trend':      {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 23笔39%+1641
-    'reversal':   {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 24笔46%+4465 (最佳)
+    'limit-up':   {'min_score': 70, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 网格验证: 4笔50%+1438
+    'trend':      {'min_score': 55, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # TOP3最低74.5, ms=55过滤低质量日
+    'reversal':   {'min_score': 50, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # TOP3最低56.5, ms=50过滤劣质反转
     'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 30000, 'strategy': None},  # sn=2巨亏-20101, 保持sn=5
-    'dtqiaoban':  {'min_score': 0,  'sell_n': 2, 'capital': 30000, 'strategy': None},  # 实测: 23笔39%+766
+    'dtqiaoban':  {'min_score': 55, 'sell_n': 2, 'capital': 30000, 'strategy': None},  # TOP3最低54.2, ms=55过滤劣质翘板
 }
 
 # 硬编码 fallback estimate (仅在 _fetch_real_tab_evs() 失败时用)
