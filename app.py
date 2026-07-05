@@ -570,7 +570,7 @@ TAB_DEFAULT_BT_PARAMS = {
     'limit-up':   {'min_score': 38, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
     'trend':      {'min_score': 85, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 55→85 (网格甜蜜点)
     'reversal':   {'min_score': 0,  'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},
-    'zhaban':     {'min_score': 50, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},   # 网格全负, 保持
+    'zhaban':     {'min_score': 75, 'sell_n': 5, 'capital': 20000, 'strategy': 'auto'},   # 改 50→75 (IC-重加权后甜蜜点, WR 54.3% EV +0.34%)
     'dtqiaoban':  {'min_score': 75, 'sell_n': 3, 'capital': 20000, 'strategy': 'auto'},   # 改 70→75 (网格甜蜜点)
 }
 

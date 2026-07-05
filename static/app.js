@@ -35,7 +35,7 @@ var _TAB_DEFAULT_SELL_N = {
 var _TAB_DEFAULT_MIN_SCORE = {
     'trend': 85,       // 2026-07-05 网格扫描甜蜜点: WR 66.7% / EV +2.41%
     'limit-up': 80,
-    'zhaban': 50,      // 网格扫描全负 (-1.05%~-1.65%), 暂保持 50
+    'zhaban': 75,      // 2026-07-05 IC-driven 权重翻新 + 网格扫描: WR 54.3% / EV +0.34%
     'reversal': 0,     // 网格扫描全负 (-1.02%~-1.32%), 暂保持 0
     'dtqiaoban': 75,   // 2026-07-05 网格扫描甜蜜点: WR 80.0% / EV +3.44%
 };

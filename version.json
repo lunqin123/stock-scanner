@@ -1,7 +1,14 @@
 {
-  "version": "2.0.2",
-  "date": "2026-06-29",
+  "version": "2.0.3",
+  "date": "2026-07-05",
   "changes": [
+    "修复: 炸板 IC-driven 重新加权 (191 笔交易 IC 分析): seal 20→5 / money 20→5 / feature 15→35 / turnover 10→35 / sector 12→0",
+    "修复: 炸板默认 min_score 50→75, 甜蜜点 WR 54.3% / EV +0.34% (旧 EV -1.58%)",
+    "修复: 趋势默认 min_score 55→85, 甜蜜点 WR 66.7% / EV +2.41%",
+    "修复: 翘板默认 min_score 70→75, 甜蜜点 WR 80% / EV +3.44%",
+    "修复: 明日信号 buy_date = today 的下一交易日 (周末/盘后正确指向周一)",
+    "修复: 明日信号用 _fetch_real_tab_evs() 真实回测 EV 替代硬编码 TAB_EV_ESTIMATES",
+    "新增: 明日信号顶部 🏆 今日首推 卡片 + 5 tab 全候选明细保留",
     "修复: 禁用自动调权 (权重已手动优化锁定)",
     "修复: 炸板因子权重优化: seal↓/feature↑/turnover↑, WR从44→50%",
     "修复: 翘板因子权重优化: cont↑/turnover↑/deal↓, 首度实现正PnL",

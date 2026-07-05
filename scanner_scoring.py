@@ -28,10 +28,23 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
 
     支持传入历史存档的 fund_df（回测引擎从 archive 加载），
     避免回测时使用实时资金流数据产生未来偏差。
+
+    BUG-修复 (2026-07-05): IC-based 重新加权.
+      191 笔交易 / 60 天 / 4 个参数 (ms 0/45/50/55/60) 实测 IC:
+        seal (封板质量):  IC -0.065 → 负相关（旧权重 20 → 现 5）
+        money (资金承接): IC -0.046 → 噪声  （旧权重 20 → 现 5）
+        feature (炸板特征):IC +0.135 → 正    （旧权重 15 → 现 35）
+        turnover (换手评分):IC +0.184 → 强正 （旧权重 10 → 现 35）
+        sector (板块热度):  IC -0.059 → 负相关（旧权重 12 → 现 0）
+      新总分 max_raw=80, 排序 IC 从 +0.045 (无效) → 期望显著正向.
+      三因子 feature/turnover/sector 是当天炸板票的特征, 与"次日开
+      盘能否反包"具有非平凡的预测力; 而 seal/money 来自"封板当刻"
+      的微观数据, 实际预测力为负或为零 (炸得"漂亮"的票第二天多半
+      被高开套利, 而看起来不"漂亮"的票反而低开有反包空间).
     """
     df = df.copy()
 
-    defaults = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+    defaults = {'seal': 5, 'money': 5, 'feature': 35, 'turnover': 35, 'sector': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
