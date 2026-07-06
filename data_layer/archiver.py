@@ -560,6 +560,72 @@ def _save_trend_stocks(conn, trade_date, df):
     return count
 
 
+def _save_zhaban_stocks(conn, trade_date, df):
+    """保存炸板池到 daily_stocks (stock_type='zhaban', v3.3h新增)"""
+    import pandas as _pd
+    code_col = '代码' if '代码' in df.columns else df.columns[1]
+    name_col = '名称' if '名称' in df.columns else df.columns[2]
+    chg_col = '涨跌幅' if '涨跌幅' in df.columns else (df.columns[3] if len(df.columns) > 3 else None)
+    price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
+    to_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+    ind_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+    count = 0
+    for _, row in df.iterrows():
+        try:
+            code = str(row[code_col]).strip().zfill(6)
+            name = str(row[name_col])
+            conn.execute("""
+                INSERT OR REPLACE INTO daily_stocks
+                (trade_date, code, name, stock_type, change_pct, price, turnover, industry, market_cap)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                trade_date, code, name, 'zhaban',
+                float(row[chg_col]) if chg_col and _pd.notna(row[chg_col]) else None,
+                float(row[price_col]) if price_col and _pd.notna(row[price_col]) else None,
+                float(row[to_col]) if to_col and _pd.notna(row[to_col]) else None,
+                str(row[ind_col]) if ind_col and _pd.notna(row[ind_col]) else '',
+                float(row[cap_col]) if cap_col and _pd.notna(row[cap_col]) else None,
+            ))
+            count += 1
+        except Exception:
+            continue
+    conn.commit()
+    print(f"  [归档] zhaban→daily_stocks: {count} 只", file=__import__('sys').stderr)
+
+def _save_dtqiaoban_stocks(conn, trade_date, df):
+    """保存跌停翘板池到 daily_stocks (stock_type='dtqiaoban', v3.3h新增)"""
+    import pandas as _pd
+    code_col = '代码' if '代码' in df.columns else df.columns[1]
+    name_col = '名称' if '名称' in df.columns else df.columns[2]
+    chg_col = '涨跌幅' if '涨跌幅' in df.columns else (df.columns[3] if len(df.columns) > 3 else None)
+    price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
+    to_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
+    ind_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+    count = 0
+    for _, row in df.iterrows():
+        try:
+            code = str(row[code_col]).strip().zfill(6)
+            name = str(row[name_col])
+            conn.execute("""
+                INSERT OR REPLACE INTO daily_stocks
+                (trade_date, code, name, stock_type, change_pct, price, turnover, industry, market_cap)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                trade_date, code, name, 'dtqiaoban',
+                float(row[chg_col]) if chg_col and _pd.notna(row[chg_col]) else None,
+                float(row[price_col]) if price_col and _pd.notna(row[price_col]) else None,
+                float(row[to_col]) if to_col and _pd.notna(row[to_col]) else None,
+                str(row[ind_col]) if ind_col and _pd.notna(row[ind_col]) else '',
+                float(row[cap_col]) if cap_col and _pd.notna(row[cap_col]) else None,
+            ))
+            count += 1
+        except Exception:
+            continue
+    conn.commit()
+    print(f"  [归档] dtqiaoban→daily_stocks: {count} 只", file=__import__('sys').stderr)
+
 def _save_market_snapshot(conn, trade_date):
     """保存市场快照 + 各池原始 DataFrame pickle 归档"""
     import akshare as ak
@@ -576,25 +642,27 @@ def _save_market_snapshot(conn, trade_date):
     except Exception as e:
         print(f"  [archiver L312] failed: {e}", file=sys.stderr)
 
-    # 炸板池 — 保存原始 DF 供回测引擎 fallback
+    # 炸板池 — 保存原始 DF 供回测引擎 fallback + 存 daily_stocks
     zb = None
     try:
         zb = ak.stock_zt_pool_zbgc_em(date=trade_date)
         if zb is not None and not zb.empty:
             zhaban_count = len(zb)
             _save_pool_pickle(trade_date, 'zhaban', zb)
+            _save_zhaban_stocks(conn, trade_date, zb)
     except Exception as e:
-        print(f"  [archiver L319] failed: {e}", file=sys.stderr)
+        print(f"  [archiver zhaban] failed: {e}", file=sys.stderr)
 
-    # 跌停/翘板池 — 保存原始 DF 供回测引擎 fallback
+    # 跌停/翘板池 — 保存原始 DF 供回测引擎 fallback + 存 daily_stocks
     dt = None
     try:
         dt = ak.stock_zt_pool_dtgc_em(date=trade_date)
         if dt is not None and not dt.empty:
             dieting_count = len(dt)
             _save_pool_pickle(trade_date, 'dtqiaoban', dt)
+            _save_dtqiaoban_stocks(conn, trade_date, dt)
     except Exception as e:
-        print(f"  [archiver L326] failed: {e}", file=sys.stderr)
+        print(f"  [archiver dtqiaoban] failed: {e}", file=sys.stderr)
 
     # 强势池 (趋势 tab 信号源) — 保存原始 DF 供回测引擎 fallback
     strong_count = 0

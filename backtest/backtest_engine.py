@@ -195,21 +195,23 @@ def _detect_available_days(tab: str) -> int:
     except Exception:
         pass
 
-    # 3. fallback: archive_pools 目录
+    # 3. fallback: 检查 archive.db 总天数 (所有类型共享的时间窗口)
     try:
-        from archiver import _ARCHIVE_POOL_DIR
-        if not _os.path.exists(_ARCHIVE_POOL_DIR):
-            return 10
-        prefix = f'{pool_type}_'
-        count = sum(1 for f in _os.listdir(_ARCHIVE_POOL_DIR)
-                    if f.startswith(prefix) and f.endswith('.pkl'))
-        return max(10, min(count, 120))
+        _db_path = _os.path.join(_PROJECT_ROOT, 'archive.db')
+        if _os.path.exists(_db_path):
+            import sqlite3
+            conn = sqlite3.connect(_db_path, timeout=2)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(DISTINCT trade_date) FROM daily_stocks")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] >= 5:
+                return max(10, min(row[0], 120))
     except Exception:
-        return 10
-# P1.2.1.2: akshare 各池 API 实际可用窗口: stock_zt_pool_previous_em (~7天),
-#             stock_zt_pool_zbgc_em/dtgc_em (~7-10天)
-# P8: fallback 从 5→10, 让有数据的天数充分参与回测。
-#     超出窗口的日期 akshare 返回空 → 自然 skip, 不影响结果质量。
+        pass
+
+    # 4. 最后 fallback: akshare 实际可用窗口
+    return 10
 
 # ═══════════════════════════════════════════
 #  信号池获取函数 (P1.1 骨架: limit-up 和 reversal 可用,其他 TBD 待 P2)
