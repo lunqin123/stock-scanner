@@ -1546,6 +1546,23 @@ def run_tab_backtest(
 
                 if buy_time == 'close':
                     # ── 策略B: T日尾盘买 → T+1开盘卖 (隔夜超短线) ──
+                    # v3.3f: 封单成交比尾盘可买到建模
+                    #   seal_ratio > 2.0: 封死涨停, 尾盘买不到 → skip
+                    #   seal_ratio 1.0-2.0: 封板强, 50%概率买到 (排队模拟)
+                    #   seal_ratio <= 1.0: 封板适中, 可以买到
+                    _seal_fund = float(row.get('封板资金', 0) or 0)
+                    _amount = float(row.get('成交额', 0) or 1)
+                    _seal_ratio = _seal_fund / _amount if _amount > 0 else 0
+                    if _seal_ratio > 2.0:
+                        unbuyable_count += 1
+                        skipped.append({'signal': d_signal, 'reason': f'{name} 封单成交比{_seal_ratio:.1f}>2.0, 尾盘封死买不到'})
+                        continue
+                    elif _seal_ratio > 1.0:
+                        # 封板强, 模拟排队: 50% 概率买到
+                        import random as _random
+                        if _random.random() > 0.5:
+                            skipped.append({'signal': d_signal, 'reason': f'{name} 封单成交比{_seal_ratio:.1f}, 尾盘排队未成交'})
+                            continue
                     buy_px = signal_ohlcv['close']
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
@@ -1555,6 +1572,7 @@ def run_tab_backtest(
                         'buy_price': round(buy_px, 2), 'sell_price': round(sell_px, 2),
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
+                        'seal_ratio': round(_seal_ratio, 2),
                     }
                     records_open.append(rec)
                     bought_count += 1
