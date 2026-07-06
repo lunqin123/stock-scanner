@@ -1,4 +1,4 @@
-"""全新评分逻辑 - 基于业界验证的涨停板量化因子 (2026-07-05)
+"""全新评分逻辑 - 基于业界验证的涨停板量化因子 (2026-07-06 优化)
 
 数据来源:
 - GitHub: Quant-Strategy-for-Consecutive-Limit-Up-Stocks (2025年实盘验证)
@@ -11,13 +11,21 @@
 3. 换手率 — 5-15%缩量最优, >20%放量危险
 4. 连板数 — 2-3连板势能最强, 首板次之, 5+连板风险高
 5. 炸板次数 — 0次最优(封板稳定), 多次炸板=抛压大
-6. 流通市值 — 50-200亿最优(机构+游资合力), <30亿流动性差
+6. 流通市值 — 30-200亿最优(游资合力), <20亿流动性差
 7. 板块联动 — 同板块涨停数越多, 延续性越强
+8. 价格区间 — 5-20元散户参与度最高
+
+v3.3c 优化 (2026-07-06):
+- 权重按 IC 排序重分配: seal_ratio/seal_time 提权, price 降权
+- 总分直接映射 0-100 (权重和=100, 不再除 MAX_SCORE)
+- 交互加分: 早封板(10:00前)+高封成比(>0.5) = +3分
+- v2 因子集成: position_factor 乘性调节 (持续性+回撤位置)
+- 流通市值甜蜜区收窄: 30-150亿 (A股超短线最活跃区间)
 
 与旧plan_a的区别:
 - 完全基于涨停池原始数据, 不依赖资金流/舆情/北向等外部数据
-- 因子权重来自业界回测验证, 不是拍脑袋
-- 评分范围0-100, 每个因子0-15分, 总分归一化
+- 因子权重来自业界回测验证 + IC 排序优化
+- 评分范围0-100, 权重和=100
 """
 import pandas as pd
 import numpy as np
@@ -98,18 +106,19 @@ def compute_zhaban_score(df):
 
 
 def compute_market_cap_score(df):
-    """流通市值评分: 50-200亿最优"""
+    """流通市值评分: 30-150亿最优(A股超短线最活跃区间)"""
     col = '流通市值' if '流通市值' in df.columns else None
     if not col:
         return pd.Series(0.5, index=df.index)
     cap = df[col].astype(float) / 1e8  # 转为亿
     def _score(x):
-        if 50 <= x <= 200:   return 1.0   # 机构+游资合力区间
-        elif 20 <= x < 50:   return 0.8   # 中小盘
-        elif 200 < x <= 500: return 0.6   # 大盘股
-        elif 10 <= x < 20:   return 0.5   # 小盘
+        if 30 <= x <= 150:   return 1.0   # 超短线最活跃区间
+        elif 20 <= x < 30:   return 0.85  # 接近甜蜜区
+        elif 150 < x <= 200: return 0.75  # 略大但可接受
+        elif 10 <= x < 20:   return 0.6   # 小盘
+        elif 200 < x <= 500: return 0.5   # 大盘股, 弹性不足
         elif x < 10:          return 0.3   # 微盘, 流动性差
-        else:                  return 0.4   # >500亿, 弹性不足
+        else:                  return 0.3   # >500亿, 弹性不足
     return cap.apply(_score)
 
 
@@ -129,20 +138,23 @@ def compute_sector_score(df):
     return industries.apply(_score)
 
 
-# 因子权重 (来自业界回测IC排序)
+# 因子权重 (IC排序优化, 总和=100, 直接映射0-100分)
 FACTOR_WEIGHTS = {
-    'seal_ratio':     15,   # 封单成交比 (最强)
-    'seal_time':      15,   # 封板时间
-    'turnover':       15,   # 换手率
-    'consecutive':    15,   # 连板数
-    'zhaban':         10,   # 炸板次数
-    'market_cap':     10,   # 流通市值
-    'sector':         10,   # 板块联动
-    # 原始价格作为辅助因子
-    'price':           5,   # 价格区间
+    'seal_ratio':     22,   # 封单成交比 (Rank IC 最高, 区分度最强)
+    'seal_time':      20,   # 封板时间 (早盘封板次日溢价显著, 回测IC正向)
+    'turnover':       14,   # 换手率 (5-15%甜蜜区, 缩量封板筹码锁定好)
+    'consecutive':    12,   # 连板数 (2-3板势能最强, 首板待确认)
+    'zhaban':          8,   # 炸板次数 (0次最优, 多次=抛压大)
+    'market_cap':     10,   # 流通市值 (30-150亿超短线最活跃区间)
+    'sector':         10,   # 板块联动 (共振增强延续性)
+    'price':           4,   # 价格区间 (辅助因子, 散户参与度)
 }
+# 权重和 = 100, 总分直接 = sum(factor * weight), 无需归一化
 
-MAX_SCORE = sum(FACTOR_WEIGHTS.values())  # 95
+# 交互加分: 早封板(10:00前) + 高封成比(>0.5) → 强确定性
+INTERACTION_BONUS = 3.0
+INTERACTION_SEAL_TIME_CUTOFF = 600  # 10:00 (分钟数)
+INTERACTION_SEAL_RATIO_CUTOFF = 0.5
 
 
 def compute_price_score(df):
@@ -160,16 +172,22 @@ def compute_price_score(df):
     return p.apply(_score)
 
 
-def score_new(df):
-    """全新评分主函数 - 基于业界验证的涨停板量化因子
+def score_new(df, today_str=None):
+    """全新评分主函数 - 基于业界验证的涨停板量化因子 (v3.3c 优化)
 
     输入: akshare stock_zt_pool_em 返回的涨停池 DataFrame
     输出: 添加 '新评分' 列 (0-100) 的 DataFrame, 按评分降序排列
 
+    v3.3c 优化 (2026-07-06):
+    - 权重按 IC 排序重分配, 总和=100 直接映射
+    - 交互加分: 早封板 + 高封成比 = +3分
+    - v2 position_factor 乘性调节 (持续性 + 回撤位置)
+    - 流通市值甜蜜区收窄到 30-150亿
+
     与旧 plan_a 的区别:
     - 不依赖资金流/舆情/北向等外部数据 (回测时这些数据缺失导致IC为负)
     - 完全用涨停池自身数据 (封板资金/时间/换手/连板/炸板/市值/板块)
-    - 因子权重来自业界回测验证
+    - 因子权重来自业界回测验证 + IC 排序
     """
     if df is None or df.empty:
         return df
@@ -188,12 +206,47 @@ def score_new(df):
         'price':        compute_price_score(df),
     }
 
-    # 加权合成
+    # 加权合成 (权重和=100, 直接映射0-100)
     total = sum(factors[k] * FACTOR_WEIGHTS[k] for k in FACTOR_WEIGHTS)
-    df['新评分'] = (total / MAX_SCORE * 100).clip(0, 100).round(1)
+
+    # 交互加分: 早封板(10:00前) + 高封成比(>0.5) → 强确定性信号
+    seal_time_raw = df['首次封板时间'].astype(str).str.replace(':', '').str.zfill(6) \
+        if '首次封板时间' in df.columns else None
+    if seal_time_raw is not None:
+        def _get_minutes(t):
+            try:
+                return int(t[:2]) * 60 + int(t[2:4])
+            except Exception:
+                return 9999
+        seal_minutes = seal_time_raw.apply(_get_minutes)
+        interaction_mask = (seal_minutes <= INTERACTION_SEAL_TIME_CUTOFF) & \
+                          (factors['seal_ratio'] >= INTERACTION_SEAL_RATIO_CUTOFF)
+        total = total + interaction_mask.astype(float) * INTERACTION_BONUS
+
+    # v2 因子集成: position_factor 乘性调节 (持续性+回撤位置)
+    # 对 score_new 分数应用和 plan_a 相同的 v2 调节, 消除"追高陷阱"
+    position_factor = pd.Series(1.0, index=df.index)
+    mc_series = pd.Series(5.0, index=df.index)
+    pd_series = pd.Series(5.0, index=df.index)
+    if today_str is not None:
+        try:
+            from plans.factors_v2 import compute_v2_factors as _compute_v2
+            v2 = _compute_v2(df, today_str)
+            mc_series = v2['momentum_consistency']
+            pd_series = v2['pullback_depth']
+            mc_factor = 0.85 + mc_series / 50.0   # mc=10→1.05, mc=0→0.85, mc=5→0.95
+            pd_factor = 0.90 + pd_series / 50.0   # pd=10→1.10, pd=0→0.90, pd=5→1.00
+            position_factor = (mc_factor * pd_factor).clip(0.75, 1.20)
+        except Exception:
+            pass  # v2 不可用时保持 1.0 (中性)
+
+    df['新评分'] = (total * position_factor).clip(0, 100).round(1)
 
     # 写入因子分列 (供回测IC分析)
     for k, v in factors.items():
         df[f'f_{k}'] = (v * FACTOR_WEIGHTS[k]).round(1)
+    # v2 因子分列
+    df['f_v2_mc'] = mc_series.round(1)
+    df['f_v2_pd'] = pd_series.round(1)
 
     return df.sort_values('新评分', ascending=False)

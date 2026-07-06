@@ -277,11 +277,33 @@ def main():
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
     s_principal = score_by_principal(filtered, 20000)
-    sector_merged_cli = (sector_res_scores + sector_raw) / 2.0
+    # v3.3c: 对齐 Web, 直接用 sector_mom (sector_res 已 DEPRECATED 合并到 sector_mom)
+    sector_for_scoring = sector_raw
 
     s_north_flow = pd.Series(5.0, index=filtered.index)
-    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_merged_cli, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
+    base_totals = weight_manager.apply_weights(seal_scores, money_scores, sector_for_scoring, tech_scores, s_history, sentiment_score=pd.Series(float(sentiment_score), index=filtered.index), stock_sentiment_scores=s_stock_sent, principal_scores=s_principal, weights=weights)
     total_scores = base_totals
+
+    # ── v3.3c: score_new 覆盖排名 (与 Web 排行榜对齐) ──
+    try:
+        from scoring.score_new import score_new as _score_new_fn
+        today_iso = f'{today_raw[:4]}-{today_raw[4:6]}-{today_raw[6:8]}'
+        scored_new = _score_new_fn(filtered, today_str=today_iso)
+        if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
+            new_score_map = {}
+            code_col = '代码' if '代码' in filtered.columns else filtered.columns[1]
+            for idx in scored_new.index:
+                code = str(filtered.loc[idx, code_col]).strip().zfill(6)
+                new_score_map[code] = float(scored_new.loc[idx, '新评分'])
+            # 用 score_new 分数覆盖 total_scores
+            for idx in filtered.index:
+                code = str(filtered.loc[idx, code_col]).strip().zfill(6)
+                if code in new_score_map:
+                    total_scores[idx] = new_score_map[code]
+            print(f"  [CLI] score_new 覆盖完成, 范围 {min(new_score_map.values()):.0f}-{max(new_score_map.values()):.0f}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [CLI] score_new 跳过: {e}", file=sys.stderr)
+
     top_indices = list(total_scores.sort_values(ascending=False).head(TOP_N).index)
     filtered_top = filtered.loc[top_indices]
 

@@ -59,12 +59,11 @@ _LOCAL_FALLBACK_ENABLED = True
 
 # ─── 回测准确度相关开关 (2026-07-05) ────────────────────────
 
-# ⛔️ 2026-07-06 修复: 关闭 score_new 覆盖, 回测与实盘走同一套 plan_a 评分
-# score_new 在回测中表现好但生产环境用 plan_a + v2硬过滤,
-# 回测必须反映实盘的评分逻辑才有效。之前 True 导致:
-#   - 回测验证 score_new 而非 plan_a → 结果对实盘零参考价值
-#   - 自动调权系统调整 plan_a 权重但回测用 score_new → 调的方向是错的
-_BACKTEST_USE_SCORE_NEW = False
+# ✅ 2026-07-06 修复 v2: 回测与实盘统一用 score_new 排名
+# plan_a.score() 在生产中会用 score_new 覆盖 total_score (见 plans/plan_a.py:398-422),
+# 回测必须同样使用 score_new 排名, 否则回测验证的是 plan_a 但用户交易的是 score_new。
+# plan_a 因子分列保留供 IC 分析和自动调权 (调的是 plan_a 权重, score_new 是独立覆盖层)。
+_BACKTEST_USE_SCORE_NEW = True
 
 # 是否填仓: 当 top_n 中部分股票一字板买不到时,
 # True  = 沿评分列表向下继续扫描, 凑满 top_n 只买入
@@ -818,7 +817,7 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
         if flags and idx in filtered.index:
             filtered.loc[idx, '_danger'] = ','.join(flags)
 
-    # ── IC 分析: 存储各因子原始分 (回测引擎用 f_ 前缀捕获) ──
+    # ── IC 分析: 存储 plan_a 各因子原始分 (回测引擎用 f_ 前缀捕获) ──
     _FACTOR_IC_COLS = {
         'seal': 'f_seal', 'money': 'f_money',
         'sector_mom': 'f_sector', 'tech': 'f_tech',
@@ -832,10 +831,35 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
             filtered[col_name] = factors[fk].reindex(filtered.index, fill_value=0.0).round(1)
     filtered['f_history'] = history_scores.reindex(filtered.index, fill_value=2.5).round(1)
 
-    # ⛔️ 2026-07-06 修复: 已删除 score_new 覆盖块 (回测与实盘统一用 plan_a)
+    # ── v3.3c: score_new 评分 (与生产排行榜一致) ──
+    # score_new 使用涨停池自身数据 (封板/时间/换手/连板/炸板/市值/板块),
+    # 不依赖外部数据, 回测和生产天然对齐。权重和=100, 直接映射 0-100 分。
+    if _BACKTEST_USE_SCORE_NEW:
+        try:
+            from scoring.score_new import score_new as _score_new_fn
+            import sys as _sys
+            today_iso = f'{today_fmt[:4]}-{today_fmt[4:6]}-{today_fmt[6:8]}'
+            scored_new = _score_new_fn(filtered, today_str=today_iso)
+            if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
+                # 将 score_new 的评分列和因子分列合并到 filtered
+                filtered['新评分'] = scored_new['新评分'].reindex(filtered.index, fill_value=50.0).round(1)
+                # score_new 因子分列 (供 IC 分析)
+                for col in scored_new.columns:
+                    if col.startswith('f_') and col not in filtered.columns:
+                        filtered[col] = scored_new[col].reindex(filtered.index, fill_value=0.0).round(1)
+                n_scored = len(filtered)
+                print(f"  [score_new/回测] {n_scored} 票完成评分, "
+                      f"范围 {filtered['新评分'].min():.0f}-{filtered['新评分'].max():.0f}",
+                      file=_sys.stderr)
+        except Exception as e:
+            print(f"  [score_new/回测] 跳过: {e}", file=_sys.stderr)
+            # fallback: 用 plan_a 总分
+            filtered['新评分'] = filtered['plan_a总分']
 
-    # ── P5 修复: v2 硬过滤 (与生产环境 app.py 一致) ──
+    # ── v2 硬过滤 (与生产环境 app.py 一致) ──
     # 对评分后的 stocks 应用换手率/封板时间/行业/连板数等硬规则过滤
+    # 使用 score_new 的 新评分 做排序 (如果可用)
+    _rank_col = '新评分' if '新评分' in filtered.columns else 'plan_a总分'
     try:
         from config import ENABLE_V2_HARD_FILTER
         if ENABLE_V2_HARD_FILTER and len(filtered) > 0:
@@ -848,7 +872,7 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
                 _stocks_list.append({
                     'code': str(_r.get('代码', '')).strip().zfill(6),
                     'name': str(_r.get('名称', '')),
-                    'total_score': float(_r.get('plan_a总分', 0)),
+                    'total_score': float(_r.get(_rank_col, 0)),
                 })
             _filtered_stocks, _used_scheme = apply_v2_with_fallback(
                 _stocks_list, filtered, top_n=len(_stocks_list), tier_min=1)
@@ -862,7 +886,7 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
     except Exception as e:
         print(f"  [v2 硬过滤/回测] 跳过: {e}", file=sys.stderr)
 
-    return filtered  # 含 'plan_a总分' 列
+    return filtered  # 含 '新评分' + 'plan_a总分' 列
 
 
 def _score_zhaban(df: pd.DataFrame, date_str: str):
@@ -999,7 +1023,7 @@ SCORE_FUNCS = {
 
 # 各 tab 的评分列名
 SCORE_COLUMNS = {
-    TAB_LIMIT_UP: 'plan_a总分',  # P3.1: 改用 plan_a 9因子, 与前端一致
+    TAB_LIMIT_UP: '新评分',    # v3.3c: 统一用 score_new 排名, 与生产排行榜一致
     TAB_REVERSAL: '反转评分',
     TAB_ZHABAN: '总分',         # score_zhaban_data 输出
     TAB_DTQIAOBAN: '翘板评分',
@@ -1557,9 +1581,12 @@ def run_tab_backtest(
                         if val is not None:
                             rec[fk] = round(float(val), 1)
                     # IC 因子分列 (f_ 前缀, 用于 Information Coefficient 分析)
+                    # plan_a 因子 + score_new 因子 + v2 因子
                     for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
                                'f_stock_sentiment','f_principal','f_north_flow',
-                               'f_v2_mc','f_v2_pd']:
+                               'f_v2_mc','f_v2_pd',
+                               'f_seal_ratio','f_seal_time','f_turnover','f_consecutive',
+                               'f_zhaban','f_market_cap','f_sector','f_price']:
                         val = row.get(fk)
                         if val is not None:
                             rec[fk] = round(float(val), 1)

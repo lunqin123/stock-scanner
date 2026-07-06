@@ -1,47 +1,61 @@
 {
-  "version": "2.1.0",
-  "date": "2026-07-05",
+  "version": "3.3c",
+  "date": "2026-07-06",
   "changes": [
-    "重大: 全 tab IC 驱动权重重调 (60天回测因子相关性分析): 5 tab 全部基于 IC 数据重新加权",
-    "重大: 涨停权重重调: tech 10→22(IC+0.49提权), seal 20→12(sector 25→10, 负IC降权)",
-    "重大: 翘板权重重调: turnover 15→30(IC+0.56提权, 回测盈+38%!)",
-    "重大: 炸板权重重调: seal 5→15(IC+0.20正相关, 提权), money 5→0(负IC)",
-    "修复: 趋势权重保守调整: vol_ratio 5→12(IC+0.57), chg/turnover/amount 略降权",
-    "修复: 反转权重保守调整: consecutive 30→35(IC+0.42), pullback/sector 略降权",
-    "修复: 回测引擎 archive OHLCV 卖出价 (三个日期分别查 archive.db 而非共用一个信号日 OHLCV)",
-    "修复: 回测引擎 score_new 默认关闭 (回退到 plan_a, 回测评分与生产环境一致)",
-    "新增: 回测引擎 fill_slots 填仓模式 (可选凑满 top_n, CLI --fill-slots)",
-    "新增: 回测引擎 IC 因子分析 (_compute_factor_ics, 支持全部 5 tab 因子 IC 输出)",
-    "新增: 回测引擎 CLI 输出因子 IC (按 |r| 排序显示)",
-    "修复: 禁用 score_new 默认覆盖 (回测评分 = 生产评分)"
+    "重大: score_new 权重重分配 (IC排序): seal_ratio 15→22, seal_time 15→20, 权重和=100",
+    "重大: 回测引擎统一用 score_new 排名 (与生产排行榜一致, _BACKTEST_USE_SCORE_NEW=True)",
+    "重大: score_new 新增 v2 position_factor 集成 (持续性+回撤位置乘性调节)",
+    "新增: score_new 交互加分 (早封板10:00前+高封成比>0.5 = +3分)",
+    "新增: score_new 流通市值甜蜜区收窄 (50-200亿→30-150亿, 超短线最活跃区间)",
+    "修复: CLI 板块评分对齐 Web (废弃 sector_res/sector_mom 平均, 直接用 sector_mom)",
+    "修复: CLI 叠加 score_new 覆盖排名 (与 Web 排行榜一致)",
+    "修复: plan_a 传入 today_str 给 score_new 启用 v2 因子 (生产与回测对齐)",
+    "缓存: _CACHE_VER 11→12, _RAW_CACHE_VERSION 9→10, _CARDS_CACHE_VER 3→4"
   ],
   "history": [
+    {
+      "version": "2.1.0",
+      "date": "2026-07-05",
+      "changes": [
+        "重大: 全 tab IC 驱动权重重调 (60天回测因子相关性分析): 5 tab 全部基于 IC 数据重新加权",
+        "重大: 涨停权重重调: tech 10→22(IC+0.49提权), seal 20→12(sector 25→10, 负IC降权)",
+        "重大: 翘板权重重调: turnover 15→30(IC+0.56提权, 回测盈+38%!)",
+        "重大: 炸板权重重调: seal 5→15(IC+0.20正相关, 提权), money 5→0(负IC)",
+        "修复: 趋势权重保守调整: vol_ratio 5→12(IC+0.57), chg/turnover/amount 略降权",
+        "修复: 反转权重保守调整: consecutive 30→35(IC+0.42), pullback/sector 略降权",
+        "修复: 回测引擎 archive OHLCV 卖出价 (三个日期分别查 archive.db 而非共用一个信号日 OHLCV)",
+        "修复: 回测引擎 score_new 默认关闭 (回退到 plan_a, 回测评分与生产环境一致)",
+        "新增: 回测引擎 fill_slots 填仓模式 (可选凑满 top_n, CLI --fill-slots)",
+        "新增: 回测引擎 IC 因子分析 (_compute_factor_ics, 支持全部 5 tab 因子 IC 输出)",
+        "修复: 禁用 score_new 默认覆盖 (回测评分 = 生产评分)"
+      ]
+    },
     {
       "version": "1.22.0",
       "date": "2026-06-06",
       "changes": [
-        "📊 趋势扫描数据驱动重构: 回测发现低涨幅(2-4%)+中换手(5-15%)是唯一正收益组合",
-        "📊 炸板分析评分优化: 封板资金降权(回测负相关), sealTime+换手为主",
-        "⚡ 批量历史缓存: archive.db stock_daily表, ThreadPoolExecutor(8线程), 首次7分后续<3秒",
-        "✅ 全模块回测验证通过: 涨停+2.1%/反转+1.7%/趋势+2.0%/炸板+1.3% A/E差",
-        "🗑️ 彻底移除localStorage缓存: 弊大于利，刷新永远拉最新数据",
-        "🔧 JS版本号改为服务器启动时间戳，彻底杜绝浏览器缓存",
-        "🔧 拉取数据不再强跳到涨停扫描页",
-        "🔧 _CACHE_VER → _RAW_CACHE_VERSION 同步更新",
-        "🎨 趋势卡片显示评分(涨幅|分数)，反转卡片独立渲染"
+        "趋势扫描数据驱动重构: 回测发现低涨幅(2-4%)+中换手(5-15%)是唯一正收益组合",
+        "炸板分析评分优化: 封板资金降权(回测负相关), sealTime+换手为主",
+        "批量历史缓存: archive.db stock_daily表, ThreadPoolExecutor(8线程), 首次7分后续<3秒",
+        "全模块回测验证通过: 涨停+2.1%/反转+1.7%/趋势+2.0%/炸板+1.3% A/E差",
+        "彻底移除localStorage缓存: 弊大于利，刷新永远拉最新数据",
+        "JS版本号改为服务器启动时间戳，彻底杜绝浏览器缓存",
+        "拉取数据不再强跳到涨停扫描页",
+        "_CACHE_VER → _RAW_CACHE_VERSION 同步更新",
+        "趋势卡片显示评分(涨幅|分数)，反转卡片独立渲染"
       ]
     },
     {
       "version": "1.21.0",
       "date": "2026-06-05",
       "changes": [
-        "🔄 新增反转扫描：昨涨停今回调→明日反包潜力，回测验证A档反转率13.8%(A/E=2.7x)",
-        "📦 每日数据归档系统(SQLite): 盘后自动存储涨停+趋势+次日验证，积累30天后可完整回测",
-        "📊 评分重构(数据驱动): seal 16→22 + 黄金封板奖励，sector双因子合并，tech简化为换手率评级",
-        "📊 principal增强区分度(2→6): 5档分级+流动性底线惩罚",
-        "🎨 涨跌幅红涨绿跌灰平配色 + fmtPct()防+-0.9%显示bug",
-        "🔧 回测系统修复: seal代理未触发/tech负相关/报告100分制",
-        "🔧 趋势扫描刷新vs运行排行榜一致的终极修复(统一数据源+stderr保护)"
+        "新增反转扫描：昨涨停今回调→明日反包潜力，回测验证A档反转率13.8%(A/E=2.7x)",
+        "每日数据归档系统(SQLite): 盘后自动存储涨停+趋势+次日验证，积累30天后可完整回测",
+        "评分重构(数据驱动): seal 16→22 + 黄金封板奖励，sector双因子合并，tech简化为换手率评级",
+        "principal增强区分度(2→6): 5档分级+流动性底线惩罚",
+        "涨跌幅红涨绿跌灰平配色 + fmtPct()防+-0.9%显示bug",
+        "回测系统修复: seal代理未触发/tech负相关/报告100分制",
+        "趋势扫描刷新vs运行排行榜一致的终极修复(统一数据源+stderr保护)"
       ]
     },
     {

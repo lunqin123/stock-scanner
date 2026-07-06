@@ -397,9 +397,10 @@ def score(inputs: dict, max_n: int = None, use_v2: bool = True) -> dict:
 
     # v3.1: 叠加 score_new 评分 (涨停板专用因子: 封单/时间/换手/连板/炸板/市值/板块/价格)
     # 回测验证: 42笔 83%WR +252%累计 ✅ 远优于 plan_a 原生评分
+    # v3.3c: 传入 today_str 使 score_new 内部应用 v2 position_factor, 与回测对齐
     try:
         from scoring.score_new import score_new as _score_new_fn
-        scored_new_df = _score_new_fn(filtered)
+        scored_new_df = _score_new_fn(filtered, today_str=today_str)
         if scored_new_df is not None and not scored_new_df.empty and '新评分' in scored_new_df.columns:
             new_scores = scored_new_df['新评分']
             # 更新 stocks 中的 total_score
