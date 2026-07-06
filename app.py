@@ -1644,7 +1644,7 @@ def api_backtest_tab(tab: str = FastAPIPath(..., pattern=r"^(limit-up|trend|zhab
     注: 端点改为 /api/bt/{tab} 避开与 /api/backtest/{保留词} 冲突
     """
     try:
-        result = run_tab_backtest_auto(tab=tab, max_days=days, top_n=top_n, capital=capital)
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, capital=capital)
         return {
             "ok": True,
             "tab": tab,
@@ -1736,7 +1736,7 @@ def api_backtest_tab_full(tab: str,
                 break
 
     try:
-        result = run_tab_backtest_auto(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
                                         capital=capital, use_cache=not force, strategy=strategy)
 
         # 因子权重 + 调权历史
