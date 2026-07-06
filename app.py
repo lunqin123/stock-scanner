@@ -560,7 +560,7 @@ TAB_DEFAULT_BT_PARAMS = {
     'limit-up':   {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
     'trend':      {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
     'reversal':   {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},
-    'zhaban':     {'min_score': 65, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # v3.3h: 提分过滤劣质+短持防回吐
+    'zhaban':     {'min_score': 65, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # v3.3i: 开盘买等确认, 隔夜崩>3%跳过
     'dtqiaoban':  {'min_score': 50, 'sell_n': 3, 'capital': 30000, 'strategy': None},  # 唯一STABLE盈利: 87笔49%+11782, sn=3胜率优于sn=2
 }
 

@@ -26,11 +26,11 @@ const _BT_DAYS = 15;  // 本地 engine 缓存有15-19天数据, 用15天覆盖�
 //   close策略(limit-up/zhaban): T日尾盘买→T+1开盘卖, sell_n参数无效(恒为1)
 //   open策略(trend/reversal/dtqiaoban): T+1开盘买→T+N开盘卖, sell_n有效
 var _TAB_BUY_MODE = {
-    'limit-up': 'close', 'zhaban': 'close',
+    'limit-up': 'close', 'zhaban': 'open',    // v3.3i: 等次日确认不接飞刀
     'trend': 'open', 'reversal': 'open', 'dtqiaoban': 'open',
 };
 var _TAB_DEFAULT_SELL_N = {
-    'trend': 3, 'limit-up': 1, 'zhaban': 1, 'reversal': 3, 'dtqiaoban': 3,
+    'trend': 3, 'limit-up': 1, 'zhaban': 3, 'reversal': 3, 'dtqiaoban': 3,  // v3.3i: zhaban开盘买→T+3
 };
 var _TAB_DEFAULT_MIN_SCORE = {
     'trend': 50, 'limit-up': 50, 'zhaban': 65, 'reversal': 50, 'dtqiaoban': 50,

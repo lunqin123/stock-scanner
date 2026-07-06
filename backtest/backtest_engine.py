@@ -112,7 +112,7 @@ _TAB_BUY_TIME = {
     TAB_LIMIT_UP: 'close',
     TAB_DTQIAOBAN: 'open',
     TAB_TREND: 'open',
-    TAB_ZHABAN: 'close',
+    TAB_ZHABAN: 'open',    # v3.3i: 等次日确认, 不接飞刀
     TAB_REVERSAL: 'open',
     TAB_SECTOR: 'open',
 }
@@ -1512,6 +1512,15 @@ def run_tab_backtest(
                 _gap_medium_threshold = 5.0  # 5% 以上跳空不能按开盘价买入
                 is_gap_medium = (not is_normalized) and (gap_pct > _gap_medium_threshold) and not limit_open
                 buyable = not limit_open
+                # v3.3i: 炸板隔夜确认 — 次日开盘崩>3%不买(飞刀还在掉)
+                if tab == TAB_ZHABAN and buyable and not is_normalized:
+                    if gap_pct < -3.0:
+                        buyable = False
+                        skipped.append({'signal': d_signal, 'reason': f'{name} 炸板隔夜崩{gap_pct:+.1f}%, 不接飞刀'})
+                        continue
+                    elif gap_pct < -1.0:
+                        # 微跌开盘: 能买到但用实际开盘价(偏低价买入=更好的入场)
+                        pass  # buyable stays True, buy at open
                 if not buyable:
                     unbuyable_count += 1
                     skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>=9.5%一字板'})
