@@ -15,8 +15,9 @@ from config import CACHE_DIR as _CACHE_DIR, CACHE_TTL as _CACHE_TTL
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
 # BUG-6 修复: v8→v9 同步 P0/P1/P2 评分逻辑大改 — 旧 daily 缓存里的 total_score/base_score
 # 仍是旧公式算的, 不 bump 的话用户看到的是旧分 (新代码已生效但缓存命中)
-_CACHE_VER = 10  # v9→v10: v2 硬过滤上线 (S15-prime 双档 fallback, plan_a.score max_n=20)
-# 旧 daily 缓存里的 stocks 是 plan_a 10 票原结果, 不经过 v2 过滤; 不 bump 的话用户切回 limit-up tab 会看到旧排序
+_CACHE_VER = 11  # v10→v11: v3.3 权重重置为默认值, 旧 daily 缓存评分无效
+# 旧 daily 缓存里的 total_score 是用 seal=9.2/money=0.4 等退化权重算的,
+# 恢复 seal=28/money=17 默认权重后, 旧缓存评分与当前评分不一致, 必须 bump
 
 # ─── 2小时短期缓存（避免重复拉取慢 API） ───
 

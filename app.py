@@ -109,8 +109,8 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 8  # v7→v8: v2 硬过滤上线 (S15-prime 双档 fallback, plan_a.score max_n=20)
-# 旧 raw_scan_data.pkl 里的 filtered 是 plan_a 10 票结果, 不够 v2 20 票过滤用, 不 bump 会用旧 df 过滤出错的子集
+_RAW_CACHE_VERSION = 9  # v8→v9: v3.3 权重重置为默认值, 旧 raw_scan_data.pkl 评分无效
+# 旧 raw_scan_data.pkl 里的 factor scores 是 seal=9.2/money=0.4 等退化权重算的, 不 bump 重跑评分仍然用旧权重结果
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
 
@@ -517,7 +517,7 @@ def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
     return data, False, None
 
 
-_CARDS_CACHE_VER = 2
+_CARDS_CACHE_VER = 3  # v2→v3: v3.3 权重重置为默认值, 旧卡片缓存评分无效
 
 @app.get("/api/scan/limit-up/cards")
 
