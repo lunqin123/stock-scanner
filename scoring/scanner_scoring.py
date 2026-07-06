@@ -24,28 +24,23 @@ from scanner_data import fetch_fund_flow_data
 
 def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
                       fund_df: pd.DataFrame = None) -> pd.DataFrame:
-    """炸板反包评分 (P5: 5因子可调权, v3.3d 优化)。
+    """炸板反包评分 (v3.3g 重构): 板块驱动+封板质量+资金承接
 
-    支持传入历史存档的 fund_df（回测引擎从 archive 加载），
-    避免回测时使用实时资金流数据产生未来偏差。
-
-    v3.3d 优化: 权重从 IC-extreme (feature=35/turnover=35) 回退到平衡版,
-    因为 IC 极端权重在实盘回测中恶化 (亏损加大)。新权重基于逻辑推理:
-      - seal (封板质量): 25 — 封得好的票反包概率大 (炸板是意外, 不是本质弱)
-      - money (资金承接): 20 — 资金流入的票有承接盘
-      - feature (炸板特征): 20 — 中等换手+无极端 = 健康分歧
-      - turnover (换手评分): 20 — 适中换手有利反包
-      - sector (板块热度): 15 — 板块热+封板率高 → 板块支撑反包
-    v3.3d 新增: v2 position_factor (过滤一日游, 偏好持续活跃的票)
+    反包核心逻辑 (A股实证):
+      1. 板块还在涨 → 炸板票跟着回封 (板块是最强驱动力)
+      2. 早盘封板被炸 → 买盘强, 被暂时压制的需求会反扑
+      3. 大资金封板被吃 → 主力深度介入, 会护盘
+      4. 1次干净炸板 → 健康分歧; 多次炸板 → 持续抛压
+      5. 适中换手 (8-20%) → 分歧充分; 极端换手 → 恐慌或冷清
     """
     df = df.copy()
 
-    # v3.3d 平衡权重 (total=100, 直接映射)
-    defaults = {'seal': 25, 'money': 20, 'feature': 20, 'turnover': 20, 'sector': 15}
+    # v3.3g 权重: 板块提权(反包最强驱动), feature/turnover合并避免重复
+    defaults = {'seal': 30, 'money': 20, 'feature': 12, 'turnover': 8, 'sector': 30}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
-    max_raw = sum(w.values())  # 用实际权重和归一化，防止权重膨胀导致分数溢出
+    max_raw = sum(w.values())
 
     seal_time_col = '首次封板时间' if '首次封板时间' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
     seal_fund_col = '封板资金' if '封板资金' in df.columns else (df.columns[14] if len(df.columns) > 14 else None)
@@ -53,19 +48,30 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
     industry_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
 
-    # 1. 封板质量 (0-20)
+    # 1. 封板质量 (0-30): 时间(12) + 资金绝对额(10) + 炸板次数(8)
     seal_scores = pd.Series(0.0, index=df.index)
-    seal_scores += df[seal_time_col].apply(seal_time_score)
+    seal_scores += df[seal_time_col].apply(seal_time_score)  # 0-12, 早封板=买盘强
     fund_vals = df[seal_fund_col].fillna(0).astype(float)
-    max_fund = fund_vals.max()
-    if max_fund > 0: seal_scores += (fund_vals / max_fund) * 5
-    else: seal_scores += 3
+    # v3.3g: 封板资金绝对分档 (不用max归一化, 防止一只大票压制全池)
+    for idx in df.index:
+        fv = fund_vals[idx]
+        if fv > 2e8:    seal_scores[idx] += 10
+        elif fv > 1e8:  seal_scores[idx] += 8
+        elif fv > 5e7:  seal_scores[idx] += 6
+        elif fv > 2e7:  seal_scores[idx] += 4
+        elif fv > 5e6:  seal_scores[idx] += 2
+        else:           seal_scores[idx] += 1
     zb_times = df[zhaban_count_col].fillna(0).astype(float)
-    seal_scores += np.clip(1.0 - zb_times / 8.0, 0, 1) * 5
-    f_seal = (seal_scores / 20).clip(0, 1)
+    # v3.3g: 炸板次数评分优化 — 1次干净炸板=好, 2次=可接受, 3次+=差
+    for idx in df.index:
+        z = int(zb_times[idx])
+        if z == 1:    seal_scores[idx] += 8
+        elif z == 2:  seal_scores[idx] += 5
+        elif z == 3:  seal_scores[idx] += 2
+        else:         seal_scores[idx] += 0
+    f_seal = (seal_scores / 30).clip(0, 1)
 
     # 2. 资金承接 (0-20)
-    # 优先用传入的历史 fund_df（回测时由引擎加载存档），避免未来数据偏差
     if fund_df is not None:
         fund_df_zb = fund_df
     else:
@@ -74,26 +80,33 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     if fund_df_zb is not None:
         money_scores, raw_money = get_money_flow_scores(df, fund_df=fund_df_zb)
     else:
-        money_scores = np.clip(fund_vals / (fund_vals.max() + 1), 0, 1) * 10
+        money_scores = pd.Series(5.0, index=df.index)  # 无数据给中性
         raw_money = fund_vals
     f_money = (money_scores / 20).clip(0, 1)
 
-    # 3. 炸板特征 (0-15)
+    # 3. 炸板特征 (0-12): 换手+炸板次数综合
     turnover_vals = df[turnover_col].fillna(0).astype(float)
-    feature = pd.Series(7.5, index=df.index)
-    feature = feature + ((turnover_vals >= 10) & (turnover_vals <= 25)) * 5 + \
-        (((turnover_vals >= 5) & (turnover_vals <= 30)) & ~((turnover_vals >= 10) & (turnover_vals <= 25))) * 2 - \
-        (turnover_vals > 40) * 3
-    f_feature = (feature.clip(0, 15) / 15)
+    feature = pd.Series(6.0, index=df.index)  # 基础分
+    # 换手适中(10-25%)+炸板1次 = 健康分歧 → 加分
+    # 换手极端(>40%)或多次炸板 = 恐慌 → 扣分
+    for idx in df.index:
+        t = turnover_vals[idx]
+        z = int(zb_times[idx]) if pd.notna(zb_times[idx]) else 1
+        if 10 <= t <= 25 and z <= 2:   feature[idx] = 12.0
+        elif 8 <= t <= 30 and z <= 2:  feature[idx] = 9.0
+        elif 5 <= t <= 35:             feature[idx] = 6.0
+        elif t > 40 or z >= 4:         feature[idx] = 2.0
+        else:                          feature[idx] = 4.0
+    f_feature = (feature.clip(0, 12) / 12)
 
-    # 4. 换手率 (0-10)
-    turn_scores = pd.Series(5.0, index=df.index)
-    turn_scores = np.where((turnover_vals >= 8) & (turnover_vals <= 20), 10.0,
-        np.where((turnover_vals >= 5) & (turnover_vals <= 30), 7.0,
-        np.where(turnover_vals <= 3, 3.0, np.where(turnover_vals > 40, 2.0, 5.0))))
-    f_turn = (turn_scores / 10).clip(0, 1)
+    # 4. 换手率 (0-8): 适中换手有利反包
+    turn_scores = pd.Series(4.0, index=df.index)
+    turn_scores = np.where((turnover_vals >= 8) & (turnover_vals <= 20), 8.0,
+        np.where((turnover_vals >= 5) & (turnover_vals <= 25), 6.0,
+        np.where(turnover_vals <= 3, 1.0, np.where(turnover_vals > 40, 1.0, 4.0))))
+    f_turn = (turn_scores / 8).clip(0, 1)
 
-    # 5. 板块热度 (0-12)
+    # 5. 板块热度 (0-30): v3.3g 核心因子 — 板块是反包最强驱动
     try:
         limit_pool = ak.stock_zt_pool_em(date=today_str)
         if not limit_pool.empty:
@@ -101,12 +114,22 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
             counts = limit_pool[ind_col_l].value_counts()
             industries = df[industry_col] if industry_col in df.columns else df.iloc[:, 15]
             industry_counts = industries.map(counts).fillna(0)
-            sector_raw = (4 + industry_counts * 2).clip(upper=12)
+            # v3.3g: 板块涨停数分档更细, 3只起板即有较强支撑
+            sector_raw = pd.Series(0.0, index=df.index)
+            for idx in df.index:
+                cnt = int(industry_counts[idx])
+                if cnt >= 8:    sector_raw[idx] = 30
+                elif cnt >= 5:  sector_raw[idx] = 26
+                elif cnt >= 4:  sector_raw[idx] = 22
+                elif cnt >= 3:  sector_raw[idx] = 18
+                elif cnt >= 2:  sector_raw[idx] = 12
+                elif cnt >= 1:  sector_raw[idx] = 6
+                else:           sector_raw[idx] = 2
         else:
             sector_raw = get_sector_heat_scores(df, money_series=raw_money)
     except Exception:
         sector_raw = get_sector_heat_scores(df, money_series=raw_money)
-    f_sector = (sector_raw / 12).clip(0, 1)
+    f_sector = (sector_raw / 30).clip(0, 1)
 
     total = (f_seal * w['seal'] + f_money * w['money'] + f_feature * w['feature'] +
              f_turn * w['turnover'] + f_sector * w['sector'])
