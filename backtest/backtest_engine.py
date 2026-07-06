@@ -124,8 +124,8 @@ _PENDING_TABS = set()  # 全部实现
 # 这些 tab 的 score_fn 自行拉数据 (不依赖 fetcher 返回的 pool)
 _SELF_FETCHING_TABS = {TAB_SECTOR}
 # P1.2.1: OHLCV 批量缓存进程级开关 (默认禁用,服务器环境东方财富 spot 接口不稳定)
-# 本地高性能环境可在导入后手动设 backtest_engine._SPOT_DISABLED = False 启用
-_SPOT_DISABLED = True
+# v3.3i: 启用以获取真实OHLCV数据
+_SPOT_DISABLED = False
 
 # P1.3: 自动检测本地归档可用天数 (不再硬编码 7)
 # 每个 tab 的 pool_type 对应 archive_pools/ 中的 pickle 文件名前缀
@@ -1464,17 +1464,19 @@ def run_tab_backtest(
                     }.get(tab, 'limit_up')
                     if not signal_ohlcv:
                         signal_ohlcv = _try_archive_db_ohlcv(code, d_signal, stock_type_for_arch)
-                    if not buy_ohlcv:
-                        # v3.3i: 不再用 signal_ohlcv 兜底(会导致买卖同价假交易)
+                    # v3.3i: 炸板/翘板不用 archive 兜底 — limit_up 记录的价格是涨停价,
+                    # 但炸板票实际收盘远低于涨停价, archive 构造的 OHLCV 买价虚高
+                    _skip_archive = tab in (TAB_ZHABAN, TAB_DTQIAOBAN)
+                    if not buy_ohlcv and not _skip_archive:
                         buy_arch = _try_archive_db_ohlcv(code, d_buy, stock_type_for_arch)
                         if buy_arch is not None:
                             buy_ohlcv = dict(buy_arch)
                             buy_ohlcv['_fallback'] = 'archive_buy'
-                    if not sell_ohlcv:
+                    if not sell_ohlcv and not _skip_archive:
                         sell_arch = _try_archive_db_ohlcv(code, d_sell, stock_type_for_arch)
                         if sell_arch is not None:
                             sell_ohlcv = dict(sell_arch)
-                            sell_ohlcv['_sell_open'] = sell_arch.get('prev_close', sell_arch['open'])
+                            sell_ohlcv['_sell_open'] = sell_arch.get('close', sell_arch['open'])
                             sell_ohlcv['_fallback'] = 'archive_sell'
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
                     missing = []
