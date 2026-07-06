@@ -59,11 +59,12 @@ _LOCAL_FALLBACK_ENABLED = True
 
 # ─── 回测准确度相关开关 (2026-07-05) ────────────────────────
 
-# score_new 是涨停板专用评分 (封单/时间/换手/连板/炸板/市值/板块/价格)
-# 与尾盘买策略组合: 42笔 83%WR +252%累计 +75K PnL ✅
-# plan_a 是通用评分 (依赖资金流/舆情等, 回测不可靠)
-# True=用score_new排序 (推荐, 回测已验证)
-_BACKTEST_USE_SCORE_NEW = True
+# ⛔️ 2026-07-06 修复: 关闭 score_new 覆盖, 回测与实盘走同一套 plan_a 评分
+# score_new 在回测中表现好但生产环境用 plan_a + v2硬过滤,
+# 回测必须反映实盘的评分逻辑才有效。之前 True 导致:
+#   - 回测验证 score_new 而非 plan_a → 结果对实盘零参考价值
+#   - 自动调权系统调整 plan_a 权重但回测用 score_new → 调的方向是错的
+_BACKTEST_USE_SCORE_NEW = False
 
 # 是否填仓: 当 top_n 中部分股票一字板买不到时,
 # True  = 沿评分列表向下继续扫描, 凑满 top_n 只买入
@@ -726,7 +727,27 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
     if scoring_base.empty:
         return None
 
-    filtered = scoring_base.copy()  # 回测等权买入, 不做本金过滤
+    filtered = scoring_base.copy()
+
+    # ── P4 修复: 本金过滤 (与实盘 _principal_filter 一致, 至少买 2 手) ──
+    try:
+        from scanner import _dynamic_positions
+        _n_positions = _dynamic_positions(principal)
+        _position_size = principal / _n_positions
+        _price_col = '最新价' if '最新价' in filtered.columns else (filtered.columns[4] if len(filtered.columns) > 4 else filtered.columns[3])
+        _mask = pd.Series(True, index=filtered.index)
+        for _idx in filtered.index:
+            _p = float(filtered.loc[_idx, _price_col])
+            if _position_size / (_p * 100) < 2:
+                _mask[_idx] = False
+        _excluded = (~_mask).sum()
+        if _excluded > 0:
+            print(f"  [PlanA/回测] 本金过滤排除 {_excluded} 只 (本金{principal}买不了2手)", file=sys.stderr)
+        filtered = filtered[_mask]
+    except Exception:
+        pass
+    if filtered.empty:
+        return None
 
     # 2. plan_a 因子计算 (在 scoring_base 上归一化, 与前端一致)
     from plans.plan_a import compute_factors, apply_scores
@@ -811,17 +832,35 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
             filtered[col_name] = factors[fk].reindex(filtered.index, fill_value=0.0).round(1)
     filtered['f_history'] = history_scores.reindex(filtered.index, fill_value=2.5).round(1)
 
-    # 2026-07-05: 叠加新评分, 仅在 _BACKTEST_USE_SCORE_NEW=True 时启用
-    # 默认关闭: score_new 权重未在本系统数据上验证, 且生产环境不用它。
-    if _BACKTEST_USE_SCORE_NEW:
-        try:
-            from scoring.score_new import score_new as _score_new_fn
-            scored_new = _score_new_fn(filtered)
-            if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
-                filtered = scored_new
-                filtered['plan_a总分'] = filtered['新评分']
-        except Exception as e:
-            print(f"  [新评分] 跳过: {e}", file=sys.stderr)
+    # ⛔️ 2026-07-06 修复: 已删除 score_new 覆盖块 (回测与实盘统一用 plan_a)
+
+    # ── P5 修复: v2 硬过滤 (与生产环境 app.py 一致) ──
+    # 对评分后的 stocks 应用换手率/封板时间/行业/连板数等硬规则过滤
+    try:
+        from config import ENABLE_V2_HARD_FILTER
+        if ENABLE_V2_HARD_FILTER and len(filtered) > 0:
+            from strategy_filters_v2 import apply_v2_with_fallback
+            _stocks_list = []
+            _code_col = '代码' if '代码' in filtered.columns else filtered.columns[1]
+            _name_col = '名称' if '名称' in filtered.columns else filtered.columns[2]
+            for _idx in filtered.index:
+                _r = filtered.loc[_idx]
+                _stocks_list.append({
+                    'code': str(_r.get('代码', '')).strip().zfill(6),
+                    'name': str(_r.get('名称', '')),
+                    'total_score': float(_r.get('plan_a总分', 0)),
+                })
+            _filtered_stocks, _used_scheme = apply_v2_with_fallback(
+                _stocks_list, filtered, top_n=len(_stocks_list), tier_min=1)
+            if _filtered_stocks:
+                _valid_codes = set(s['code'] for s in _filtered_stocks)
+                _before = len(filtered)
+                filtered = filtered[filtered[_code_col].astype(str).str.strip().str.zfill(6).isin(_valid_codes)].copy()
+                print(f"  [v2 硬过滤/回测] {_used_scheme}: {_before}→{len(filtered)} 票", file=sys.stderr)
+            else:
+                print(f"  [v2 硬过滤/回测] 三档过滤后 0 票, 保持原池 {len(filtered)} 票", file=sys.stderr)
+    except Exception as e:
+        print(f"  [v2 硬过滤/回测] 跳过: {e}", file=sys.stderr)
 
     return filtered  # 含 'plan_a总分' 列
 
@@ -1418,20 +1457,48 @@ def run_tab_backtest(
                     skipped.append({'signal': d_signal, 'reason': f'{name}({code}) OHLCV缺失: {", ".join(missing)}'})
                     continue
 
+                # ── P2 修复: 跳过 stock_daily 归一化假数据 (价格基准 100, 完全不可信) ──
+                if buy_ohlcv.get('_normalized') or sell_ohlcv.get('_normalized'):
+                    skipped.append({'signal': d_signal, 'reason': f'{name}({code}) 买卖价来自归一化假数据, 跳过'})
+                    unbuyable_count += 1
+                    continue
+                # archive.db 构造数据 (_fallback) ≠ 完全假, 但 buy_open=d_close 忽略跳空
+                # → 标记 trade 为低可信, 不入统计 / 仅当 gap 可控时保留
+                _is_constructed_buy = bool(buy_ohlcv.get('_fallback'))
+                _is_constructed_sell = bool(sell_ohlcv.get('_fallback'))
+                if _is_constructed_buy or _is_constructed_sell:
+                    print(f"  [OHLCV] {name}({code}) {d_signal}: "
+                          f"{'买' if _is_constructed_buy else ''}{'卖' if _is_constructed_sell else ''}"
+                          f"价来自 archive.db 构造, 收益可能不准",
+                          file=sys.stderr)
+
                 signal_close = signal_ohlcv['close']
-                gap_pct = round((buy_ohlcv['open'] / signal_close - 1) * 100, 1)
-                # 买入过滤: 一字板排除; 跳空高开出货陷阱
-                # Tier1.D: stock_daily fallback 用归一化价格 (基准100), 跳空不可信 → 跳过该过滤
+                buy_open_real = buy_ohlcv['open']
+                gap_pct = round((buy_open_real / signal_close - 1) * 100, 1)
+
+                # ── P3 修复: 跳空高开买入偏差 ──
+                # 原逻辑: 仅 gap>9.5% 视为买不到 (太宽松, 7-9%跳空实际也买不到)
+                # 新逻辑:
+                #   gap >= 9.5%: 一字板/秒板, 买不到 (limit_open)
+                #   5% ≤ gap < 9.5%: 高开,可买但买不到开盘价,用 signal_close*1.05 模拟
+                #   gap < 5%: 正常开盘, 用 buy_open 买入
                 is_normalized = signal_ohlcv.get('_normalized', False)
-                limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)
-                # 跳空高开>9.5%视为陷阱 (接近一字板买不到), 数据验证gap[3,5)最赚不能过滤
-                _gap_trap_threshold = 9.5
-                gap_trap = (not is_normalized) and (gap_pct > _gap_trap_threshold)
-                buyable = not limit_open and not gap_trap
+                limit_open = (not is_normalized) and _is_limit_open(buy_ohlcv, signal_close)  # gap>=9.5
+                _gap_medium_threshold = 5.0  # 5% 以上跳空不能按开盘价买入
+                is_gap_medium = (not is_normalized) and (gap_pct > _gap_medium_threshold) and not limit_open
+                buyable = not limit_open
                 if not buyable:
                     unbuyable_count += 1
-                    if gap_trap:
-                        skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>{_gap_trap_threshold:.0f}%高开陷阱'})
+                    skipped.append({'signal': d_signal, 'reason': f'{name} 跳空{gap_pct:+.1f}%>=9.5%一字板'})
+                # gap 5-9.5%: 能买到但买不到开盘价, 用 signal_close*1.05 模拟排队买入
+                if is_gap_medium:
+                    _adjusted_buy_px = round(signal_close * 1.05, 2)
+                    print(f"  [跳空偏差] {name}({code}) gap={gap_pct:+.1f}%, "
+                          f"买入价 {buy_open_real}→{_adjusted_buy_px}(排队模拟)",
+                          file=sys.stderr)
+                    # override buy price — 但保留原始 buy_open 在 intraday 里供参考
+                    buy_ohlcv = dict(buy_ohlcv)  # copy
+                    buy_ohlcv['_adjusted_buy_px'] = _adjusted_buy_px
 
                 if sell_ohlcv is None:
                     missing.append(f'sell={d_sell}')
@@ -1449,6 +1516,7 @@ def run_tab_backtest(
                     'signal_close': round(signal_close, 2),
                     'gap_open_pct': gap_pct,
                     'buyable': buyable,
+                    'adjusted_buy_px': round(buy_ohlcv.get('_adjusted_buy_px', 0), 2) if buy_ohlcv.get('_adjusted_buy_px') else None,
                 }
 
                 sell_px = sell_ohlcv.get('_sell_open') or sell_ohlcv['open']
@@ -1469,7 +1537,8 @@ def run_tab_backtest(
                     bought_count += 1
                 elif buyable:
                     # ── 策略A: T+1开盘买 → T+N开盘卖 (原策略) ──
-                    buy_px = buy_ohlcv['open']
+                    # P3 修复: gap 5-9.5% 时用排队模拟价而非开盘价
+                    buy_px = buy_ohlcv.get('_adjusted_buy_px', buy_ohlcv['open'])
                     raw_ret = (sell_px / buy_px - 1) * 100
                     net_ret = raw_ret - _COMMISSION_PCT - _SLIPPAGE_PCT
                     rec = {

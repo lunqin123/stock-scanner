@@ -48,6 +48,11 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     prev_df: stock_zt_pool_previous_em 返回的上交易日涨停池（含今日涨跌幅）
     date_str: 上交易日日期 YYYYMMDD，用于计算历史股性等因子
     返回: (df_with_scores, summary_dict)
+
+    P6 修复: 补充 stock_sentiment/principal_score/north_flow/alpha 因子,
+    使因子对齐广度与 plan_a 一致, IC 数据可用于权重调优。
+    注意: stock_zt_pool_previous_em 无封板时间/封板资金/资金流等数据,
+    故 seal 用换手率代理, money/sentiment 用默认值 — 这是回测的固有局限。
     """
     df = prev_df.copy()
 
@@ -70,7 +75,7 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     df['今日涨幅'] = df[change_col].astype(float).round(2)
     df['晋级'] = df['今日涨幅'] > 9
 
-    # ─── 7 因子评分（与实盘排行相同的 apply_weights） ───
+    # ─── 9 因子评分（与实盘 plan_a 对齐） ───
     import weight_manager
     w = weight_manager.load_weights()
 
@@ -94,6 +99,16 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
                 elif t < 8: seal_s[idx] = 10
                 elif t < 15: seal_s[idx] = 5
                 else: seal_s[idx] = 2
+
+    # P6 修复: stock_zt_pool_previous_em 可能有连板数列 → 用于 seal 增强
+    consecutive_col = '连板数' if '连板数' in df.columns else None
+    if consecutive_col and not has_seal_data:
+        consecutive = df[consecutive_col].fillna(1).astype(float)
+        for idx in df.index:
+            c = consecutive[idx]
+            if c >= 3: seal_s[idx] = min(28, seal_s[idx] + 3)   # 3连板+加3分
+            elif c >= 2: seal_s[idx] = min(28, seal_s[idx] + 1.5)  # 2连板加1.5分
+
     tech_s = score_tech_form(df)
     sector_score = get_sector_score(df)
 
@@ -107,7 +122,7 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     # 历史股性：日期可用才计算，否则用默认
     if date_str:
         try:
-            history_s, _ =         score_stock_history(df, date_str, prev_df=prev_df)
+            history_s, _ = score_stock_history(df, date_str, prev_df=prev_df)
         except Exception:
             history_s = pd.Series(2.5, index=df.index)
     else:
@@ -116,17 +131,26 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     # 资金流、情绪历史不可用，用中性默认值
     money_s = pd.Series(10.0, index=df.index)
     sent_s = pd.Series(5.0, index=df.index)
+    # P6 修复: 补充 plan_a 完整因子列表 (stock_sentiment/principal_score/north_flow/alpha)
+    stock_sentiment_s = pd.Series(5.0, index=df.index)
+    principal_s = pd.Series(5.0, index=df.index)
+    north_flow_s = pd.Series(5.0, index=df.index)
+    alpha_s = pd.Series(5.0, index=df.index)
 
-    # 回测权重调整：tech在回测中为负相关(r≈-0.06)，降为0避免噪声
+    # 回测权重调整：tech 在回测 prev_pool 中 IC 偏弱, 但不再硬设 0
+    # (权重管理器的 ICIR+EMA 调权会自动处理弱因子)
     w_bt = dict(w)
-    w_bt['tech'] = 0.0
-    # 将tech的权重分配给seal和sector（回测中仅有的正相关因子）
-    w_bt['seal'] = w['seal'] + 3.0
-    w_bt['sector'] = w['sector'] + 3.0
+    # 适度提升 seal/sector 权重 (prev_pool 中最具区分度的因子)
+    w_bt['seal'] = w['seal'] + 2.0
+    w_bt['sector'] = w['sector'] + 2.0
 
     scores = weight_manager.apply_weights(
         seal_s, money_s, sector_score,
         tech_s, history_s, sent_s,
+        stock_sentiment_scores=stock_sentiment_s,
+        principal_scores=principal_s,
+        north_flow_scores=north_flow_s,
+        alpha_scores=alpha_s,
         weights=w_bt)
 
     df['回测评分'] = scores.round(1)
@@ -134,8 +158,12 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     df['tech_factor'] = tech_s.round(1)
     df['sector_factor'] = sector_score.round(1)
     df['history_factor'] = history_s.round(1)
-    df['money_factor'] = money_s.round(1)  # 全默认，相关性为 0
-    df['sentiment_factor'] = sent_s.round(1)  # 全默认，相关性为 0
+    df['money_factor'] = money_s.round(1)
+    df['sentiment_factor'] = sent_s.round(1)
+    df['stock_sentiment_factor'] = stock_sentiment_s.round(1)
+    df['principal_factor'] = principal_s.round(1)
+    df['north_flow_factor'] = north_flow_s.round(1)
+    df['alpha_factor'] = alpha_s.round(1)
 
     total = len(df)
     avg_change = df['今日涨幅'].mean()
@@ -171,10 +199,11 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     top30 = sorted_scores.tail(k)
     bot30 = sorted_scores.head(k)
 
-    # 7 因子独立相关性（跳过常数因子避免 numpy warning）
+    # 9 因子独立相关性（跳过常数因子避免 numpy warning）
     _factor_names = ['seal_factor', 'tech_factor', 'sector_factor',
-                     'history_factor',
-                     'money_factor', 'sentiment_factor']
+                     'history_factor', 'money_factor', 'sentiment_factor',
+                     'stock_sentiment_factor', 'principal_factor',
+                     'north_flow_factor', 'alpha_factor']
     factor_correlations = {}
     for f in _factor_names:
         if f in df.columns:
@@ -213,12 +242,21 @@ def backtest_score_prev(prev_df: pd.DataFrame, date_str: str = None):
     return df, summary
 
 
-def _simulate_trades(df, score_col, top_n=10, commission=0.00025, slippage=0.001):
+def _simulate_trades(df, score_col, top_n=10, commission=None, slippage=None):
     """
     模拟交易：取评分最高的 N 只，次日开盘买入/收盘卖出。
     过滤次日无法买入的标的（一字板/缩量秒板）。
     返回: {total_return, win_rate, profit_loss_ratio, max_drawdown, trades, unbuyable_count}
     """
+    # P6 修复: 从 config 统一导入费率, 避免硬编码偏离实盘
+    if commission is None or slippage is None:
+        try:
+            from config import COMMISSION_ROUNDTRIP_PCT, SLIPPAGE_PCT
+            commission = COMMISSION_ROUNDTRIP_PCT / 100  # 转百分比因子
+            slippage = SLIPPAGE_PCT / 100
+        except Exception:
+            commission = 0.00072  # 默认万7.2 (佣金+印花税+过户费 往返)
+            slippage = 0.001      # 默认千1
     sorted_df = df.sort_values(score_col, ascending=False)
 
     # 次日竞价过滤：排除一字板或缩量涨停（换手<1% + 涨>9.5% = 买不到）
@@ -413,102 +451,36 @@ def auto_verify_backtest(today_str: str, table_mode: bool = False, current_weigh
 
 
 def run_backtest(tab: str = 'limit-up', N: int = 5):
-    """回测主入口 (P4: 支持多 tab 滚动回测)"""
+    """回测主入口 (P4: 支持多 tab 滚动回测)
+
+    P6 修复: 所有 tab 统一走 backtest_engine, 删除旧版 backtest_score_prev 路径。
+    limit-up tab 现在用 stock_zt_pool_em (与实盘一致) 而非 stock_zt_pool_previous_em (无封板数据)。
+    评分使用 plan_a 9 因子 (与实盘一致), 不再用回测专用 6 因子简化版。
+    """
     # 周末检测
     wd = date.today().weekday()
     if wd >= 5:
         print("  [回测跳过] 周末不开盘")
         return
 
-    # ── P4: 多 tab 滚动回测 (走 backtest_engine) ──
-    if tab != 'limit-up':
-        from backtest_engine import run_tab_backtest, TAB_NAMES_CN
-        print(f"运行 {tab} ({TAB_NAMES_CN.get(tab, tab)}) {N} 天滚动回测 (T+1 真实)...")
-        res = run_tab_backtest(tab=tab, max_days=N, top_n=3, capital=30000, use_cache=False)
-        if 'error' in res and not res.get('trades'):
-            print(f"  错误: {res['error']}")
-            return
-        s = res['summary']
-        print(f"  笔数: {s.get('trade_count', 0)}")
-        print(f"  胜率: {s.get('win_rate', 0)}%")
-        print(f"  累计收益: {s.get('cumulative_ret', 0):+.2f}%")
-        print(f"  总盈亏: ¥{s.get('total_pnl', 0):+,.0f}")
-        print(f"  盈亏比: {s.get('plr', 0)}")
-        print(f"  最大回撤: {s.get('max_dd', 0):.2f}%")
-        print(f"  期望值: {s.get('ev', 0):+.2f}%")
-        cmp = res.get('comparison', {})
-        print(f"  一字板跳过: {cmp.get('unbuyable_count', 0)} 笔")
+    from backtest_engine import run_tab_backtest, TAB_NAMES_CN
+    print(f"运行 {tab} ({TAB_NAMES_CN.get(tab, tab)}) {N} 天滚动回测 (T+1 真实)...")
+    res = run_tab_backtest(tab=tab, max_days=N, top_n=3, capital=30000, use_cache=False)
+    if 'error' in res and not res.get('trades'):
+        print(f"  错误: {res['error']}")
         return
-
-    # ── 兼容旧版: limit-up 走 backtest_score_prev (输出因子相关性) ──
-    from cache import _is_trading_day
-    print(f"运行 {N} 天滚动回测 (limit-up, 含因子相关性)...")
-    results = []
-    errors = 0
-
-    for i in range(N):
-        d = date.today() - timedelta(days=i)
-        if d.weekday() >= 5:
-            continue
-        if not _is_trading_day(d.strftime("%Y%m%d")):
-            continue
-        d_str = d.strftime("%Y%m%d")
-        try:
-            prev = ak.stock_zt_pool_previous_em(date=d_str)
-            if prev.empty:
-                continue
-            df_res, summary = backtest_score_prev(prev, date_str=d_str)
-            if summary['count'] >= 5:
-                results.append(summary)
-        except Exception as e:
-            errors += 1
-            if errors > 5:
-                break
-        if (i + 1) % 5 == 0:
-            print(f"  ... {i+1}/{N}")
-
-    if not results:
-        print("  无有效回测数据")
-        return
-
-    # ── 聚合 ──
-    total_count = sum(r['count'] for r in results)
-    avg_corr = np.mean([r['correlation'] for r in results])
-    avg_change = np.mean([r['avg_change'] for r in results])
-    avg_promo = np.mean([r['promo_rate'] for r in results])
-    avg_pos = np.mean([r['pos_rate'] for r in results])
-    avg_top30 = np.mean([r['top30_avg'] for r in results])
-    avg_bot30 = np.mean([r['bot30_avg'] for r in results])
-
-    # 因子相关性聚合
-    fc_list = [r.get('factor_correlations', {}) for r in results]
-    factor_avg = {}
-    for fc in fc_list:
-        for k, v in fc.items():
-            factor_avg.setdefault(k, []).append(v)
-    factor_avg = {k: np.mean(v) for k, v in factor_avg.items()}
-
-    lines = []
-    lines.append("\n" + "=" * 55)
-    lines.append(f"  滚动回测 ({len(results)} 天) | 共 {total_count} 只标的")
-    lines.append("=" * 55)
-    lines.append(f"  平均溢价: {avg_change:+.2f}% | 平均晋级率: {avg_promo:.1f}%")
-    lines.append(f"  平均正收益比: {avg_pos:.1f}%")
-    if factor_avg:
-        corr_str = " | ".join(f"{k}: {factor_avg[k]:+.3f}" for k in ['seal', 'sector', 'tech'] if k in factor_avg)
-        lines.append(f"  因子相关性(均值): {corr_str}")
-    lines.append(f"  评分-涨幅相关系数(均值): {avg_corr:.4f}")
-    lines.append(f"  前30%平均涨幅: {avg_top30:+.2f}%  |  后30%: {avg_bot30:+.2f}%  |  差: {avg_top30 - avg_bot30:+.2f}%")
-
-    # 评级说明
-    lines.append("")
-    lines.append("评级标准 (满分100分, 基于实盘9因子加权):")
-    lines.append("  S级>=75 | A级>=65 | B级>=55 | C级<55")
-    lines.append("  评分维度: 封板强度(22) + 资金(12) + 板块合力(12) + 技术(6) + 股性(4) + 情绪(9) + 本金(6)")
-    lines.append("  注: 回测中资金/情绪为默认值，实际预测力更强。历史数据不完整属正常现象。")
-
-    lines.append("")
-    lines.append("免责: 回测数据仅供参考, 历史表现不代表未来收益。")
-    lines.append("      评分系统有效性需持续多日积累验证。")
-
-    print("\n".join(lines))
+    s = res['summary']
+    print(f"  笔数: {s.get('trade_count', 0)}")
+    print(f"  胜率: {s.get('win_rate', 0)}%")
+    print(f"  累计收益: {s.get('cumulative_ret', 0):+.2f}%")
+    print(f"  总盈亏: ¥{s.get('total_pnl', 0):+,.0f}")
+    print(f"  盈亏比: {s.get('plr', 0)}")
+    print(f"  最大回撤: {s.get('max_dd', 0):.2f}%")
+    print(f"  期望值: {s.get('ev', 0):+.2f}%")
+    cmp = res.get('comparison', {})
+    print(f"  一字板跳过: {cmp.get('unbuyable_count', 0)} 笔")
+    # 因子 IC 分析
+    ic = res.get('factor_ics', {})
+    if ic:
+        print(f"  因子IC: {' | '.join(f'{k}: {v:+.4f}' for k, v in sorted(ic.items(), key=lambda x: -abs(x[1])))}")
+    return
