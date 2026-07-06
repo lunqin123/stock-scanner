@@ -22,24 +22,19 @@ let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000
 let _btStrategy = localStorage.getItem('btStrategy') || '';
 // 回测天数（服务端归档最多到109天，默认60天不过载）
 const _BT_DAYS = 15;  // 本地 engine 缓存有15-19天数据, 用15天覆盖所有tab
-// 每个 tab 独立的最低评分门槛（评分标准各不相同）
-// 各 tab 推荐的最低评分门槛
+// v3.3h: 各tab策略参数 — 严格对齐后端 _TAB_BUY_TIME + TAB_DEFAULT_BT_PARAMS
+//   close策略(limit-up/zhaban): T日尾盘买→T+1开盘卖, sell_n参数无效(恒为1)
+//   open策略(trend/reversal/dtqiaoban): T+1开盘买→T+N开盘卖, sell_n有效
+var _TAB_BUY_MODE = {
+    'limit-up': 'close', 'zhaban': 'close',
+    'trend': 'open', 'reversal': 'open', 'dtqiaoban': 'open',
+};
 var _TAB_DEFAULT_SELL_N = {
-    'trend': 3,
-    'limit-up': 3,
-    'zhaban': 5,
-    'reversal': 3,
-    'dtqiaoban': 2,   // 唯一盈利tab, sn=2
+    'trend': 3, 'limit-up': 1, 'zhaban': 1, 'reversal': 3, 'dtqiaoban': 3,
 };
-
 var _TAB_DEFAULT_MIN_SCORE = {
-    'trend': 50,
-    'limit-up': 50,
-    'zhaban': 50,
-    'reversal': 50,
-    'dtqiaoban': 50,
+    'trend': 50, 'limit-up': 50, 'zhaban': 65, 'reversal': 50, 'dtqiaoban': 50,
 };
-// 各 tab 独立的卖出日偏移 (2=T+2, 3=T+3)
 var _btSellNs = (function() {
     var stored;
     try { stored = JSON.parse(localStorage.getItem('btSellNs') || '{}'); } catch(e) { stored = {}; }
@@ -48,23 +43,16 @@ var _btSellNs = (function() {
     }
     return stored;
 })();
-// Tier3: 老用户 zhaban=2/3 自动升级为 5 (T+5 实测 avg_ret/+pnl 最高)
-// v1→v2 修复时曾把 zhaban=5 强降为 3 (BUG-9), v3 反向修正: T+5 收益显著优于 T+3
-// v4: limit-up sell_n 3→2 (数据驱动: 持仓1天胜率91%, 持仓2天亏损)
-// v8: 删除Plan B, dtqiaoban为唯一盈利tab优先推荐
+// v3.3h: close策略tab(limit-up/zhaban) sell_n恒为1, open策略用真实T+N
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v8') || localStorage.getItem('btSellNs_v7') || 'v1';
-    if (sellNsVer !== 'v8') {
+    var sellNsVer = localStorage.getItem('btSellNs_v9');
+    if (sellNsVer !== 'v9') {
         _btSellNs = {};
-        for (var k in _TAB_DEFAULT_SELL_N) {
-            _btSellNs[k] = _TAB_DEFAULT_SELL_N[k];
-        }
+        for (var k in _TAB_DEFAULT_SELL_N) { _btSellNs[k] = _TAB_DEFAULT_SELL_N[k]; }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v8', 'v8');
+        localStorage.setItem('btSellNs_v9', 'v9');
         _btMinScores = {};
-        for (var k2 in _TAB_DEFAULT_MIN_SCORE) {
-            _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2];
-        }
+        for (var k2 in _TAB_DEFAULT_MIN_SCORE) { _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2]; }
         localStorage.setItem('btMinScores', JSON.stringify(_btMinScores));
     }
 })();
@@ -109,13 +97,13 @@ window._resetBacktestParams = _resetBacktestParams;
 // 不清空 sell_n / capital / top_n / strategy, 只覆盖 min_score
 const _SWEET_POINT_MS = {
     'limit-up': 38,
-    'trend':    85,   // WR 66.7% EV +2.41% (网络)
-    'reversal': 0,
-    'zhaban':   75,   // WR 54.3% EV +0.34% (IC 重加权后)
-    'dtqiaoban':75,   // WR 80%   EV +3.44%
+    'trend':    60,
+    'reversal': 50,
+    'zhaban':   65,   // v3.3h: 硬过滤+板块驱动后新门槛
+    'dtqiaoban':60,
 };
 function _applySweetPointMs() {
-    if (!confirm('一键采用系统甜蜜点 ms (趋势 85/涨停 38/反转 0/炸板 75/翘板 75)?\n其他参数 (sell_n/capital/top_n) 不变.')) return;
+    if (!confirm('一键采用系统甜蜜点 ms?\n涨停38/趋势60/反转50/炸板65/翘板60\n其他参数不变.')) return;
     for (var k in _SWEET_POINT_MS) _setMinScore(k, _SWEET_POINT_MS[k]);
     _btCache = {};
     location.reload();
@@ -423,7 +411,8 @@ function switchPage(page) {
             var tabMap = {'scan-trend':'trend','scan-limit':'limit-up','scan-zhaban':'zhaban','scan-reversal':'reversal','scan-dtqiaoban':'dtqiaoban'};
             var btTab = tabMap[page] || '';
             if (btTab && _getMinScore(btTab) !== undefined) {
-                scoreEl.textContent = '最低分 ' + _getMinScore(btTab) + ' · T+' + _getSellN(btTab) + '卖出';
+                var mode = _TAB_BUY_MODE[btTab] === 'close' ? '尾盘买T+1卖' : 'T+' + _getSellN(btTab) + '开盘卖';
+                scoreEl.textContent = '最低分 ' + _getMinScore(btTab) + ' · ' + mode;
             } else {
                 scoreEl.textContent = '';
             }
@@ -806,15 +795,14 @@ async function loadCardView(output, pageKey, apiUrl) {
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'trend';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
-                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">📊 多 Tab 真实回测 <span style="font-size:11px">(各 tab 卖出日不同: 趋势/涨停/反转/翘板=T+3, 炸板=T+5; ms/分阈值见按钮)</span></div>'
-                      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">按钮格式: <code style="background:var(--bg-secondary);padding:1px 4px;border-radius:3px">tab名 T+N (ms分)</code> · 改 ms/TOP/本金后自动重跑回测</div>'
+                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">📊 多 Tab 真实回测 <span style="font-size:11px">(涨停/炸板=尾盘T日收→T+1开, 趋势/反转/翘板=开盘T+1开→T+N开)</span></div>'
+                      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">按钮格式: <code>tab名 策略(ms分)</code> · 改ms/TOP/本金后自动重跑</div>'
                       + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
                 tabs.forEach(t => {
                     const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
-                    const sn = _getSellN(t.key);
                     const ms = _getMinScore(t.key);
-                    // sell_n 2=T+2, 3=T+3, 5=T+5 ; ms=最低评分阈值
-                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' T+' + sn + ' <span style="opacity:0.7">(' + ms + '分)</span></button>';
+                    var strategyLabel = _TAB_BUY_MODE[t.key] === 'close' ? '尾盘T+1卖' : ('T+' + _getSellN(t.key) + '卖');
+                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' ' + strategyLabel + ' <span style="opacity:0.7">(' + ms + '分)</span></button>';
                 });
                 // TOP-N 调权 + 本金输入
                 html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px">'
