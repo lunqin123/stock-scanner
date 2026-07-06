@@ -16,7 +16,7 @@ const _dom = {
 // P6: 当前选中的回测 tab + 调权参数 (localStorage 持久化)
 let _btTab = localStorage.getItem('btTab') || 'trend';  // 默认趋势(52.2%胜率)
 // 各 tab 推荐 TOP-N (用户1把梭3万, 全 tab 统一 TOP1 + 3万本金)
-const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 3, 'trend': 1, 'dtqiaoban': 3, 'reversal': 1 };
+const _tabDefaultTopN = { 'limit-up': 1, 'zhaban': 1, 'trend': 1, 'dtqiaoban': 1, 'reversal': 1 };
 let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab] || 1;
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
@@ -116,7 +116,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital + '&force=true';
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
