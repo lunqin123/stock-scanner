@@ -591,12 +591,12 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
 #  炸板 + 翘板 因子权重 (P5)
 # ═══════════════════════════════════════════
 
-# 炸板权重（回退原始值，IC优化后实测亏损加大）
-ZB_DEFAULT_WEIGHTS = {'seal': 20, 'money': 20, 'feature': 15, 'turnover': 10, 'sector': 12}
+# 炸板权重（v3.3d: 平衡权重, IC极端值导致回测亏损加大）
+ZB_DEFAULT_WEIGHTS = {'seal': 25, 'money': 20, 'feature': 20, 'turnover': 20, 'sector': 15}
 ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
 
-# 翘板权重（回退原始值）
-DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+# 翘板权重（v3.3d: cont提权30, time降权5, 连跌天数比封板时间重要）
+DT_DEFAULT_WEIGHTS = {'deal': 25, 'seal': 25, 'cont': 30, 'turnover': 15, 'time': 5}
 DT_FACTOR_NAMES = {'deal': '放量', 'seal': '封单', 'cont': '连跌', 'turnover': '换手', 'time': '时间'}
 
 # 涨停专用权重（回退原始值）
@@ -700,14 +700,13 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
-# 趋势动量权重——回退到原版 (IC 优化后实测 1W/6L，恶化):
-# 原版 60 天回测 +12.30% EV+0.59%，IC 优化后 -38.44%
+# 趋势动量权重——v3.3d: 涨幅甜蜜区改为3-5%, new_high提权
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 40,       # 涨幅分
+    'chg': 35,       # 涨幅分 (3-5%甜蜜区)
     'turnover': 30,  # 换手分
-    'amount': 30,    # 成交额分
+    'amount': 25,    # 成交额分
     'vol_ratio': 5,  # 量比加分
-    'new_high': 3,   # 新高加分
+    'new_high': 5,   # 新高加分 (v3.3d: 新高=强趋势确认)
     'ma_rev': 0,     # MA回归分 (已关闭)
 }
 

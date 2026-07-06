@@ -24,28 +24,24 @@ from scanner_data import fetch_fund_flow_data
 
 def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
                       fund_df: pd.DataFrame = None) -> pd.DataFrame:
-    """炸板反包评分 (P5: 5因子可调权)。
+    """炸板反包评分 (P5: 5因子可调权, v3.3d 优化)。
 
     支持传入历史存档的 fund_df（回测引擎从 archive 加载），
     避免回测时使用实时资金流数据产生未来偏差。
 
-    BUG-修复 (2026-07-05): IC-based 重新加权.
-      191 笔交易 / 60 天 / 4 个参数 (ms 0/45/50/55/60) 实测 IC:
-        seal (封板质量):  IC -0.065 → 负相关（旧权重 20 → 现 5）
-        money (资金承接): IC -0.046 → 噪声  （旧权重 20 → 现 5）
-        feature (炸板特征):IC +0.135 → 正    （旧权重 15 → 现 35）
-        turnover (换手评分):IC +0.184 → 强正 （旧权重 10 → 现 35）
-        sector (板块热度):  IC -0.059 → 负相关（旧权重 12 → 现 0）
-      新总分 max_raw=80, 排序 IC 从 +0.045 (无效) → 期望显著正向.
-      三因子 feature/turnover/sector 是当天炸板票的特征, 与"次日开
-      盘能否反包"具有非平凡的预测力; 而 seal/money 来自"封板当刻"
-      的微观数据, 实际预测力为负或为零 (炸得"漂亮"的票第二天多半
-      被高开套利, 而看起来不"漂亮"的票反而低开有反包空间).
+    v3.3d 优化: 权重从 IC-extreme (feature=35/turnover=35) 回退到平衡版,
+    因为 IC 极端权重在实盘回测中恶化 (亏损加大)。新权重基于逻辑推理:
+      - seal (封板质量): 25 — 封得好的票反包概率大 (炸板是意外, 不是本质弱)
+      - money (资金承接): 20 — 资金流入的票有承接盘
+      - feature (炸板特征): 20 — 中等换手+无极端 = 健康分歧
+      - turnover (换手评分): 20 — 适中换手有利反包
+      - sector (板块热度): 15 — 板块热+封板率高 → 板块支撑反包
+    v3.3d 新增: v2 position_factor (过滤一日游, 偏好持续活跃的票)
     """
     df = df.copy()
 
-    # 原始权重 (回退 IC 优化, 保持正收益)
-    defaults = {'seal': 5, 'money': 5, 'feature': 35, 'turnover': 35, 'sector': 0}
+    # v3.3d 平衡权重 (total=100, 直接映射)
+    defaults = {'seal': 25, 'money': 20, 'feature': 20, 'turnover': 20, 'sector': 15}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -114,7 +110,25 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
 
     total = (f_seal * w['seal'] + f_money * w['money'] + f_feature * w['feature'] +
              f_turn * w['turnover'] + f_sector * w['sector'])
-    df['总分'] = (total / max_raw * 100).clip(lower=0).round(1)
+    base_score = (total / max_raw * 100).clip(lower=0)
+
+    # v3.3d: v2 position_factor 乘性调节 (持续性+回撤位置, 过滤一日游炸板)
+    position_factor = pd.Series(1.0, index=df.index)
+    mc_series = pd.Series(5.0, index=df.index)
+    pd_series = pd.Series(5.0, index=df.index)
+    if today_str is not None:
+        try:
+            from plans.factors_v2 import compute_v2_factors as _compute_v2
+            v2 = _compute_v2(df, today_str)
+            mc_series = v2['momentum_consistency']
+            pd_series = v2['pullback_depth']
+            mc_factor = 0.85 + mc_series / 50.0
+            pd_factor = 0.90 + pd_series / 50.0
+            position_factor = (mc_factor * pd_factor).clip(0.75, 1.20)
+        except Exception:
+            pass
+
+    df['总分'] = (base_score * position_factor).clip(lower=0).round(1)
     df['zb_seal'] = (f_seal * w['seal']).round(1)
     df['封板质量'] = seal_scores.round(1)
     df['zb_money'] = (f_money * w['money']).round(1)
@@ -126,6 +140,8 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     df['换手评分'] = turn_scores.round(1)
     df['板块热度'] = sector_raw.round(1)
     df['净流入'] = raw_money
+    df['f_v2_mc'] = mc_series.round(1)
+    df['f_v2_pd'] = pd_series.round(1)
 
     return df.sort_values('总分', ascending=False).head(TOP_N)
 
@@ -259,13 +275,31 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
     weight_sum = sum(abs(v) for v in w.values())
     normalized = (total / max(weight_sum, 1) * 100) if weight_sum != 0 else total
 
+    # v3.3d: v2 position_factor 乘性调节 (持续性+回撤位置, 过滤一日游反抽)
+    position_factor = pd.Series(1.0, index=pullback.index)
+    mc_series = pd.Series(5.0, index=pullback.index)
+    pd_series = pd.Series(5.0, index=pullback.index)
+    if today_str is not None:
+        try:
+            from plans.factors_v2 import compute_v2_factors as _compute_v2
+            v2 = _compute_v2(pullback, today_str)
+            mc_series = v2['momentum_consistency']
+            pd_series = v2['pullback_depth']
+            mc_factor = 0.85 + mc_series / 50.0
+            pd_factor = 0.90 + pd_series / 50.0
+            position_factor = (mc_factor * pd_factor).clip(0.75, 1.20)
+        except Exception:
+            pass
+
     pullback = pullback.copy()
-    pullback['反转评分'] = normalized.clip(lower=0).round(1)
+    pullback['反转评分'] = (normalized * position_factor).clip(lower=0).round(1)
     pullback['rev_turnover'] = (f_to * w['turnover']).round(1)
     pullback['rev_consecutive'] = (f_lb * w['consecutive']).round(1)
     pullback['rev_pullback'] = (f_chg * w['pullback']).round(1)
     pullback['rev_sector'] = (f_sector * w['sector']).round(1)
     pullback['rev_retention'] = (f_retention * w['retention']).round(1)
+    pullback['f_v2_mc'] = mc_series.round(1)
+    pullback['f_v2_pd'] = pd_series.round(1)
     return pullback
 
 
@@ -273,17 +307,20 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
 #  趋势动量评分 (5 因子可调权 + MA 回归)
 # ═══════════════════════════════════════════
 
-def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
-    """P2.2 抽出的纯函数: 趋势动量评分
+def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) -> pd.DataFrame:
+    """P2.2 抽出的纯函数: 趋势动量评分 (v3.3d 优化)
 
-    5 因子 (0-100):
-    - 涨幅分 (0-40): 3-8% 甜蜜区
+    6 因子 (0-100):
+    - 涨幅分 (0-35): 3-5% 甜蜜区 (涨幅适中,趋势确认+还有空间)
     - 换手活跃分 (0-30): 8-15% 甜蜜区
-    - 成交额分 (0-30): 越大关注度越高
+    - 成交额分 (0-25): 越大关注度越高
     - 量比加分 (0-5): 强势池特有
-    - 新高加分 (0-3)
+    - 新高加分 (0-5): 创新高是强趋势信号
+    - 均线回归 (0-0): 已关闭
 
-    P4: 支持可调权 — weights=None 用默认权重, 传 dict 则覆盖。
+    v3.3d: 涨幅甜蜜区从6-8%改为3-5% (高涨幅次日回调风险大, 适中涨幅趋势延续性强)
+    v3.3d: 新高加分3→5, 新高是强趋势确认信号
+    v3.3d: 新增 v2 position_factor (持续性+回撤位置, 过滤一日游)
 
     输入: 已过滤 (涨幅 2.5-8.5% + 非 ST + 市值<MAX_MARKET_CAP) 的 DataFrame
     输出: 加因子分列 + '动量评分' 总分的 DataFrame
@@ -291,9 +328,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     if df is None or df.empty:
         return df
 
-    # 默认权重 (可被 weights 参数覆盖)
-    # 回退原版权重 (IC优化实测 1W/6L 恶化)
-    defaults = {'chg': 40, 'turnover': 30, 'amount': 30, 'vol_ratio': 5, 'new_high': 3, 'ma_rev': 0}
+    # 默认权重 (v3.3d 优化: chg降权40→35, amount 30→25, new_high 3→5)
+    defaults = {'chg': 35, 'turnover': 30, 'amount': 25, 'vol_ratio': 5, 'new_high': 5, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -312,16 +348,16 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     f_vr = pd.Series(0.0, index=df.index)
     f_nh = pd.Series(0.0, index=df.index)
 
-    # 1. 涨幅分
+    # 1. 涨幅分 (v3.3d: 甜蜜区改为3-5%, 趋势确认+仍有空间)
     changes = df[change_col].astype(float)
     for idx in df.index:
         chg = float(changes[idx])
-        if 6 <= chg <= 8:       f_chg[idx] = 1.0
-        elif 5 <= chg < 6:      f_chg[idx] = 0.875
-        elif 4 <= chg < 5:      f_chg[idx] = 0.75
-        elif 3 <= chg < 4:      f_chg[idx] = 0.625
-        elif 8 <= chg < 9.5:    f_chg[idx] = 0.5
-        else:                   f_chg[idx] = 0.375
+        if 3 <= chg <= 5:       f_chg[idx] = 1.0   # 甜蜜区: 趋势确认, 还有空间
+        elif 5 < chg <= 6:      f_chg[idx] = 0.85
+        elif 2.5 <= chg < 3:    f_chg[idx] = 0.75  # 刚启动
+        elif 6 < chg <= 7:      f_chg[idx] = 0.65  # 偏高但可接受
+        elif 7 < chg <= 8.5:    f_chg[idx] = 0.45  # 已大涨, 回调风险
+        else:                   f_chg[idx] = 0.30
 
     # 2. 换手分
     turnovers = df[turnover_col].astype(float)
@@ -384,14 +420,32 @@ def _score_trend(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
     weight_sum = sum(abs(v) for v in w.values())
     normalized = (total / max(weight_sum, 1) * 100) if weight_sum != 0 else total
 
+    # v3.3d: v2 position_factor 乘性调节 (持续性+回撤位置, 过滤一日游)
+    position_factor = pd.Series(1.0, index=df.index)
+    mc_series = pd.Series(5.0, index=df.index)
+    pd_series = pd.Series(5.0, index=df.index)
+    if today_str is not None:
+        try:
+            from plans.factors_v2 import compute_v2_factors as _compute_v2
+            v2 = _compute_v2(df, today_str)
+            mc_series = v2['momentum_consistency']
+            pd_series = v2['pullback_depth']
+            mc_factor = 0.85 + mc_series / 50.0
+            pd_factor = 0.90 + pd_series / 50.0
+            position_factor = (mc_factor * pd_factor).clip(0.75, 1.20)
+        except Exception:
+            pass
+
     df = df.copy()
-    df['动量评分'] = normalized.clip(lower=0).round(1)  # 负权允许, 但总分不<0
+    df['动量评分'] = (normalized * position_factor).clip(lower=0).round(1)
     df['trend_chg'] = (f_chg * w['chg']).round(1)
     df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
     df['trend_amount'] = (f_amount * w['amount']).round(1)
     df['trend_vr'] = (f_vr * w['vol_ratio']).round(1)
     df['trend_nh'] = (f_nh * w['new_high']).round(1)
     df['trend_ma'] = (f_ma * w.get('ma_rev', 0)).round(1)
+    df['f_v2_mc'] = mc_series.round(1)
+    df['f_v2_pd'] = pd_series.round(1)
 
     return df
 
@@ -608,11 +662,14 @@ def _score_sector(date_str: str, top_n: int = TOP_N) -> pd.DataFrame:
 #  跌停翘板评分 (5 因子可调权)
 # ═══════════════════════════════════════════
 
-def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame:
-    """翘板反抽评分 (P5: 5因子可调权)。"""
+def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None, today_str: str = None) -> pd.DataFrame:
+    """翘板反抽评分 (P5: 5因子可调权, v3.3d 优化)。
+
+    v3.3d: 新增 today_str 参数和 v2 position_factor (偏好持续活跃、高位回撤的票)
+    """
     df = df.copy()
-    # 原始权重 (回退 IC 优化)
-    defaults = {'deal': 25, 'seal': 25, 'cont': 25, 'turnover': 15, 'time': 10}
+    # v3.3d 微调权重: cont(连跌)提权25→30, time(时间)降权10→5
+    defaults = {'deal': 25, 'seal': 25, 'cont': 30, 'turnover': 15, 'time': 5}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -667,10 +724,30 @@ def score_dtqiaoban_data(df: pd.DataFrame, weights: dict = None) -> pd.DataFrame
                 elif minutes >= 750: f_time[idx] = 0.5
                 else: f_time[idx] = 0.2
     total = (f_deal*w['deal'] + f_seal*w['seal'] + f_cont*w['cont'] + f_turn*w['turnover'] + f_time*w['time'])
-    df['翘板评分'] = (total / max_raw * 100).clip(lower=0).round(1)
+    base_score = (total / max_raw * 100).clip(lower=0)
+
+    # v3.3d: v2 position_factor 乘性调节 (持续性+回撤位置, 偏好持续活跃的票)
+    position_factor = pd.Series(1.0, index=df.index)
+    mc_series = pd.Series(5.0, index=df.index)
+    pd_series = pd.Series(5.0, index=df.index)
+    if today_str is not None:
+        try:
+            from plans.factors_v2 import compute_v2_factors as _compute_v2
+            v2 = _compute_v2(df, today_str)
+            mc_series = v2['momentum_consistency']
+            pd_series = v2['pullback_depth']
+            mc_factor = 0.85 + mc_series / 50.0
+            pd_factor = 0.90 + pd_series / 50.0
+            position_factor = (mc_factor * pd_factor).clip(0.75, 1.20)
+        except Exception:
+            pass
+
+    df['翘板评分'] = (base_score * position_factor).clip(lower=0).round(1)
     df['dt_deal'] = (f_deal*w['deal']).round(1)
     df['dt_seal'] = (f_seal*w['seal']).round(1)
     df['dt_cont'] = (f_cont*w['cont']).round(1)
     df['dt_turnover'] = (f_turn*w['turnover']).round(1)
     df['dt_time'] = (f_time*w['time']).round(1)
+    df['f_v2_mc'] = mc_series.round(1)
+    df['f_v2_pd'] = pd_series.round(1)
     return df.sort_values('翘板评分', ascending=False).head(TOP_N)

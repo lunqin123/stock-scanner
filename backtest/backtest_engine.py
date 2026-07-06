@@ -921,8 +921,7 @@ def _score_zhaban(df: pd.DataFrame, date_str: str):
             fund_df = archived.get('fund_df')
     except Exception:
         pass
-    # NOTE: V2 因子只在 limit-up tab 注入, 不在此 tab 扰动排序 (数据验证:
-    # 全 tab 接入 V2 让总 PnL 净亏 -5K, 因为独立评分函数被 0.95 缩放扰乱)
+    # v3.3d: 传入 date_str 启用 v2 position_factor
     return score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
 
 
@@ -946,8 +945,8 @@ def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
         w = _load_tab_weights('dtqiaoban')
     except Exception:
         w = None
-    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释, 数据验证接入恶化总 PnL)
-    return score_dtqiaoban_data(df, weights=w)
+    # v3.3d: 传入 date_str 启用 v2 position_factor
+    return score_dtqiaoban_data(df, weights=w, today_str=date_str)
 
 
 def _score_reversal(df: pd.DataFrame, date_str: str):
@@ -957,7 +956,7 @@ def _score_reversal(df: pd.DataFrame, date_str: str):
         w = _load_tab_weights('reversal')
     except Exception:
         w = None
-    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释)
+    # v3.3d: today_str 已传入, v2 position_factor 在 _score_reversal 内部应用
     return scanner_score_reversal(df, today_str=date_str, weights=w)
 
 
@@ -995,8 +994,8 @@ def _score_trend(df: pd.DataFrame, date_str: str):
         w = load_trend_weights()
     except Exception:
         w = None
-    # NOTE: V2 因子不在此 tab 注入 (见 _score_zhaban 注释)
-    return scanner_score_trend(df, weights=w)
+    # v3.3d: 传入 date_str 启用 v2 position_factor
+    return scanner_score_trend(df, weights=w, today_str=date_str)
 
 
 def _score_sector(df: pd.DataFrame, date_str: str):
@@ -1581,7 +1580,7 @@ def run_tab_backtest(
                         if val is not None:
                             rec[fk] = round(float(val), 1)
                     # IC 因子分列 (f_ 前缀, 用于 Information Coefficient 分析)
-                    # plan_a 因子 + score_new 因子 + v2 因子
+                    # plan_a 因子 + score_new 因子 + v2 因子 (v3.3d: v2 适用于所有tab)
                     for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
                                'f_stock_sentiment','f_principal','f_north_flow',
                                'f_v2_mc','f_v2_pd',

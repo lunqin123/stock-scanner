@@ -1094,7 +1094,8 @@ def _fetch_trend_data(today, principal):
     #     → 155 张 → 8 张 (砍掉91% 样本,用户看到只有4只票)
     #   - scanner_scoring._score_trend 纯评分,过滤交给后续步骤 (涨幅 2-9% + head 30)
     from scanner_scoring import _score_trend as score_trend
-    strong = score_trend(strong)
+    today_iso = f'{today[:4]}-{today[4:6]}-{today[6:8]}' if len(today) == 8 else today
+    strong = score_trend(strong, today_str=today_iso)
     if strong is None or strong.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
     prev = strong
@@ -1597,7 +1598,7 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
             w = _load_tab_weights('dtqiaoban')
         except Exception:
             w = None
-        scored = score_dtqiaoban_data(df, weights=w)
+        scored = score_dtqiaoban_data(df, weights=w, today_str=today)
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
@@ -2886,7 +2887,8 @@ async def api_dtqiaoban_stream(refresh: bool = Query(False)):
             w = _load_tab_weights('dtqiaoban')
         except Exception:
             w = None
-        scored = score_dtqiaoban_data(df, weights=w)
+        today_iso2 = f'{today[:4]}-{today[4:6]}-{today[6:8]}' if len(today) == 8 else today
+        scored = score_dtqiaoban_data(df, weights=w, today_str=today_iso2)
         items = []
         for _, row in scored.iterrows():
             code = str(row.iloc[1]).strip().zfill(6)
