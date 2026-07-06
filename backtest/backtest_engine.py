@@ -324,17 +324,19 @@ def _try_archive_db_ohlcv(code: str, d_signal: str, stock_type: str = 'limit_up'
                 (code, d_signal)
             )
         elif stock_type in ('zhaban', 'dtqiaoban'):
-            # 炸板/跌停股: 前一天是涨停 (D-1), limit_up 记录的 next_day_change = D 日真实涨幅
+            # v3.3i: 炸板日=D日本身就是涨停日(然后炸板), 查D/D-1/D-2三天
+            # limit_up 记录的 next_day_change 可用于推算 T+1 涨幅
             dt = datetime.strptime(d_signal, '%Y%m%d')
+            d_same = dt.strftime('%Y%m%d')
             d_prev = (dt - timedelta(days=1)).strftime('%Y%m%d')
             d_prev2 = (dt - timedelta(days=2)).strftime('%Y%m%d')
             cur.execute(
                 "SELECT price, change_pct, next_day_change, turnover "
                 "FROM daily_stocks "
-                "WHERE code=? AND trade_date IN (?, ?) AND stock_type='limit_up' "
+                "WHERE code=? AND trade_date IN (?, ?, ?) AND stock_type='limit_up' "
                 "ORDER BY ABS(julianday(trade_date) - julianday(?)) "
                 "LIMIT 1",
-                (code, d_prev, d_prev2, d_signal)
+                (code, d_same, d_prev, d_prev2, d_signal)
             )
         else:
             # reversal/trend: 向前 3 天内查任何 stock_type, 优先 limit_up
@@ -1463,17 +1465,17 @@ def run_tab_backtest(
                     if not signal_ohlcv:
                         signal_ohlcv = _try_archive_db_ohlcv(code, d_signal, stock_type_for_arch)
                     if not buy_ohlcv:
-                        buy_ohlcv = signal_ohlcv  # T close ≈ T+1 open
+                        # v3.3i: 不再用 signal_ohlcv 兜底(会导致买卖同价假交易)
+                        buy_arch = _try_archive_db_ohlcv(code, d_buy, stock_type_for_arch)
+                        if buy_arch is not None:
+                            buy_ohlcv = dict(buy_arch)
+                            buy_ohlcv['_fallback'] = 'archive_buy'
                     if not sell_ohlcv:
                         sell_arch = _try_archive_db_ohlcv(code, d_sell, stock_type_for_arch)
                         if sell_arch is not None:
-                            sell_ohlcv = dict(sell_arch)  # copy, 防缓存副作用
-                            # 纠正: 函数返回 open=d_sell收盘, 回测需要 d_sell开盘
-                            # d_sell开盘 ≈ d_sell-1收盘 = prev_close
+                            sell_ohlcv = dict(sell_arch)
                             sell_ohlcv['_sell_open'] = sell_arch.get('prev_close', sell_arch['open'])
-                        elif signal_ohlcv is not None:
-                            # 兜底: 用信号日 close (T+1收盘)
-                            sell_ohlcv = signal_ohlcv
+                            sell_ohlcv['_fallback'] = 'archive_sell'
                 if not all([signal_ohlcv, buy_ohlcv, sell_ohlcv]):
                     missing = []
                     if not signal_ohlcv: missing.append(f'signal={d_signal}')
