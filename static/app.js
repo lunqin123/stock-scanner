@@ -255,11 +255,39 @@ function onBacktestParamChange() {
 // 保留空函数以防外部模板调用, 不实际生效
 function onBacktestStrategyChange() { /* no-op */ }
 
+function onBacktestMinScoreInput() {
+    // 输入时实时更新显示，不触发回测重跑
+    var inp = document.getElementById('btMinScore');
+    var val = parseInt(inp ? inp.value : 0) || 0;
+    var scoreEl = document.getElementById('tab-score-display');
+    if (scoreEl) {
+        var mode = _TAB_BUY_MODE[_btTab] === 'close' ? '尾盘买T+1卖' : ('T+' + _getSellN(_btTab) + '开盘卖');
+        scoreEl.innerHTML = '最低分 <b style=\"color:var(--accent)\">' + val + '</b> · ' + mode;
+    }
+}
 function onBacktestMinScoreChange() {
     var inp = document.getElementById('btMinScore');
     var val = parseInt(inp ? inp.value : 0) || 0;
     _setMinScore(_btTab, val);
-    _btCache = {};
+    // 实时更新分数显示
+    var scoreEl = document.getElementById('tab-score-display');
+    if (scoreEl) {
+        var mode = _TAB_BUY_MODE[_btTab] === 'close' ? '尾盘买T+1卖' : ('T+' + _getSellN(_btTab) + '开盘卖');
+        scoreEl.textContent = '最低分 ' + val + ' · ' + mode;
+    }
+    // 更新当前tab按钮标签
+    var btns = document.querySelectorAll('#btTabBar button');
+    btns.forEach(function(btn) {
+        if (btn.style.background.indexOf('var(--accent)') >= 0 || btn.style.background === 'rgb(79, 140, 255)') {
+            var tKey = btn.textContent.match(/^(涨停|炸板|趋势|反转|跌停)/);
+            if (tKey) {
+                var tabMap = {'涨停':'limit-up','炸板':'zhaban','趋势':'trend','反转':'reversal','跌停':'dtqiaoban'};
+                var tk = tabMap[tKey[0]];
+                var strategyLabel = _TAB_BUY_MODE[tk] === 'close' ? '尾盘T+1卖' : ('T+' + _getSellN(tk) + '卖');
+                btn.innerHTML = tKey[0] + ' ' + strategyLabel + ' <span style=\"opacity:0.7\">(' + _getMinScore(tk) + '分)</span>';
+            }
+        }
+    });
     loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
 }
 
@@ -816,7 +844,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     // 2026-07-05: 删除 strategy preset 下拉 (limit-prime/trend-elite/limit-sweet)
                     // 唯一过滤逻辑 = plan_a 评分 + min_score 阈值 + sell_n 卖出日.
                     + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
-                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
+                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" oninput="onBacktestMinScoreInput()" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="window._resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '<button onclick="window._applySweetPointMs()" title="一键采用系统甜蜜点 ms (2026-07-05 IC 网格扫描): 趋势85/涨停38/反转0/炸板75/翘板75" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e;border-radius:4px;cursor:pointer">⭐ 用甜蜜点 ms</button>'
