@@ -191,7 +191,7 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
-def _scan_limit_up_data(today_str: str, principal: float = 20000, plan_name: str = None, use_v2: bool = True):
+def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str = None, use_v2: bool = True):
     """涨停扫描核心逻辑：拉取数据 + 过滤 + 调用评分方案"""
     from scanner import (fetch_limit_up_pool, pre_filter,
                          filter_by_price, can_buy_filter,
@@ -373,7 +373,7 @@ def _archive_scan_inputs_async(today_str, fund_df, sentiment_score, sentiment_le
         pass
 
 
-def _scan_from_raw_cache(principal: float = 20000, plan_name: str = None):
+def _scan_from_raw_cache(principal: float = 30000, plan_name: str = None):
     """从缓存的原始数据重跑评分逻辑。"""
     import pandas as pd
     raw = _load_raw_cache()
@@ -874,7 +874,7 @@ def _signals_today_inner(refresh: bool = False, user_bt_params: dict = None) -> 
 
             ev = real_evs.get(tab) or TAB_EV_ESTIMATES_FALLBACK[tab]
             # EV 单笔金额: 用该 tab 实际 capital (而不是固定 20000)
-            cap = (ev.get('capital') if isinstance(ev, dict) else None) or 20000
+            cap = (ev.get('capital') if isinstance(ev, dict) else None) or 30000
             ev_pct = ev.get('ev_pct', 0) if isinstance(ev, dict) else 0
             win_rate = ev.get('win_rate', 0) if isinstance(ev, dict) else 0
             note = ev.get('note', '') if isinstance(ev, dict) else ''
@@ -1250,7 +1250,7 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
 
 @app.get("/api/scan/trend/cards")
 def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
-                    principal: float = Query(20000, description="本金(元)")):
+                    principal: float = Query(30000, description="本金(元)")):
     """趋势扫描 — 结构化数据（含量价分析、板块、跳转）
     缓存策略: 缓存原始数据(akshare df),每次用最新 _build_trend_items 重算。
     改评分逻辑后无需 bump _CACHE_VER,直接 reload 即可看到新结果。
@@ -2262,7 +2262,7 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
 
 @app.get("/api/scan/limit-up/stream")
 async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强制刷新"),
-                                    principal: float = Query(20000, description="本金(元)"),
+                                    principal: float = Query(30000, description="本金(元)"),
                                     plan: str = Query(None, description="评分方案(A/B/...)"),
                                     use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子")):
     """涨停扫描 — SSE 流式输出实时进度（优先使用每日缓存）"""
@@ -2352,7 +2352,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
 
 
 @app.get("/api/scan/fetch-all")
-async def api_scan_fetch_all(principal: float = Query(20000, description="本金(元)"),
+async def api_scan_fetch_all(principal: float = Query(30000, description="本金(元)"),
                                plan: str = Query(None, description="评分方案(A/B/...)")):
     """全局「拉取」— 一次性获取所有板块原始数据并缓存（涨停+炸板+跌停+资金流+情绪）"""
     plan_name = plan or None
@@ -2434,7 +2434,7 @@ async def api_scan_fetch_all(principal: float = Query(20000, description="本金
 
 
 @app.get("/api/scan/limit-up/run")
-async def api_scan_limit_up_run(principal: float = Query(20000, description="本金(元)"),
+async def api_scan_limit_up_run(principal: float = Query(30000, description="本金(元)"),
                                   plan: str = Query(None, description="评分方案(A/B/...)")):
     """涨停扫描「运行」— 优先从缓存重跑，无缓存则自动拉取"""
     plan_name = plan or None
@@ -2854,7 +2854,7 @@ async def api_zhaban_stream(refresh: bool = Query(False)):
 
 @app.get("/api/scan/trend/stream")
 async def api_trend_stream(refresh: bool = Query(False),
-                            principal: float = Query(20000, description="本金(元)")):
+                            principal: float = Query(30000, description="本金(元)")):
     def run():
         print("  [趋势] 拉取数据...", file=sys.stderr)
         # 直接调 cards 端点保证数据源唯一，消除与刷新的差异
@@ -2971,7 +2971,7 @@ def get_market_status():
     return "closed"
 
 
-_CLOSE_CACHE_KEY = "limit_up_cards_20000_default"
+_CLOSE_CACHE_KEY = "limit_up_cards_30000_default"
 
 def _schedule_close_scan():
     """盘后 15:05 自动触发一次全量扫描，写入冻结缓存（默认本金 2 万）
@@ -2998,13 +2998,13 @@ def _schedule_close_scan():
             threading.Timer(max(60, delay), _schedule_close_scan).start()
             return
         print("  [收盘扫描] 15:05 已过且无缓存，60秒后启动补扫", file=sys.stderr)
-        threading.Timer(60, lambda: _run_close_scan(principal=20000)).start()
+        threading.Timer(60, lambda: _run_close_scan(principal=30000)).start()
         return
     delay = (target - now).total_seconds()
-    threading.Timer(delay, lambda: _run_close_scan(principal=20000)).start()
+    threading.Timer(delay, lambda: _run_close_scan(principal=30000)).start()
     print(f"  [收盘扫描] 已调度，将在 {delay/60:.0f} 分钟后执行", file=sys.stderr)
 
-def _run_close_scan(principal=20000):
+def _run_close_scan(principal=30000):
     """执行收盘扫描，强制写入每日缓存"""
     from cache import daily_set
     from datetime import date
@@ -3046,7 +3046,7 @@ def _run_close_scan(principal=20000):
             # 触发 T+1 真实回测 (后台, 不阻塞, 慢 ~2 分钟)
             try:
                 threading.Thread(
-                    target=lambda: _run_t1_backtest_cached(max_days=30, top_n=3, capital=20000, force=True),
+                    target=lambda: _run_t1_backtest_cached(max_days=30, top_n=3, capital=30000, force=True),
                     daemon=True
                 ).start()
                 print("  [T+1 回测] 已触发后台运行 (30 天 / TOP 3)", file=sys.stderr)

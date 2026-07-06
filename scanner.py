@@ -276,7 +276,7 @@ def main():
     # ── 预计算总分 + TOP N 索引（供后续所有模块共享） ──
     s_history = history_scores if history_scores is not None else pd.Series(2.5, index=filtered.index)
     s_stock_sent = score_stock_sentiment(filtered, money_scores, buyability_scores)
-    s_principal = score_by_principal(filtered, 20000)
+    s_principal = score_by_principal(filtered, 30000)
     # v3.3c: 对齐 Web, 直接用 sector_mom (sector_res 已 DEPRECATED 合并到 sector_mom)
     sector_for_scoring = sector_raw
 
