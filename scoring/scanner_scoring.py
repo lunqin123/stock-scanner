@@ -214,14 +214,17 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
             elif consecutive == 1:   f_lb[idx] = 0.40
             else:                    f_lb[idx] = 0.20
 
-    # 3. 回调深度（真正跌深了才有反弹空间）
+    # 3. 回调深度 (v3.3d修复: 浅回调=洗盘=好, 深回调=出货=差)
+    # 逻辑: -2%~-4%浅回调是健康的获利回吐, 筹码锁定好, 次日反包概率高
+    #       -5%~-7%中等回调分歧加大, >-7%深度回调大概率是出货, 不应参与
     for idx in pullback.index:
         chg_val = pullback.loc[idx, '今日涨幅']
-        if chg_val < -7:         f_chg[idx] = 1.0   # 深度回调
-        elif -7 <= chg_val < -5: f_chg[idx] = 0.8
-        elif -5 <= chg_val < -3: f_chg[idx] = 0.6
-        elif -3 <= chg_val < -1: f_chg[idx] = 0.4
-        else:                    f_chg[idx] = 0.1   # 没跌多少，不叫反转
+        if -4 <= chg_val <= -2:      f_chg[idx] = 1.0   # 浅回调洗盘: 最优
+        elif -2 < chg_val <= 0:      f_chg[idx] = 0.85  # 几乎没跌: 强势整理
+        elif -5 <= chg_val < -4:     f_chg[idx] = 0.7   # 中等回调: 可接受
+        elif -6 <= chg_val < -5:     f_chg[idx] = 0.5   # 偏深: 谨慎
+        elif -7 <= chg_val < -6:     f_chg[idx] = 0.3   # 深度回调: 风险大
+        else:                        f_chg[idx] = 0.1   # < -7%: 大概率出货
 
     # 4. 板块支撑（按板块涨停股数连续分档）
     industry_counts = {}
@@ -328,8 +331,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     if df is None or df.empty:
         return df
 
-    # 默认权重 (v3.3d 优化: chg降权40→35, amount 30→25, new_high 3→5)
-    defaults = {'chg': 35, 'turnover': 30, 'amount': 25, 'vol_ratio': 5, 'new_high': 5, 'ma_rev': 0}
+    # 默认权重 (v3.3d 优化: chg降权40→30, vol_ratio提权5→10, 量价配合确认趋势)
+    defaults = {'chg': 30, 'turnover': 30, 'amount': 25, 'vol_ratio': 10, 'new_high': 5, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})

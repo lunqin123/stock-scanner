@@ -700,13 +700,13 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
-# 趋势动量权重——v3.3d: 涨幅甜蜜区改为3-5%, new_high提权
+# 趋势动量权重——v3.3d: 涨幅甜蜜区3-5%, vol_ratio提权10(量价确认), new_high提权5
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 35,       # 涨幅分 (3-5%甜蜜区)
+    'chg': 30,       # 涨幅分 (3-5%甜蜜区)
     'turnover': 30,  # 换手分
     'amount': 25,    # 成交额分
-    'vol_ratio': 5,  # 量比加分
-    'new_high': 5,   # 新高加分 (v3.3d: 新高=强趋势确认)
+    'vol_ratio': 10, # 量比加分 (v3.3d: 量价配合确认趋势)
+    'new_high': 5,   # 新高加分 (新高=强趋势确认)
     'ma_rev': 0,     # MA回归分 (已关闭)
 }
 
