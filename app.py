@@ -493,31 +493,17 @@ def _fetch_three_pools(today: str, ak):
 
 
 def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
-    """通用 pool -> data 加载器 (缓存 + 异常处理) - P1-3 重构
-    返回 (data, from_cache, error_response):
-        - data 不为 None: 拉到的数据 (可能来自缓存)
-        - from_cache: True 表示从缓存读到的
-        - error_response 不为 None: 端点应直接 return 它
-    """
-    if not refresh:
-        cached = daily_get_pkl(cache_key)
-        if cached is not None:
-            return cached, True, None
+    """通用 pool -> data 加载器 (无缓存, 直接拉取) - v3.3e 取消缓存"""
     try:
         data = loader()
     except Exception as e:
         print(f"  [{cache_key}] 拉取失败: {e}", file=sys.stderr)
         return None, False, JSONResponse({"ok": False, "error": str(e), "items": []})
-    # 空数据
     if data is None:
         return None, False, {"ok": True, "items": []}
     if hasattr(data, 'empty') and data.empty:
         return None, False, {"ok": True, "items": []}
-    daily_set_pkl(cache_key, data, force=refresh)
     return data, False, None
-
-
-_CARDS_CACHE_VER = 4  # v3→v4: v3.3c score_new 权重优化+回测对齐, 旧卡片缓存评分无效
 
 @app.get("/api/scan/limit-up/cards")
 
@@ -3366,9 +3352,7 @@ def index():
                 break
         except Exception:
             continue
-    if cached and cached.get('stocks'):
-        inject = '<script>window._CACHED_RANKING = ' + _json.dumps(cached, ensure_ascii=False) + ';</script>'
-        html = html.replace('</head>', inject + '</head>')
+    # v3.3e: 移除 _CACHED_RANKING 注入, 前端每次拉取实时数据
     return HTMLResponse(content=html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 

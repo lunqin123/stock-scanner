@@ -126,7 +126,7 @@ window._applySweetPointMs = _applySweetPointMs;
 // 关键修复:
 //   1. 缓存 data 而不是 html(避免以后加 generated_at 等动态字段时缓存陈旧)
 //   2. _btLoadToken 防竞态:慢请求完成后丢弃(避免切tab时旧请求覆盖新loading)
-var _btCache = {};
+var _btCache = {};  // v3.3e: unused, nocache
 var _btLoadToken = 0;
 
 function _btCacheKey(tab, days, topN, capital, strategy, minScore, sellN) {
@@ -140,13 +140,6 @@ async function loadBacktestTab(tab, days, topN, capital) {
     if (!contentEl) return;
     contentEl.innerHTML = '<div class="loading">⏳ 加载中...</div>';
 
-    var key = _btCacheKey(tab, days, topN, capital, _btStrategy, _getMinScore(tab), _getSellN(tab));
-    if (_btCache[key]) {
-        _btCache[key].ts = Date.now();
-        contentEl.innerHTML = renderBacktestTabFull(_btCache[key].data);
-        return;
-    }
-
     _btLoadToken++;
     var myToken = _btLoadToken;
     try {
@@ -157,20 +150,12 @@ async function loadBacktestTab(tab, days, topN, capital) {
         var resp = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
         var data = await resp.json();
-        // 注: 不要 token-check 后直接 return, 必须把 data 写进 cache
-        // 理由: 用户切走再切回 → 第一次 fetch 拿回 data 但被丢弃 → 第二次 fetch 又发同样请求
-        // 解决: 即使 token 变了, 也写 cache (下次同 key 直接命中, 零延迟)
-        if (data && typeof data === 'object' && data.ok) {
-            _btCache[key] = { data: data, ts: Date.now() };
-        }
-        if (myToken !== _btLoadToken) return;  // 已被新请求抢断,丢弃渲染 (data 已入 cache)
+        if (myToken !== _btLoadToken) return;
         if (!data) {
             contentEl.innerHTML = '<div class="error-text">回测加载失败 - 服务端返回空 (请刷新重试)</div>';
             return;
         }
         contentEl.innerHTML = renderBacktestTabFull(data);
-        // 当前 tab 加载完后，后台预加载其他 tab 的数据
-        _prefetchBacktestTabs(tab, days, topN, capital);
     } catch (e) {
         if (myToken !== _btLoadToken) {
             // token 变了, 不报错(让新请求主导), 但至少 console 一下
@@ -390,18 +375,8 @@ let _outputCache = {};  // {html, ts} - 服务端注入 _CACHED_RANKING 的临�
 // nav 切 tab 永远重拉(见 switchPage),此处仅供 _CACHED_RANKING fallback 路径用
 const _OUTPUT_CACHE_TTL_MS = 30 * 1000;  // 30s 内有效, 超过视为过期强制重拉
 
-function _getCachedPage(page) {
-    var c = _outputCache[page];
-    if (!c) return null;
-    if (Date.now() - c.ts > _OUTPUT_CACHE_TTL_MS) {
-        delete _outputCache[page];
-        return null;
-    }
-    return c.html;
-}
-function _setCachedPage(page, html) {
-    _outputCache[page] = { html: html, ts: Date.now() };
-}
+function _getCachedPage(page) { return null; }  // v3.3e: nocache
+function _setCachedPage(page, html) {}  // v3.3e: nocache
 let _lastUrl = {};  // 跟踪每个页面最后一次请求的 URL
 let _pageToken = 0; // 页面切换令牌，切换时+1，异步渲染前校验——防止慢响应串台
 
@@ -558,22 +533,7 @@ async function runCurrent() {
     _lastUrl[currentPage] = stableKey;
 
     // 页面刷新后 localStorage 有缓存 → 瞬间展示，不重复请求
-    if (!_getCachedPage(currentPage)) {
-        // QQ 浏览器等无法依赖 localStorage → 用服务端注入的数据
-        if (currentPage === 'scan-limit' && window._CACHED_RANKING) {
-            var cr = window._CACHED_RANKING;
-            if (cr.stocks && cr.stocks.length) {
-                var rankingHtml = renderStockCards(cr.stocks, cr);
-                var s = cr.sentiment || {};
-                rankingHtml = (cr.fetched_at ? '<div style="font-size:11px;color:var(--text-muted);padding:4px 14px 0;text-align:right">数据拉取: ' + esc(cr.fetched_at) + '</div>' : '') +
-                    rankingHtml;
-                _setCachedPage(currentPage, rankingHtml);
-                _dom.output().innerHTML = rankingHtml;
-                hideProgress();
-                return;
-            }
-        }
-    }
+    // v3.3e: 缓存已移除, 每次重新拉取
 
     await callApi(url, currentPage);
 }
@@ -634,21 +594,7 @@ async function refreshCurrent() {
 
 function updateCacheStatus() {
     var el = document.getElementById('cache-status');
-    if (!el) return;
-    el.textContent = '⏳';
-    el.title = '检查缓存状态...';
-    var plan = getPlan();
-    fetch('/api/scan/limit-up/run?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + Date.now())
-        .then(function(r) {
-            el.textContent = '✅';
-            el.title = '缓存就绪';
-            el.style.color = '#4ade80';
-        })
-        .catch(function() {
-            el.textContent = '⚠';
-            el.title = '需拉取数据';
-            el.style.color = '#fbbf24';
-        });
+    if (el) { el.textContent = '✅'; el.title = '实时数据'; el.style.color = '#4ade80'; }
 }
 
 async function callApi(apiUrl, pageKey) {
@@ -680,7 +626,6 @@ var _trackerFetching = false;
 var _trackerFetchers = [];
 
 async function _fetchTrackerStats() {
-    if (_trackerCache) return _trackerCache;
     if (_trackerFetching) {
         return new Promise(function(resolve) { _trackerFetchers.push(resolve); });
     }
@@ -688,7 +633,6 @@ async function _fetchTrackerStats() {
     try {
         var resp = await fetch('/api/tracker/stats?_r=' + Math.random().toString(36).slice(2));
         var data = await resp.json();
-        _trackerCache = data;
         _trackerFetchers.forEach(function(f) { f(data); });
         _trackerFetchers = [];
         return data;
