@@ -524,17 +524,8 @@ async function runCurrent() {
     if (!info) return;
     savePrincipal();
     var plan = getPlan();
-    // 稳定 cache key: 不含 _r (随机数), 否则每次 runCurrent 都 miss 永远 14s 重 fetch
-    var stableKey = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + (getUseV2() ? '&use_v2=true' : '&use_v2=false');
-    var url = stableKey + '&_r=' + Math.random().toString(36).slice(2);
-    if (_lastUrl[currentPage] === stableKey && _getCachedPage(currentPage)) {
-        return;
-    }
-    _lastUrl[currentPage] = stableKey;
-
-    // 页面刷新后 localStorage 有缓存 → 瞬间展示，不重复请求
-    // v3.3e: 缓存已移除, 每次重新拉取
-
+    // v3.3e: 永远重新拉取, 不加任何条件判断
+    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + (getUseV2() ? '&use_v2=true' : '&use_v2=false') + '&_t=' + Date.now();
     await callApi(url, currentPage);
 }
 
