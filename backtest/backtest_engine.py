@@ -1593,7 +1593,7 @@ def run_tab_backtest(
                     # P4: 趋势因子分列(供调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
                                'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
-                               'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector',
+                               'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector','zb_market_cap',
                                'dt_deal','dt_seal','dt_cont','dt_turnover','dt_time']:
                         val = row.get(fk)
                         if val is not None:

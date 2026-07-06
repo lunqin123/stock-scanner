@@ -24,19 +24,21 @@ from scanner_data import fetch_fund_flow_data
 
 def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
                       fund_df: pd.DataFrame = None) -> pd.DataFrame:
-    """炸板反包评分 (v3.3g 重构): 板块驱动+封板质量+资金承接
+    """炸板反包评分 (v3.3h 硬过滤+市值因子): 板块驱动+封板质量+资金承接
 
     反包核心逻辑 (A股实证):
       1. 板块还在涨 → 炸板票跟着回封 (板块是最强驱动力)
       2. 早盘封板被炸 → 买盘强, 被暂时压制的需求会反扑
       3. 大资金封板被吃 → 主力深度介入, 会护盘
-      4. 1次干净炸板 → 健康分歧; 多次炸板 → 持续抛压
-      5. 适中换手 (8-20%) → 分歧充分; 极端换手 → 恐慌或冷清
+      4. 小市值弹性大 → <50亿盘子轻, 反包幅度大
+      5. 1次干净炸板 → 健康分歧; 多次炸板(≥4) → 持续抛压
+
+    v3.3h: 硬预过滤 — 换手>40%/炸板≥5次/无板块支撑直接排除
     """
     df = df.copy()
 
-    # v3.3g 权重: 板块提权(反包最强驱动), feature/turnover合并避免重复
-    defaults = {'seal': 30, 'money': 20, 'feature': 12, 'turnover': 8, 'sector': 30}
+    # v3.3h: 新增 market_cap 因子, 权重重新分配
+    defaults = {'seal': 25, 'money': 15, 'feature': 10, 'turnover': 6, 'sector': 34, 'market_cap': 10}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -47,6 +49,20 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     zhaban_count_col = '炸板次数' if '炸板次数' in df.columns else (df.columns[12] if len(df.columns) > 12 else None)
     turnover_col = '换手率' if '换手率' in df.columns else (df.columns[9] if len(df.columns) > 9 else None)
     industry_col = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+    cap_col = '流通市值' if '流通市值' in df.columns else None
+
+    # ── v3.3h: 硬预过滤 ──
+    turnover_vals = df[turnover_col].fillna(0).astype(float)
+    zb_vals = df[zhaban_count_col].fillna(0).astype(float)
+    bad_mask = (turnover_vals > 40) | (zb_vals >= 5)
+    if bad_mask.any():
+        print(f"  [炸板硬过滤] 排除 {(bad_mask).sum()} 只 (换手>40%或炸板≥5次)", file=sys.stderr)
+        df = df[~bad_mask].copy()
+        if df.empty:
+            return df
+        # 重新计算这些 series
+        turnover_vals = df[turnover_col].fillna(0).astype(float)
+        zb_vals = df[zhaban_count_col].fillna(0).astype(float)
 
     # 1. 封板质量 (0-30): 时间(12) + 资金绝对额(10) + 炸板次数(8)
     seal_scores = pd.Series(0.0, index=df.index)
@@ -106,7 +122,19 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
         np.where(turnover_vals <= 3, 1.0, np.where(turnover_vals > 40, 1.0, 4.0))))
     f_turn = (turn_scores / 8).clip(0, 1)
 
-    # 5. 板块热度 (0-30): v3.3g 核心因子 — 板块是反包最强驱动
+    # 4.5 流通市值 (0-10): v3.3h 新增 — 小盘股弹性大, 反包幅度高
+    f_cap = pd.Series(0.5, index=df.index)
+    if cap_col and cap_col in df.columns:
+        cap_vals = df[cap_col].fillna(50e8).astype(float) / 1e8
+        for idx in df.index:
+            c = cap_vals[idx]
+            if c < 20:       f_cap[idx] = 1.0   # <20亿: 盘子最轻, 弹性最大
+            elif c < 50:     f_cap[idx] = 0.85  # 20-50亿: 小盘
+            elif c < 100:    f_cap[idx] = 0.65  # 50-100亿: 中盘
+            elif c < 200:    f_cap[idx] = 0.45  # 100-200亿: 偏大
+            else:            f_cap[idx] = 0.25  # >200亿: 盘子重, 难反包
+
+    # 5. 板块热度 (0-34): 核心因子 — 板块是反包最强驱动, 加封板率修正
     try:
         limit_pool = ak.stock_zt_pool_em(date=today_str)
         if not limit_pool.empty:
@@ -114,25 +142,40 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
             counts = limit_pool[ind_col_l].value_counts()
             industries = df[industry_col] if industry_col in df.columns else df.iloc[:, 15]
             industry_counts = industries.map(counts).fillna(0)
-            # v3.3g: 板块涨停数分档更细, 3只起板即有较强支撑
+            # v3.3h: 板块涨停数 + 本池炸板数算封板率
+            # 封板率 = 涨停/(涨停+炸板), 高封板率=板块强, 炸板是意外
+            zb_by_sector = df[industry_col].value_counts().to_dict() if industry_col in df.columns else {}
             sector_raw = pd.Series(0.0, index=df.index)
             for idx in df.index:
-                cnt = int(industry_counts[idx])
-                if cnt >= 8:    sector_raw[idx] = 30
-                elif cnt >= 5:  sector_raw[idx] = 26
-                elif cnt >= 4:  sector_raw[idx] = 22
-                elif cnt >= 3:  sector_raw[idx] = 18
-                elif cnt >= 2:  sector_raw[idx] = 12
-                elif cnt >= 1:  sector_raw[idx] = 6
-                else:           sector_raw[idx] = 2
+                ind = str(df.loc[idx, industry_col]) if industry_col in df.columns else str(df.iloc[idx, 15])
+                cnt = int(counts.get(ind, 0))
+                zc = int(zb_by_sector.get(ind, 0))
+                # 基础分 (0-28): 板块涨停数
+                if cnt >= 8:    base = 28
+                elif cnt >= 5:  base = 24
+                elif cnt >= 4:  base = 20
+                elif cnt >= 3:  base = 16
+                elif cnt >= 2:  base = 10
+                elif cnt >= 1:  base = 4
+                else:           base = 1
+                # 封板率加分 (0-6): 炸板票少+涨停多=板块质量好
+                total_sector = cnt + zc
+                if total_sector > 0 and cnt > 0:
+                    seal_rate = cnt / total_sector
+                    if seal_rate >= 0.8:    base += 6
+                    elif seal_rate >= 0.6:  base += 4
+                    elif seal_rate >= 0.4:  base += 2
+                # v3.3h: 独苗(板块0涨停)直接压到1分, 无板块支撑几乎不可能反包
+                sector_raw[idx] = min(34, base)
         else:
             sector_raw = get_sector_heat_scores(df, money_series=raw_money)
     except Exception:
         sector_raw = get_sector_heat_scores(df, money_series=raw_money)
-    f_sector = (sector_raw / 30).clip(0, 1)
+    f_sector = (sector_raw / 34).clip(0, 1)
 
+    # ── v3.3h: 加权总分 (含市值因子) ──
     total = (f_seal * w['seal'] + f_money * w['money'] + f_feature * w['feature'] +
-             f_turn * w['turnover'] + f_sector * w['sector'])
+             f_turn * w['turnover'] + f_sector * w['sector'] + f_cap * w['market_cap'])
     base_score = (total / max_raw * 100).clip(lower=0)
 
     # v3.3d: v2 position_factor 乘性调节 (持续性+回撤位置, 过滤一日游炸板)
@@ -158,6 +201,7 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     df['zb_feature'] = (f_feature * w['feature']).round(1)
     df['zb_turnover'] = (f_turn * w['turnover']).round(1)
     df['zb_sector'] = (f_sector * w['sector']).round(1)
+    df['zb_market_cap'] = (f_cap * w['market_cap']).round(1)
     df['资金承接'] = money_scores.round(1)
     df['炸板特征'] = feature.round(1)
     df['换手评分'] = turn_scores.round(1)

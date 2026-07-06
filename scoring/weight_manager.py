@@ -591,8 +591,8 @@ def adjust_reversal_weights_from_backtest(records: list, lr: float = 0.1):
 #  炸板 + 翘板 因子权重 (P5)
 # ═══════════════════════════════════════════
 
-# 炸板权重（v3.3g: 板块驱动重构, sector提权30, seal提权30, feature/turnover降权）
-ZB_DEFAULT_WEIGHTS = {'seal': 30, 'money': 20, 'feature': 12, 'turnover': 8, 'sector': 30}
+# 炸板权重（v3.3h: +市值因子, 板块驱动+小盘弹性）
+ZB_DEFAULT_WEIGHTS = {'seal': 25, 'money': 15, 'feature': 10, 'turnover': 6, 'sector': 34, 'market_cap': 10}
 ZB_FACTOR_NAMES = {'seal': '封板', 'money': '资金', 'feature': '特征', 'turnover': '换手', 'sector': '板块'}
 
 # 翘板权重（v3.3d: cont提权30, time降权5, 连跌天数比封板时间重要）
