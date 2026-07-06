@@ -93,23 +93,6 @@ function _resetBacktestParams() {
 }
 window._resetBacktestParams = _resetBacktestParams;
 
-// 一键采用"系统甜蜜点 ms" (2026-07-05 IC 网格扫描结果)
-// 不清空 sell_n / capital / top_n / strategy, 只覆盖 min_score
-const _SWEET_POINT_MS = {
-    'limit-up': 38,
-    'trend':    60,
-    'reversal': 50,
-    'zhaban':   65,   // v3.3h: 硬过滤+板块驱动后新门槛
-    'dtqiaoban':60,
-};
-function _applySweetPointMs() {
-    if (!confirm('一键采用系统甜蜜点 ms?\n涨停38/趋势60/反转50/炸板65/翘板60\n其他参数不变.')) return;
-    for (var k in _SWEET_POINT_MS) _setMinScore(k, _SWEET_POINT_MS[k]);
-    _btCache = {};
-    location.reload();
-}
-window._applySweetPointMs = _applySweetPointMs;
-
 // P6: 前端缓存层 — 按 (tab, days, top_n, capital) 缓存 data 对象,切回秒显示
 // 关键修复:
 //   1. 缓存 data 而不是 html(避免以后加 generated_at 等动态字段时缓存陈旧)
@@ -847,7 +830,6 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" oninput="onBacktestMinScoreInput()" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
                     + '<button onclick="window._resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
-                    + '<button onclick="window._applySweetPointMs()" title="一键采用系统甜蜜点 ms (2026-07-05 IC 网格扫描): 趋势85/涨停38/反转0/炸板75/翘板75" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e;border-radius:4px;cursor:pointer">⭐ 用甜蜜点 ms</button>'
                     + '</div>'
                     + '<div id="tomorrowSignals" style="display:none;margin:8px 0;padding:12px;background:var(--card-bg);border:1px solid #f59e0b;border-radius:8px"></div>';
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
