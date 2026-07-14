@@ -899,16 +899,33 @@ def _signals_today_inner(refresh: bool = False, user_bt_params: dict = None) -> 
         except Exception as e:
             print(f'  [signals/today] {tab}: {type(e).__name__}: {str(e)[:80]}',
                   file=sys.stderr)
-    # 综合打分排序
+    # v3.3p: 过滤掉历史 EV 为负的 tab (避免亏损 tab 的烂票拖累推荐)
+    # 当前仅 limit-up EV>0(+3.55%), 等其它 tab 转正后再加入
+    ev_filtered = []
+    dropped_tabs = []
     for c in candidates:
+        tab_ev = real_evs.get(c['tab'], {}).get('ev_pct', 0) if isinstance(real_evs.get(c['tab']), dict) else 0
+        if tab_ev > 0:
+            ev_filtered.append(c)
+        else:
+            dropped_tabs.append(f"{c['tab']}(EV={tab_ev:+.2f}%)")
+
+    if not ev_filtered:
+        # 保底: 无正 EV tab 时用全部候选
+        ev_filtered = candidates
+        dropped_tabs = []
+
+    # 综合打分排序
+    for c in ev_filtered:
         compute_recommendation_score(c)
-    candidates.sort(key=lambda c: c.get('recommendation_score', c['expected_pnl_per_trade']),
+    ev_filtered.sort(key=lambda c: c.get('recommendation_score', c['expected_pnl_per_trade']),
                     reverse=True)
     result = {
         'ok': True,
-        'best': candidates[0] if candidates else None,
-        'candidates': candidates,
-        'tab_estimates': real_evs,  # 真实 EV (而非 fallback)
+        'best': ev_filtered[0] if ev_filtered else None,
+        'candidates': ev_filtered,
+        'tab_estimates': real_evs,
+        'alert': f"已排除负EV tab: {', '.join(dropped_tabs)}" if dropped_tabs else '',
         'fetched_at': _fetched_at(),
         'cached': False,
     }
