@@ -3386,6 +3386,363 @@ def api_backtest_dashboard():
     }
 
 
+# ─── 智能权重优化 (2026-07-14) ────────────────────────
+
+# tab → 因子信息映射
+_TAB_FACTOR_MAP = {
+    'limit-up': {
+        'factor_keys': ['seal', 'money', 'sector', 'tech', 'history',
+                        'stock_sentiment', 'principal_score', 'north_flow', 'alpha'],
+        'factor_names': {'seal':'封板','money':'资金','sector':'板块','tech':'技术',
+                         'history':'历史','stock_sentiment':'个股情绪',
+                         'principal_score':'本金','north_flow':'北向','alpha':'Alpha'},
+        'prefix': 'f_',
+    },
+    'trend': {
+        'factor_keys': ['chg', 'turnover', 'amount', 'vol_ratio', 'new_high'],
+        'factor_names': {'chg':'涨幅','turnover':'换手','amount':'成交额',
+                         'vol_ratio':'量比','new_high':'新高'},
+        'prefix': 'trend_',
+    },
+    'zhaban': {
+        'factor_keys': ['seal', 'money', 'feature', 'turnover', 'sector', 'market_cap'],
+        'factor_names': {'seal':'封板','money':'资金','feature':'特征',
+                         'turnover':'换手','sector':'板块','market_cap':'市值'},
+        'prefix': 'zb_',
+    },
+    'dtqiaoban': {
+        'factor_keys': ['deal', 'seal', 'cont', 'turnover', 'time'],
+        'factor_names': {'deal':'放量','seal':'封单','cont':'连跌',
+                         'turnover':'换手','time':'时间'},
+        'prefix': 'dt_',
+    },
+    'reversal': {
+        'factor_keys': ['turnover', 'consecutive', 'pullback', 'sector', 'retention'],
+        'factor_names': {'turnover':'换手','consecutive':'连板','pullback':'回调',
+                         'sector':'板块','retention':'留存'},
+        'prefix': 'rev_',
+    },
+}
+
+
+def _load_tab_weights_smart(tab: str) -> dict:
+    """统一加载各 tab 当前权重"""
+    from weight_manager import load_weights, load_trend_weights, load_reversal_weights, _load_tab_weights
+    loaders = {
+        'limit-up': load_weights,
+        'trend': load_trend_weights,
+        'zhaban': lambda: _load_tab_weights('zhaban'),
+        'dtqiaoban': lambda: _load_tab_weights('dtqiaoban'),
+        'reversal': load_reversal_weights,
+    }
+    return loaders.get(tab, load_weights)()
+
+
+def _save_tab_weights_smart(tab: str, weights: dict):
+    """统一保存各 tab 权重"""
+    from weight_manager import save_weights, save_trend_weights, save_reversal_weights, _save_tab_weights
+    savers = {
+        'limit-up': save_weights,
+        'trend': save_trend_weights,
+        'zhaban': lambda w: _save_tab_weights('zhaban', w),
+        'dtqiaoban': lambda w: _save_tab_weights('dtqiaoban', w),
+        'reversal': save_reversal_weights,
+    }
+    saver = savers.get(tab, save_weights)
+    saver(weights)
+
+
+def _get_market_regime_adjustment() -> dict:
+    """基于市场状态给出因子修正系数
+
+    市场情绪(0-10) + 市场状态分类 → 各因子推荐修正方向
+    返回 {factor_key: multiplier} 乘性修正, >1=提权, <1=降权
+    """
+    adjustment = {}
+    try:
+        from scanner import detect_market_sentiment
+        today = _today_trading()
+        sent_score, sent_level, sent_detail = detect_market_sentiment(today)
+    except Exception:
+        sent_score, sent_level = 5.0, '正常'
+
+    try:
+        from signals.market_regime import classify_regime
+        regime = classify_regime()
+        regime_label = regime.get('label', '均衡')
+    except Exception:
+        regime_label = '均衡'
+
+    # ── 情绪因子修正 ──
+    # 高潮/活跃: 市场亢奋 → 提 seal/tech(追涨), 降 money/sector(防御降权)
+    # 低迷/冰点: 市场恐慌 → 降 seal/tech(追涨风险大), 提 money/sector(防御优先)
+    if sent_score >= 7.0:
+        adjustment.update({'seal': 1.15, 'tech': 1.10, 'money': 0.90, 'sector': 0.90})
+    elif sent_score >= 5.5:
+        adjustment.update({'seal': 1.05, 'tech': 1.03, 'money': 0.97, 'sector': 0.97})
+    elif sent_score <= 3.0:
+        adjustment.update({'seal': 0.85, 'tech': 0.90, 'money': 1.15, 'sector': 1.10})
+    elif sent_score <= 4.5:
+        adjustment.update({'seal': 0.95, 'tech': 0.97, 'money': 1.05, 'sector': 1.03})
+
+    # ── 市场状态修正 ──
+    # 游资情绪市 → 提 seal/sector(题材驱动)
+    # 机构调仓市 → 提 money/north_flow/alpha(基本面驱动)
+    # 量化主导市 → 提 tech/volume 因子
+    # 防御避险市 → 提 sector/history(低估值防御)
+    if '游资' in regime_label or '情绪' in regime_label:
+        adjustment.update({'seal': adjustment.get('seal', 1.0) * 1.10,
+                           'sector': adjustment.get('sector', 1.0) * 1.05})
+    elif '机构' in regime_label:
+        adjustment.update({'money': adjustment.get('money', 1.0) * 1.10,
+                           'north_flow': adjustment.get('north_flow', 1.0) * 1.15})
+    elif '量化' in regime_label:
+        adjustment.update({'tech': adjustment.get('tech', 1.0) * 1.10,
+                           'turnover': adjustment.get('turnover', 1.0) * 1.05,
+                           'vol_ratio': adjustment.get('vol_ratio', 1.0) * 1.10})
+    elif '防御' in regime_label:
+        adjustment.update({'sector': adjustment.get('sector', 1.0) * 1.15,
+                           'history': adjustment.get('history', 1.0) * 1.10})
+
+    # 附加上下文
+    adjustment['_sentiment'] = {'score': sent_score, 'level': sent_level}
+    adjustment['_regime'] = regime_label
+    return adjustment
+
+
+def _optimize_weights_icir(tab: str, current_weights: dict,
+                           records: list, factor_ics: dict,
+                           market_adj: dict) -> dict:
+    """ICIR 驱动 + 市场逻辑修正的权重优化
+
+    1. 对每个因子，用 IC/sigma 算 ICIR
+    2. 按 ICIR 比例重新分配权重（正 IC = 有效预测因子）
+    3. 用市场修正系数微调
+    """
+    if not records or len(records) < 3:
+        return current_weights, '交易记录不足(需≥3笔)，无法调权'
+
+    import numpy as np
+    import pandas as pd
+
+    info = _TAB_FACTOR_MAP.get(tab, {})
+    factor_keys = info.get('factor_keys', [])
+    if not factor_keys:
+        return current_weights, '未知 tab，无法调权'
+
+    # 如果 IC 字典为空，从交易记录手工算
+    ics = dict(factor_ics) if factor_ics else {}
+    if not ics:
+        df = pd.DataFrame(records)
+        prefix = info.get('prefix', 'f_')
+        factor_cols = [c for c in df.columns if c.startswith(prefix)]
+        if 'net_ret_pct' in df.columns and factor_cols:
+            rets = df['net_ret_pct'].astype(float)
+            for col in factor_cols:
+                vals = df[col].astype(float)
+                if vals.std() >= 0.01:
+                    c = vals.corr(rets)
+                    if not pd.isna(c):
+                        fname = col[len(prefix):]
+                        ics[fname] = round(float(c), 4)
+
+    if not ics:
+        return current_weights, '无有效因子 IC 数据，无法调权'
+
+    # 计算 ICIR (IC / sigma)
+    ic_stats = {}
+    for fk, ic_val in ics.items():
+        if fk.startswith('_'):  # 跳过 meta 键
+            continue
+        ic_stats[fk] = {'ic_mean': ic_val, 'icir': abs(ic_val) / 0.08}  # sigma≈0.08 估算
+
+    # 只保留当前 tab 的因子
+    active_factors = [f for f in factor_keys if f in ic_stats]
+    if len(active_factors) < 2:
+        return current_weights, f'仅有 {len(active_factors)} 个因子有 IC，至少需要 2 个'
+
+    icir_sum = sum(max(0.01, abs(ic_stats[f]['ic_mean'])) for f in active_factors)
+
+    # 新权重 = IC比例分配 × 市场修正
+    new_weights = dict(current_weights)
+    lines = []
+    total_new = 0
+
+    for f in active_factors:
+        ic_val = ic_stats[f]['ic_mean']
+        # IC 比例分配
+        ic_ratio = max(0.01, abs(ic_val)) / icir_sum
+        # 目标权重 = 默认总和 * IC比例
+        defaults_sum = sum(current_weights.get(k, 5) for k in factor_keys)
+        target = defaults_sum * ic_ratio
+        # 正 IC → 提权; 负 IC → 降权但不归零
+        if ic_val > 0:
+            target = max(target, current_weights.get(f, 5) * 0.7)
+        else:
+            target = min(target, current_weights.get(f, 5) * 0.5)
+        # 市场修正
+        market_mult = 1.0
+        for adj_key, adj_val in market_adj.items():
+            if adj_key.startswith('_'):
+                continue
+            if adj_key == f or (adj_key == 'turnover' and f == 'turnover'):
+                market_mult = adj_val
+                break
+
+        new_val = target * market_mult
+        # 钳制: 不低于默认的 20%，不高于 2 倍
+        default_val = current_weights.get(f, 5)
+        lo = max(1, default_val * 0.2)
+        hi = default_val * 2.5
+        new_val = max(lo, min(hi, new_val))
+        new_weights[f] = round(new_val, 1)
+        total_new += new_weights[f]
+
+        arrow = '↑' if new_val > current_weights.get(f, 0) else ('↓' if new_val < current_weights.get(f, 0) else '→')
+        lines.append(f'{arrow} {info["factor_names"].get(f, f)}: {current_weights.get(f, 0):.0f}→{new_weights[f]:.1f} (IC={ic_val:+.4f}, 修正×{market_mult:.2f})')
+
+    return new_weights, '\n'.join(lines)
+
+
+@app.post("/api/weights/optimize/{tab}")
+async def api_weights_optimize(tab: str):
+    """智能优化权重: 跑回测 → ICIR 调权 + 市场逻辑修正 → 再回测验证
+
+    流程:
+    1. 加载当前因子权重
+    2. 跑默认参数回测获取交易记录 + IC
+    3. ICIR 加权 + 市场情绪/状态修正
+    4. 保存新权重
+    5. 重新跑回测验证
+    6. 返回新旧回测对比 + 调权说明
+    """
+    try:
+        # 1. 加载当前权重
+        current_weights = _load_tab_weights_smart(tab)
+
+        # 2. 跑回测 (30天, TOP3, 3万本金)
+        try:
+            from backtest_engine import run_tab_backtest
+            # 注意: backtest 内部会用自己路径加载一次 weights, 但这里我们
+            # 先跑旧权重基线, 再存新权重, 再跑新权重基线
+            bt_old = run_tab_backtest(tab=tab, max_days=30, top_n=3,
+                                      capital=30000, use_cache=False)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"回测失败: {str(e)[:200]}"}, status_code=500)
+
+        old_trades = bt_old.get('trades', [])
+        old_summary = bt_old.get('summary', {})
+
+        # 3. 计算因子 IC
+        try:
+            from backtest_engine import _compute_factor_ics
+            factor_ics = _compute_factor_ics(old_trades, tab=tab)
+        except Exception:
+            factor_ics = {}
+
+        # 4. 市场逻辑修正
+        market_adj = _get_market_regime_adjustment()
+
+        # 5. ICIR 调权
+        new_weights, opt_msg = _optimize_weights_icir(
+            tab, current_weights, old_trades, factor_ics, market_adj)
+
+        if new_weights == current_weights:
+            return {
+                "ok": True, "tab": tab,
+                "message": f"权重无需调整: {opt_msg}",
+                "current_weights": current_weights,
+                "new_weights": new_weights,
+                "summary_old": old_summary,
+                "summary_new": old_summary,
+                "improved": False,
+                "market_regime": market_adj.get('_regime', ''),
+                "sentiment": market_adj.get('_sentiment', {}),
+            }
+
+        # 6. 保存新权重
+        _save_tab_weights_smart(tab, new_weights)
+
+        # 7. 重新跑回测验证
+        try:
+            bt_new = run_tab_backtest(tab=tab, max_days=30, top_n=3,
+                                      capital=30000, use_cache=False)
+        except Exception:
+            bt_new = bt_old  # 跑失败就用旧结果对比
+
+        new_summary = bt_new.get('summary', {})
+
+        # 8. 计算改善程度
+        old_ev = old_summary.get('ev', 0) or 0
+        new_ev = new_summary.get('ev', 0) or 0
+        old_wr = old_summary.get('win_rate', 0) or 0
+        new_wr = new_summary.get('win_rate', 0) or 0
+        old_pnl = old_summary.get('total_pnl', 0) or 0
+        new_pnl = new_summary.get('total_pnl', 0) or 0
+        ev_change = new_ev - old_ev
+        wr_change = new_wr - old_wr
+        pnl_change = new_pnl - old_pnl
+
+        improved = ev_change > 0.1 or (ev_change >= 0 and wr_change > 0)
+
+        # 改善/未改善原因分析
+        reasons = []
+        if improved:
+            positive_factors = []
+            for fk, icv in factor_ics.items():
+                if not fk.startswith('_') and abs(icv) > 0.05:
+                    positive_factors.append(f'{_TAB_FACTOR_MAP.get(tab, {}).get("factor_names", {}).get(fk, fk)}(IC={icv:+.3f})')
+            if positive_factors:
+                reasons.append(f'有效因子: {", ".join(positive_factors[:3])}')
+            if new_ev > old_ev:
+                reasons.append(f'期望值 EV {old_ev:+.2f}% → {new_ev:+.2f}% (改善 {ev_change:+.2f}%)')
+            if new_wr > old_wr:
+                reasons.append(f'胜率 {old_wr:.1f}% → {new_wr:.1f}% (提升 {wr_change:+.1f}%)')
+        else:
+            reasons.append(f'本次调权 EV 变化 {ev_change:+.2f}%，改善不显著')
+            reasons.append('可能原因:')
+            # 分析原因
+            if len(old_trades) < 10:
+                reasons.append(f'  交易样本仅 {len(old_trades)} 笔，统计意义不足')
+            if all(abs(v) < 0.03 for v in factor_ics.values() if not isinstance(v, str)):
+                reasons.append('  各因子 IC 绝对值均 < 0.03，因子的预测力很弱')
+            if len(factor_ics) < 3:
+                reasons.append(f'  仅有 {len(factor_ics)} 个因子有 IC 数据，不足以驱动调权')
+            regime_label = market_adj.get('_regime', '')
+            sent_level = market_adj.get('_sentiment', {}).get('level', '')
+            if sent_level in ('低迷', '冰点'):
+                reasons.append(f'  当前市场情绪 "{sent_level}"，因子普遍失效')
+            if '防御' in regime_label:
+                reasons.append(f'  市场处于 "{regime_label}" 防御模式，权重微调效果有限')
+            # 给出建议
+            best_ic = max([(k, abs(v)) for k, v in factor_ics.items() if not k.startswith('_')],
+                         key=lambda x: x[1], default=(None, 0))
+            if best_ic[0] and best_ic[1] > 0.03:
+                fname = _TAB_FACTOR_MAP.get(tab, {}).get('factor_names', {}).get(best_ic[0], best_ic[0])
+                reasons.append(f'  建议: 当前最强因子是 "{fname}" (|IC|={best_ic[1]:.3f})，可手动提权试错')
+
+        return {
+            "ok": True,
+            "tab": tab,
+            "improved": improved,
+            "current_weights": current_weights,
+            "new_weights": new_weights,
+            "summary_old": old_summary,
+            "summary_new": new_summary,
+            "factor_ics": {k: v for k, v in factor_ics.items() if not k.startswith('_')},
+            "market_regime": market_adj.get('_regime', ''),
+            "sentiment": market_adj.get('_sentiment', {}),
+            "trade_count": len(old_trades),
+            "opt_detail": opt_msg[:500] if len(opt_msg) > 500 else opt_msg,
+            "reasons": reasons,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return JSONResponse({"ok": False, "error": str(e)[:300]}, status_code=500)
+
+
 # ═══════════════════════════════════════════
 #  T+1 真实回测面板 (A 股 T+1 规则)
 # ═══════════════════════════════════════════

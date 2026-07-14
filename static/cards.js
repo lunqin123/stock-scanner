@@ -1381,17 +1381,22 @@ function renderWeightsPanel(data) {
     html += '</div>';
 
     // 按钮区
-    html += '<div style="display:flex;gap:8px;margin-top:12px;align-items:center">';
+    html += '<div style="display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap">';
     html += '<button onclick="applyWeights(\'' + activeTab + '\')" style="padding:8px 20px;background:var(--accent,#4f8cff);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">💾 应用权重</button>';
+    html += '<button onclick="optimizeWeights(\'' + activeTab + '\')" style="padding:8px 16px;background:#22c55e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600" title="跑30天回测→ICIR调权+市场逻辑修正→再测验证">🧠 智能优化</button>';
     html += '<button onclick="resetWeights(\'' + activeTab + '\')" style="padding:8px 16px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px">↻ 重置默认</button>';
     html += '<span id="weightStatus" style="font-size:11px;color:var(--text-muted);margin-left:8px">就绪</span>';
     html += '</div>';
+
+    // 智能优化结果区
+    html += '<div id="optimizeResults" style="display:none;margin-top:12px"></div>';
 
     // 调权说明
     html += '<div style="font-size:11px;color:var(--text-muted);margin-top:12px;padding:8px;background:var(--bg-secondary,#1a1f2e);border-radius:6px;line-height:1.6">'
         + '💡 <b>调权说明</b>：<br>'
         + '• 权重越大该因子对最终评分影响越大<br>'
         + '• 拖动滑块即时预览当前权重值，点击「应用权重」保存到服务器<br>'
+        + '• 🧠 <b>智能优化</b>：自动跑 30 天回测 → 分析因子 IC → 结合市场情绪/状态 → 输出最优权重 → 再回测验证<br>'
         + '• 修改后切换回对应 tab 点击「运行」按钮可查看新权重下的排行榜<br>'
         + '• 点击「重置默认」恢复该 tab 出厂权重</div>';
 
@@ -1495,3 +1500,134 @@ async function resetWeights(tab) {
     }
 }
 window.resetWeights = resetWeights;
+
+// --- 智能权重优化 (2026-07-14) ---
+async function optimizeWeights(tab) {
+    var statusEl = document.getElementById('weightStatus');
+    var resultEl = document.getElementById('optimizeResults');
+    if (statusEl) { statusEl.textContent = '⏳ 跑回测中(约30s)...'; statusEl.style.color = 'var(--text-muted)'; }
+    if (resultEl) {
+        resultEl.style.display = 'block';
+        resultEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted)">⏳ 正在跑 30 天回测 + IC 分析 + 市场逻辑修正...</div>';
+    }
+
+    try {
+        var resp = await fetch('/api/weights/optimize/' + tab, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        var data = await resp.json();
+        if (!data.ok) {
+            if (statusEl) { statusEl.textContent = '❌ ' + (data.error || '优化失败'); statusEl.style.color = '#ef4444'; }
+            if (resultEl) resultEl.innerHTML = '<div style="padding:12px;color:#ef4444">❌ ' + (data.error || '优化失败') + '</div>';
+            return;
+        }
+        if (resultEl) resultEl.innerHTML = renderOptimizeResults(data, tab);
+        if (statusEl) {
+            statusEl.textContent = data.improved ? '✅ 优化完成，收益改善' : '⚠️ 优化完成，改善不显著';
+            statusEl.style.color = data.improved ? '#22c55e' : '#f59e0b';
+        }
+        // 自动重新加载权重滑块显示新值
+        setTimeout(function() { loadWeightsTab(tab); }, 500);
+    } catch(e) {
+        if (statusEl) { statusEl.textContent = '❌ ' + e.message; statusEl.style.color = '#ef4444'; }
+        if (resultEl) resultEl.innerHTML = '<div style="padding:12px;color:#ef4444">❌ 请求失败: ' + e.message + '</div>';
+    }
+}
+window.optimizeWeights = optimizeWeights;
+
+function renderOptimizeResults(data, tab) {
+    var improved = data.improved;
+    var summary_old = data.summary_old || {};
+    var summary_new = data.summary_new || {};
+    var reasons = data.reasons || [];
+    var factorIcs = data.factor_ics || {};
+    var marketRegime = data.market_regime || 'N/A';
+    var sentiment = data.sentiment || {};
+
+    var accent = improved ? '#22c55e' : '#f59e0b';
+    var icon = improved ? '✅' : '⚠️';
+    var title = improved ? '优化成功 - 回测收益改善' : '优化完成 - 改善不显著';
+
+    var html = '<div style="border:2px solid ' + accent + ';border-radius:8px;padding:14px;background:' + accent + '11">';
+
+    // 标题
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+    html += '<span style="font-size:18px">' + icon + '</span>';
+    html += '<span style="font-weight:700;font-size:14px;color:' + accent + '">' + title + '</span>';
+    html += '</div>';
+
+    // 回测对比表
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:10px">';
+    html += '<tr style="background:var(--bg-secondary,#1a1f2e)"><th style="padding:6px 8px;text-align:left">指标</th><th style="padding:6px 8px;text-align:right">优化前</th><th style="padding:6px 8px;text-align:right">优化后</th><th style="padding:6px 8px;text-align:right">变化</th></tr>';
+
+    var metrics = [
+        {key:'trade_count', label:'交易笔数', fmt:function(v){return (v||0).toFixed(0)}},
+        {key:'win_rate', label:'胜率', fmt:function(v){return (v||0).toFixed(1)+'%'}},
+        {key:'ev', label:'期望值(EV)', fmt:function(v){return (v||0)>0?'+':''+(v||0).toFixed(2)+'%'}},
+        {key:'total_pnl', label:'总盈亏', fmt:function(v){return (v||0)>0?'+':''+(v||0).toFixed(0)}},
+        {key:'cumulative_ret', label:'累计收益率', fmt:function(v){return (v||0)>0?'+':''+(v||0).toFixed(2)+'%'}},
+        {key:'avg_ret', label:'平均收益', fmt:function(v){return (v||0)>0?'+':''+(v||0).toFixed(2)+'%'}},
+        {key:'max_dd', label:'最大回撤', fmt:function(v){return (v||0).toFixed(2)+'%'}},
+    ];
+
+    metrics.forEach(function(m) {
+        var oldV = m.fmt(summary_old[m.key]);
+        var newV = m.fmt(summary_new[m.key]);
+        var change = '';
+        if (m.key !== 'trade_count' && m.key !== 'max_dd') {
+            var diff = (summary_new[m.key]||0) - (summary_old[m.key]||0);
+            change = (diff > 0 ? '+' : '') + m.fmt(diff);
+        }
+        var color = change.startsWith('+') ? '#22c55e' : change.startsWith('-') ? '#ef4444' : 'var(--text-muted)';
+        html += '<tr><td style="padding:4px 8px">' + m.label + '</td>';
+        html += '<td style="padding:4px 8px;text-align:right;color:var(--text-muted)">' + oldV + '</td>';
+        html += '<td style="padding:4px 8px;text-align:right;font-weight:600;color:' + accent + '">' + newV + '</td>';
+        html += '<td style="padding:4px 8px;text-align:right;color:' + color + ';font-weight:600">' + change + '</td></tr>';
+    });
+    html += '</table>';
+
+    // 因子 IC 展示
+    var icKeys = Object.keys(factorIcs);
+    if (icKeys.length > 0) {
+        html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px"><b>因子 IC (与收益相关性)</b></div>';
+        html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
+        icKeys.forEach(function(k) {
+            var v = factorIcs[k];
+            var color = v > 0 ? '#22c55e' : '#ef4444';
+            html += '<span style="font-size:11px;padding:3px 8px;border-radius:4px;background:' + color + '22;color:' + color + '">' + k + ' ' + (v > 0 ? '+' : '') + v.toFixed(4) + '</span>';
+        });
+        html += '</div>';
+    }
+
+    // 市场状态
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">';
+    html += '📊 市场情绪: ' + (sentiment.level || 'N/A') + ' (' + (sentiment.score || '?') + '/10)';
+    html += ' | 市场状态: ' + marketRegime;
+    html += '</div>';
+
+    // 调权细节
+    if (data.opt_detail) {
+        html += '<details style="font-size:11px;color:var(--text-muted);margin-bottom:8px">';
+        html += '<summary style="cursor:pointer;font-weight:600">📋 调权明细</summary>';
+        html += '<pre style="margin:6px 0 0;padding:8px;background:var(--bg-secondary,#1a1f2e);border-radius:4px;font-size:10px;white-space:pre-wrap">' + escapeHtml(data.opt_detail) + '</pre>';
+        html += '</details>';
+    }
+
+    // 分析说明
+    if (reasons.length > 0) {
+        html += '<div style="font-size:11px;padding:8px;background:var(--bg-secondary,#1a1f2e);border-radius:6px;line-height:1.6">';
+        html += '<b>' + (improved ? '📈 改善分析' : '📉 未改善原因') + '</b><br>';
+        reasons.forEach(function(r) { html += r + '<br>'; });
+        html += '</div>';
+    }
+
+    // 底部提示
+    html += '<div style="font-size:10px;color:var(--text-muted);margin-top:8px">';
+    html += '💡 新权重已自动保存。切换回对应 tab 点击「运行」查看实际排行榜。</div>';
+
+    html += '</div>';
+    return html;
+}
+window.renderOptimizeResults = renderOptimizeResults;
+
