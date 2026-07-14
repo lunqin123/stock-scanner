@@ -30,7 +30,7 @@ var _TAB_BUY_MODE = {
     'trend': 'open', 'reversal': 'open', 'dtqiaoban': 'open',
 };
 var _TAB_DEFAULT_SELL_N = {
-    'trend': 3, 'limit-up': 1, 'zhaban': 3, 'reversal': 3, 'dtqiaoban': 3,  // v3.3i: zhaban开盘买→T+3
+    'trend': 1, 'limit-up': 3, 'zhaban': 1, 'reversal': 1, 'dtqiaoban': 1,  // v3.3n: 优化结果
 };
 var _TAB_DEFAULT_MIN_SCORE = {
     'trend': 50, 'limit-up': 50, 'zhaban': 70, 'reversal': 50, 'dtqiaoban': 50,  // v3.3i: 70分过滤
