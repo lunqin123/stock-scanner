@@ -139,9 +139,10 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
             sector_scores = pd.Series(6.0, index=seal_scores.index)
     w = weights if weights else DEFAULT_WEIGHTS
 
-    # 8因子加权 (v2.0: +north_flow)
+    # 9因子加权 (v2.0: +north_flow, v3.1: +alpha)
+    # BUG-FIX 2026-07-14: alpha 重复列出导致 actual_sum 虚高 ~7%，分数整体偏低
     non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
-                     'stock_sentiment', 'principal_score', 'north_flow', 'alpha', 'alpha']
+                     'stock_sentiment', 'principal_score', 'north_flow', 'alpha']
     actual_sum = sum(w.get(k, 0) for k in non_sentiment)
     weighted = (seal_scores * (w.get('seal', 0) / _RAW_MAX['seal']) +
                 money_scores * (w.get('money', 0) / _RAW_MAX['money']) +

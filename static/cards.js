@@ -1325,3 +1325,173 @@ function renderTrackerPanel(data) {
     return html;
 }
 window.renderTrackerPanel = renderTrackerPanel;
+
+// ─── 权重可视化调整面板 (2026-07-14) ───
+function renderWeightsPanel(data) {
+    if (!data || !data.ok) return '<div class="error-text">⚠️ 权重加载失败</div>';
+
+    var factors = data.factors || [];
+    var activeTab = data.tab || 'limit-up';
+    var html = '';
+
+    // Tab 选择器
+    var tabLabels = {'limit-up':'涨停','trend':'趋势','zhaban':'炸板','dtqiaoban':'翘板','reversal':'反转'};
+    html += '<div style="margin:12px 16px;padding:12px;background:var(--card-bg);border-radius:8px">';
+    html += '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">⚖️ 选择 Tab 调整因子权重 — 调整后点击「应用」保存</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">';
+    for (var tab in tabLabels) {
+        var active = tab === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
+        html += '<button class="btn" style="font-size:11px;padding:5px 10px;' + active + '" onclick="loadWeightsTab(\'' + tab + '\')">' + tabLabels[tab] + '</button>';
+    }
+    html += '</div>';
+
+    if (!factors.length) {
+        html += '<div style="color:var(--text-muted);font-size:12px">该 tab 无可调因子权重</div></div>';
+        return html;
+    }
+
+    // 因子滑块
+    html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">拖动滑块调整因子权重（当前 vs 默认）</div>';
+    html += '<div id="weightSliders" style="display:flex;flex-direction:column;gap:8px">';
+    factors.forEach(function(f) {
+        var key = f.key || '';
+        var name = f.name || key;
+        var cur = f.current || 0;
+        var def = f.default || 0;
+        var delta = f.delta || 0;
+        var direction = delta > 0 ? '↑' : (delta < 0 ? '↓' : '—');
+        var color = delta > 0 ? '#22c55e' : (delta < 0 ? '#ef4444' : 'var(--text-muted)');
+
+        // 确定最大范围 (min=0, max=default*2+5)
+        var maxVal = Math.max(def * 2 + 5, cur * 1.5 + 5, 60);
+        var sliderPct = Math.round(cur / maxVal * 100);
+
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg-secondary,#1a1f2e);border-radius:6px">';
+        html += '<div style="width:70px;font-size:12px;font-weight:600;color:var(--text)">' + name + '</div>';
+        html += '<div style="flex:1;display:flex;align-items:center;gap:8px">';
+        html += '<input type="range" min="0" max="' + maxVal + '" step="0.5" value="' + cur + '"'
+             + ' oninput="updateWeightDisplay(this,\'' + key + '\')"'
+             + ' style="flex:1;height:6px;accent-color:var(--accent,#4f8cff);cursor:pointer">';
+        html += '</div>';
+        html += '<div style="width:50px;text-align:right;font-size:13px;font-weight:700" id="wval_' + key + '">' + cur.toFixed(1) + '</div>';
+        html += '<div style="width:50px;font-size:11px;color:' + color + '">' + direction + ' ' + (delta >= 0 ? '+' : '') + delta.toFixed(1) + '</div>';
+        html += '<div style="width:40px;font-size:10px;color:var(--text-muted);text-align:right">默认' + def.toFixed(1) + '</div>';
+        html += '</div>';
+    });
+    html += '</div>';
+
+    // 按钮区
+    html += '<div style="display:flex;gap:8px;margin-top:12px;align-items:center">';
+    html += '<button onclick="applyWeights(\'' + activeTab + '\')" style="padding:8px 20px;background:var(--accent,#4f8cff);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">💾 应用权重</button>';
+    html += '<button onclick="resetWeights(\'' + activeTab + '\')" style="padding:8px 16px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px">↻ 重置默认</button>';
+    html += '<span id="weightStatus" style="font-size:11px;color:var(--text-muted);margin-left:8px">就绪</span>';
+    html += '</div>';
+
+    // 调权说明
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:12px;padding:8px;background:var(--bg-secondary,#1a1f2e);border-radius:6px;line-height:1.6">'
+        + '💡 <b>调权说明</b>：<br>'
+        + '• 权重越大该因子对最终评分影响越大<br>'
+        + '• 拖动滑块即时预览当前权重值，点击「应用权重」保存到服务器<br>'
+        + '• 修改后切换回对应 tab 点击「运行」按钮可查看新权重下的排行榜<br>'
+        + '• 点击「重置默认」恢复该 tab 出厂权重</div>';
+
+    html += '</div>'; // /card wrapper
+    return html;
+}
+window.renderWeightsPanel = renderWeightsPanel;
+
+// ─── 权重滑块辅助函数 ───
+function updateWeightDisplay(slider, key) {
+    var val = parseFloat(slider.value);
+    var display = document.getElementById('wval_' + key);
+    if (display) display.textContent = val.toFixed(1);
+}
+
+async function loadWeightsTab(tab) {
+    var output = document.getElementById('output');
+    if (!output) return;
+    output.innerHTML = '<div class="loading">⏳ 加载权重数据...</div>';
+    try {
+        var resp = await fetch('/api/weights/tab/' + tab);
+        var data = await resp.json();
+        output.innerHTML = renderWeightsPanel(data);
+    } catch(e) {
+        output.innerHTML = '<span class="error-text">❌ 加载失败: ' + e.message + '</span>';
+    }
+}
+window.loadWeightsTab = loadWeightsTab;
+
+async function applyWeights(tab) {
+    var statusEl = document.getElementById('weightStatus');
+    if (statusEl) statusEl.textContent = '⏳ 保存中...';
+
+    // 从滑块收集所有因子权重
+    var factors = {};
+    var sliders = document.querySelectorAll('#weightSliders input[type="range"]');
+    sliders.forEach(function(s) {
+        var key = s.getAttribute('oninput').match(/updateWeightDisplay\(this,'(\w+)'\)/);
+        if (key && key[1]) {
+            factors[key[1]] = parseFloat(s.value);
+        }
+    });
+
+    if (Object.keys(factors).length === 0) {
+        if (statusEl) statusEl.textContent = '⚠️ 无因子数据';
+        return;
+    }
+
+    try {
+        var resp = await fetch('/api/weights/tab/' + tab, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({factors: factors})
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            if (statusEl) { statusEl.textContent = '✅ ' + (data.msg || '已保存'); statusEl.style.color = '#22c55e'; }
+            // 重新加载显示最新值
+            setTimeout(function() { loadWeightsTab(tab); }, 300);
+        } else {
+            if (statusEl) statusEl.textContent = '❌ ' + (data.error || '保存失败');
+        }
+    } catch(e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+window.applyWeights = applyWeights;
+
+async function resetWeights(tab) {
+    if (!confirm('重置 ' + tab + ' 的因子权重到默认值？')) return;
+    var statusEl = document.getElementById('weightStatus');
+    if (statusEl) statusEl.textContent = '⏳ 重置中...';
+    try {
+        // 获取默认权重
+        var resp = await fetch('/api/weights/tab/' + tab);
+        var data = await resp.json();
+        if (!data.ok || !data.factors) {
+            if (statusEl) statusEl.textContent = '❌ 获取默认权重失败';
+            return;
+        }
+        // 用默认值构造 factors
+        var factors = {};
+        data.factors.forEach(function(f) {
+            factors[f.key] = f.default;
+        });
+        // 保存默认值
+        var saveResp = await fetch('/api/weights/tab/' + tab, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({factors: factors})
+        });
+        var saveData = await saveResp.json();
+        if (saveData.ok) {
+            if (statusEl) { statusEl.textContent = '✅ 已重置为默认值'; statusEl.style.color = '#22c55e'; }
+            setTimeout(function() { loadWeightsTab(tab); }, 300);
+        } else {
+            if (statusEl) statusEl.textContent = '❌ ' + (saveData.error || '重置失败');
+        }
+    } catch(e) {
+        if (statusEl) statusEl.textContent = '❌ ' + e.message;
+    }
+}
+window.resetWeights = resetWeights;

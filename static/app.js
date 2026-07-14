@@ -45,12 +45,12 @@ var _btSellNs = (function() {
 })();
 // v3.3h: close策略tab(limit-up/zhaban) sell_n恒为1, open策略用真实T+N
 (function() {
-    var sellNsVer = localStorage.getItem('btSellNs_v9');
-    if (sellNsVer !== 'v9') {
+    var sellNsVer = localStorage.getItem('btSellNs_v10');
+    if (sellNsVer !== 'v10') {
         _btSellNs = {};
         for (var k in _TAB_DEFAULT_SELL_N) { _btSellNs[k] = _TAB_DEFAULT_SELL_N[k]; }
         localStorage.setItem('btSellNs', JSON.stringify(_btSellNs));
-        localStorage.setItem('btSellNs_v9', 'v9');
+        localStorage.setItem('btSellNs_v10', 'v10');
         _btMinScores = {};
         for (var k2 in _TAB_DEFAULT_MIN_SCORE) { _btMinScores[k2] = _TAB_DEFAULT_MIN_SCORE[k2]; }
         localStorage.setItem('btMinScores', JSON.stringify(_btMinScores));
@@ -239,7 +239,6 @@ function onBacktestParamChange() {
 function onBacktestStrategyChange() { /* no-op */ }
 
 function onBacktestMinScoreInput() {
-    // 输入时实时更新显示，不触发回测重跑
     var inp = document.getElementById('btMinScore');
     var val = parseInt(inp ? inp.value : 0) || 0;
     var scoreEl = document.getElementById('tab-score-display');
@@ -247,31 +246,16 @@ function onBacktestMinScoreInput() {
         var mode = _TAB_BUY_MODE[_btTab] === 'close' ? '尾盘买T+1卖' : ('T+' + _getSellN(_btTab) + '开盘卖');
         scoreEl.innerHTML = '最低分 <b style=\"color:var(--accent)\">' + val + '</b> · ' + mode;
     }
+    // 输入即保存+跑回测(去抖500ms)
+    clearTimeout(window._msDebounce);
+    window._msDebounce = setTimeout(function() {
+        _setMinScore(_btTab, val);
+        loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
+    }, 500);
 }
 function onBacktestMinScoreChange() {
-    var inp = document.getElementById('btMinScore');
-    var val = parseInt(inp ? inp.value : 0) || 0;
-    _setMinScore(_btTab, val);
-    // 实时更新分数显示
-    var scoreEl = document.getElementById('tab-score-display');
-    if (scoreEl) {
-        var mode = _TAB_BUY_MODE[_btTab] === 'close' ? '尾盘买T+1卖' : ('T+' + _getSellN(_btTab) + '开盘卖');
-        scoreEl.textContent = '最低分 ' + val + ' · ' + mode;
-    }
-    // 更新当前tab按钮标签
-    var btns = document.querySelectorAll('#btTabBar button');
-    btns.forEach(function(btn) {
-        if (btn.style.background.indexOf('var(--accent)') >= 0 || btn.style.background === 'rgb(79, 140, 255)') {
-            var tKey = btn.textContent.match(/^(涨停|炸板|趋势|反转|跌停)/);
-            if (tKey) {
-                var tabMap = {'涨停':'limit-up','炸板':'zhaban','趋势':'trend','反转':'reversal','跌停':'dtqiaoban'};
-                var tk = tabMap[tKey[0]];
-                var strategyLabel = _TAB_BUY_MODE[tk] === 'close' ? '尾盘T+1卖' : ('T+' + _getSellN(tk) + '卖');
-                btn.innerHTML = tKey[0] + ' ' + strategyLabel + ' <span style=\"opacity:0.7\">(' + _getMinScore(tk) + '分)</span>';
-            }
-        }
-    });
-    loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital);
+    // oninput 已处理，这里仅兜底
+    onBacktestMinScoreInput();
 }
 
 async function loadTomorrowSignals() {
@@ -387,6 +371,7 @@ const PAGES = {
     'scan-reversal':{title:'🔄 反转扫描',   api: '/api/scan/reversal/cards',textApi: '/api/scan/reversal' },
     'scan-dtqiaoban':{title:'📉 跌停翘板',   api: '/api/scan/dtqiaoban/cards',textApi: '/api/scan/dtqiaoban' },
     'backtest':     { title: '⏱️ 回测追踪',   api: '/api/backtest/dashboard', textApi: '/api/backtest' },
+    'weights':      { title: '⚖️ 权重调整',   api: '/api/weights/tab/limit-up', textApi: '/api/weights/tab/limit-up' },
 };
 
 function showProgress(text, pct) {
@@ -770,9 +755,10 @@ async function loadCardView(output, pageKey, apiUrl) {
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
-        // 特殊页面：情绪(score/level)、回测(weights/corr_history) — 无 items 字段
+        // 特殊页面：情绪(score/level)、回测(weights/corr_history)、权重(factors)
         if ((pageKey === 'sentiment' && data.score !== undefined) ||
-            (pageKey === 'backtest' && data.weights !== undefined)) {
+            (pageKey === 'backtest' && data.weights !== undefined) ||
+            (pageKey === 'weights' && data.factors !== undefined)) {
             // handled below
         } else if (!data.ok || !items.length) {
             output.innerHTML = '<span class="loading">暂无数据</span>';
@@ -835,6 +821,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                 html += '</div><div id="btTabContent"><div class="loading">⏳ 加载中...</div></div>';
                 html += '</div></div>';
             } else if (pageKey === 'scan-dtqiaoban') { html += renderDtqiaobanCards(items); } else if (pageKey === 'scan-zhaban') { html += renderZhabanCards(items); } else if (pageKey === 'scan-trend') { html += renderTrendCards(items); } else if (pageKey === 'scan-reversal') { html += renderReversalCards(items);
+            } else if (pageKey === 'weights') { html += renderWeightsPanel(data);
             } else {
                 html += renderSimpleCards(items, pageKey);
             }

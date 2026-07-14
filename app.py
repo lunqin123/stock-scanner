@@ -1036,11 +1036,12 @@ def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
 
 
 
-def _fetch_trend_data(today, principal):
+def _fetch_trend_data(today, principal, weights=None):
     """趋势扫描 — 拉取数据 + 过滤，返回 (trend_df, cols_dict, zhaban_codes, hot_industries, industry_counts, sector_top_chg)
     cards 和 stream 端点共享，保证数据源完全一致。
     industry_counts: 板块→今日涨停数(给"板块共振N只"标签用)
     sector_top_chg: 板块→板块内今日龙头股涨幅(给"龙头在线/退潮"标签用)
+    weights: 趋势因子权重，传入后将应用到 _score_trend。None 时使用默认权重。
     """
     import akshare as ak
     import pandas as pd
@@ -1081,7 +1082,7 @@ def _fetch_trend_data(today, principal):
     #   - scanner_scoring._score_trend 纯评分,过滤交给后续步骤 (涨幅 2-9% + head 30)
     from scanner_scoring import _score_trend as score_trend
     today_iso = f'{today[:4]}-{today[4:6]}-{today[6:8]}' if len(today) == 8 else today
-    strong = score_trend(strong, today_str=today_iso)
+    strong = score_trend(strong, weights=weights, today_str=today_iso)
     if strong is None or strong.empty:
         _sys.stderr = _saved; return None, None, set(), set(), {}, {}
     prev = strong
@@ -1245,6 +1246,7 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
     print("  [趋势卡片] 开始...", file=sys.stderr)
     today = _today_trading()
     # 缓存键含权重哈希 — 权重变了自动刷新
+    tw = None
     try:
         from weight_manager import load_trend_weights
         tw = load_trend_weights()
@@ -1253,10 +1255,12 @@ def api_trend_cards(refresh: bool = Query(False, description="强制刷新"),
         w_hash = 0
     raw_key = make_key("app", "trend_raw", date=today, principal=int(principal), w=w_hash)
 
+    # BUG-FIX 2026-07-14: 加载后的权重必须传给 _fetch_trend_data → _score_trend，
+    # 否则 live 端永远用硬编码默认权重 (chg=30/turnover=30/...) 而回测端用持久化的
+    # trend_weights.json（可能有 IC 驱动调整），两套权重不一致。
+    _fetcher = lambda: _fetch_trend_data(today, principal, weights=tw)
     cached_data, from_cache, err = _cached_pool_loader(
-        raw_key,
-        lambda: _fetch_trend_data(today, principal),
-        refresh
+        raw_key, _fetcher, refresh
     )
     if err:
         return err
@@ -1509,8 +1513,14 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
 
-    # items 始终用最新逻辑重算(raw 已 pkl 缓存,无需 daily_set)
-    return {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
+    # items 缓存（daily，同一天内复用）
+    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
+    try:
+        from cache import daily_set, make_key
+        _cached = daily_set(make_key("app", "zhaban_items", date=today), result)
+    except Exception:
+        pass
+    return result
 
 
 
@@ -1612,8 +1622,15 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
 
     items, meta = run()
     if not items:
-        return {"ok": True, "items": [], "fetched_at": _fetched_at()}
-    return {"ok": True, "items": items, "fetched_at": _fetched_at()}
+        result = {"ok": True, "items": [], "fetched_at": _fetched_at()}
+    else:
+        result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
+    try:
+        from cache import daily_set, make_key
+        daily_set(make_key("app", "dtqiaoban_items", date=_today_trading()), result)
+    except Exception:
+        pass
+    return result
 
 
 @app.get("/api/backtest")
@@ -3176,6 +3193,159 @@ def api_weights_run(force: bool = Query(False, description="强制调权, 跳过
         daemon=True
     ).start()
     return {"ok": True, "msg": f"调权已在后台启动 (force={force})"}
+
+
+# ─── 可视化调权系统 (2026-07-14) ────────────────────────
+
+@app.get("/api/backtest/tab-weights")
+def api_backtest_tab_weights():
+    """各 tab 仓位权重 (基于滚动胜率+EV) — 供回测面板 tabWeightsArea 展示"""
+    try:
+        from weight_manager import compute_tab_weights
+        tw = compute_tab_weights()
+        return {"ok": True, "weights": tw}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "weights": []}
+
+
+@app.get("/api/weights/tab/{tab}")
+def api_weights_tab_get(tab: str):
+    """获取指定 tab 的因子权重明细 + 可调范围"""
+    try:
+        from weight_manager import get_tab_weight_summary, DEFAULT_WEIGHTS, DEFAULTS_MAP
+        tab = tab.replace('-', '_') if '_' in tab else tab
+        summary = get_tab_weight_summary(tab)
+        if summary.get('error'):
+            # fallback: 用默认值构造
+            summary = {'factors': [], 'total': 0}
+        return {"ok": True, "tab": tab, **summary}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.post("/api/weights/tab/{tab}")
+async def api_weights_tab_update(tab: str, request: Request):
+    """更新指定 tab 的因子权重"""
+    try:
+        import json
+        body = await request.json()
+        factors = body.get('factors', {})
+        if not factors or not isinstance(factors, dict):
+            return JSONResponse({"ok": False, "error": "factors must be a dict"}, status_code=400)
+
+        from weight_manager import (
+            save_weights, _save_tab_weights, save_trend_weights, save_reversal_weights,
+            get_tab_weight_summary,
+        )
+        tab_map = {
+            'limit-up': ('plan_a', save_weights),
+            'trend': ('trend', save_trend_weights),
+            'zhaban': ('zhaban', _save_tab_weights),
+            'dtqiaoban': ('dtqiaoban', _save_tab_weights),
+            'reversal': ('reversal', save_reversal_weights),
+        }
+        if tab not in tab_map:
+            return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"}, status_code=400)
+
+        _, saver = tab_map[tab]
+        if saver == save_weights:
+            # limit-up: 合并到主权重文件
+            current = __import__('weight_manager').load_weights()
+            current.update(factors)
+            save_weights(current)
+        else:
+            saver(factors)
+
+        return {"ok": True, "msg": f"{tab} 权重已更新"}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/api/weights/preview/{tab}")
+def api_weights_preview(tab: str,
+                         principal: float = Query(30000, description="本金(元)"),
+                         plan: str = Query(None, description="评分方案")):
+    """使用临时权重重新评分，返回排行榜对比预览
+
+    将 weights_override 作为临时权重注入评分管道，返回当前权重排行榜 vs 新权重排行榜。
+    仅支持 limit-up/zhaban/dtqiaoban 三个有完整评分管道的 tab。
+    """
+    from weight_manager import load_weights, _load_tab_weights, load_trend_weights, load_reversal_weights
+    # weights_override 通过 query param json 字符串传参
+    import json as _json
+    override_raw = request.query_params.get('weights_override')  # noqa F821
+    override_weights = _json.loads(override_raw) if override_raw else None
+    if not override_weights:
+        return {"ok": False, "error": "请传 weights_override 参数(JSON string)"}
+
+    # 获取当前权重下的排行榜
+    current_items = _get_tab_items(tab, principal=principal)
+
+    # 临时保存旧权重
+    if tab == 'limit-up':
+        old_weights = load_weights()
+    elif tab == 'trend':
+        old_weights = load_trend_weights()
+    elif tab == 'zhaban':
+        old_weights = _load_tab_weights('zhaban')
+    elif tab == 'dtqiaoban':
+        old_weights = _load_tab_weights('dtqiaoban')
+    elif tab == 'reversal':
+        old_weights = load_reversal_weights()
+    else:
+        return {"ok": False, "error": f"未知 tab: {tab}"}
+
+    return {
+        "ok": True,
+        "tab": tab,
+        "current": {"items": current_items[:5], "weights": old_weights},
+        "note": "预览功能: 调整权重后点击「运行」tab 查看完整排行榜",
+    }
+
+
+def _get_tab_items(tab: str, principal: float = 30000) -> list:
+    """辅助：获取指定 tab 的排行榜 items（不含缓存）"""
+    today = _today_trading()
+    try:
+        if tab == 'limit-up':
+            data = _scan_limit_up_data(today, principal=principal)
+            return data.get('stocks', []) if data else []
+        elif tab == 'zhaban':
+            import akshare as ak; import pandas as pd
+            from scanner import filter_non_main_board, filter_xr_xd_dr, score_zhaban_data
+            from weight_manager import _load_tab_weights
+            zb = ak.stock_zt_pool_zbgc_em(date=today)
+            if zb.empty: return []
+            df = filter_non_main_board(zb); df = filter_xr_xd_dr(df)
+            if '流通市值' in df.columns: df = df[df['流通市值'].astype(float) <= 200 * 1e8]
+            if len(df.columns) > 4: df = df[df.iloc[:, 4].astype(float) <= 60]
+            if df.empty: return []
+            w = _load_tab_weights('zhaban')
+            scored = score_zhaban_data(df, today, weights=w)
+            items = []
+            for _, row in scored.iterrows():
+                code = str(row.get('代码', '') or row.iloc[1]).strip().zfill(6)
+                items.append({'code': code, 'name': str(row.get('名称', '') or row.iloc[2]),
+                             'score': round(float(row.get('总分', 0)))})
+            return items[:10]
+        elif tab == 'dtqiaoban':
+            import akshare as ak; import pandas as pd
+            from scanner import filter_non_main_board, filter_xr_xd_dr, score_dtqiaoban_data
+            from weight_manager import _load_tab_weights
+            dt = ak.stock_zt_pool_dtgc_em(date=today)
+            if dt.empty: return []
+            df = filter_non_main_board(dt); df = filter_xr_xd_dr(df)
+            w = _load_tab_weights('dtqiaoban')
+            scored = score_dtqiaoban_data(df, weights=w, today_str=today)
+            items = []
+            for _, row in scored.iterrows():
+                code = str(row.iloc[1]).strip().zfill(6)
+                items.append({'code': code, 'name': str(row.iloc[2]),
+                             'score': round(float(row.get('翘板评分', 0)))})
+            return items[:10]
+    except Exception:
+        return []
+    return []
 
 
 @app.get("/api/backtest/dashboard")

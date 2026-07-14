@@ -801,9 +801,13 @@ def _score_limit_up(df: pd.DataFrame, date_str: str):
     print(f"  [PlanA v2 / backtest] {n_with_hist}/{len(scoring_base)} 票有历史, mc/pd 启用",
           file=sys.stderr)
 
-    # 使用涨停专用权重（板块热度提权、封板强度降权）
-    from weight_manager import _load_tab_weights
-    limit_up_weights = _load_tab_weights('limit-up')
+    # 使用与生产环境一致的权重（load_weights = DEFAULT_WEIGHTS，live 端也是用同一份）
+    # BUG-FIX 2026-07-14: 此前误用 _load_tab_weights('limit-up')（DEFAULT_WEIGHTS_LIMIT_UP，
+    # seal=20/sector=25），而 live 端 plan_a.score()→apply_scores 未传 weights 时
+    # 走 load_weights()（DEFAULT_WEIGHTS, seal=28/sector=17/money=17/alpha=8）→ 两套权重
+    # 不一致，导致回测结果与实盘不可比。现统一为 load_weights()。
+    from weight_manager import load_weights
+    limit_up_weights = load_weights()
 
     # use_v2=True 已经内置在 apply_scores 路径 (factors 里已注入 mc/pd),
     # 无需再走 _apply_v2_to_score (那是给其它 tab 评分函数末位套用的 helper)
