@@ -2108,6 +2108,91 @@ def api_north_flow_realtime():
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/risk/assessment")
+def api_risk_assessment():
+    """市场风险评估: 盘前信号+市场情绪+市场状态 → 风险等级
+
+    返回:
+        risk_level: '低' | '中' | '高' | '极高'
+        risk_score: 0-10 (越高越危险)
+        components: {signal_name: detail}
+        advice: 操作建议
+    """
+    today = _today_trading()
+    risk_score = 5.0
+    components = {}
+    try:
+        from signals.premarket import get_premarket_signal_cached
+        pm = get_premarket_signal_cached()
+        if pm:
+            dir_score = {'偏多': 3, '震荡': 5, '偏空': 7}.get(pm.get('direction', '震荡'), 5)
+            risk_score += (dir_score - 5) * 0.3
+            components['盘前信号'] = {
+                'direction': pm.get('direction', '震荡'),
+                'score': pm.get('score', 5),
+                'risk_contribution': round((dir_score - 5) * 0.3, 1),
+            }
+    except Exception as e:
+        components['盘前信号'] = {'error': str(e)[:60]}
+
+    try:
+        from scanner import detect_market_sentiment
+        sent_score, sent_level, sent_detail = detect_market_sentiment(today)
+        # 情绪极端→风险: 高潮(过热回调)+冰点(恐慌踩踏)
+        if sent_score >= 8:
+            sent_risk = +2.0  # 高潮过热,回调风险
+        elif sent_score >= 6:
+            sent_risk = +0.5
+        elif sent_score <= 2:
+            sent_risk = +2.5  # 冰点恐慌
+        elif sent_score <= 4:
+            sent_risk = +1.0
+        else:
+            sent_risk = 0
+        risk_score += sent_risk
+        components['市场情绪'] = {
+            'level': sent_level, 'score': sent_score,
+            'risk_contribution': sent_risk,
+        }
+    except Exception as e:
+        components['市场情绪'] = {'error': str(e)[:60]}
+
+    try:
+        from signals.market_regime import classify_regime
+        regime = classify_regime()
+        pos_advice = regime.get('position_advice', 1.0)
+        # position_advice < 0.5 = 防御模式 → 高风险
+        regime_risk = max(0, (1.0 - pos_advice) * 3)
+        risk_score += regime_risk
+        components['市场状态'] = {
+            'regime': regime.get('label', '未知'),
+            'position_advice': pos_advice,
+            'risk_contribution': round(regime_risk, 1),
+        }
+    except Exception as e:
+        components['市场状态'] = {'error': str(e)[:60]}
+
+    risk_score = max(0, min(10, risk_score))
+    if risk_score >= 7.5:
+        level = '极高'
+        advice = '⚠️ 市场风险极高，建议降低仓位(≤50%)，提高选股最低分至70，优先防御板块'
+    elif risk_score >= 5.5:
+        level = '高'
+        advice = '⚡ 市场风险偏高，建议控制在70%仓位，提高最低分至60'
+    elif risk_score >= 3.5:
+        level = '中'
+        advice = '📊 市场风险中等，正常仓位操作'
+    else:
+        level = '低'
+        advice = '✅ 市场风险较低，可积极操作'
+
+    return {
+        'ok': True, 'date': today,
+        'risk_level': level, 'risk_score': round(risk_score, 1),
+        'components': components, 'advice': advice,
+    }
+
+
 @app.get("/api/north-flow/history")
 def api_north_flow_history(days: int = Query(5, ge=1, le=30)):
     """北向资金历史流向 (近N日)"""

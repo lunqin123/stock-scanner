@@ -115,7 +115,29 @@ async function loadDashboard(force) {
                     <div class="dash-stat-sub">仓位 ${rg.position_advice ? Math.round(rg.position_advice*100)+'%' : '—'} · 市场状态</div>
                 </div>
             </div>
+            <div class="dash-stat-card animate-fade-up stagger-10" id="risk-card" title="市场风险评估(盘前+情绪+状态)加载中..." style="cursor:pointer" onclick="location.hash='#weights'">
+                <div class="dash-stat-icon">🛡️</div>
+                <div class="dash-stat-body">
+                    <div class="dash-stat-value" style="font-size:18px" id="risk-level">⏳</div>
+                    <div class="dash-stat-sub" id="risk-sub">风险评估</div>
+                </div>
+            </div>
         `;
+
+        // 异步加载风险等级
+        fetch('/api/risk/assessment').then(r=>r.json()).then(rd=>{
+            if (!rd.ok) return;
+            var riskEl = document.getElementById('risk-level');
+            var subEl = document.getElementById('risk-sub');
+            if (!riskEl) return;
+            var colors = {'低':'#22c55e','中':'#fbbf24','高':'#f59e0b','极高':'#ef4444'};
+            var icons = {'低':'✅','中':'📊','高':'⚡','极高':'🔴'};
+            riskEl.textContent = (icons[rd.risk_level]||'') + ' ' + (rd.risk_level||'—');
+            riskEl.style.color = colors[rd.risk_level]||'#94a3b8';
+            if (subEl) subEl.textContent = (rd.risk_score||'?') + '/10 · 风险 ' + rd.risk_level;
+            var card = document.getElementById('risk-card');
+            if (card) card.title = rd.advice || '';
+        }).catch(function(){});
 
         // 触发数字滚动
         bar.querySelectorAll('.dash-count').forEach(el => {

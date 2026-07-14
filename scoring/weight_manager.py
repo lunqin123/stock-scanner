@@ -26,17 +26,16 @@ DEFAULT_WEIGHTS = {
     'principal_score': 8.0,   # 本金适配（提权，增强低价小市值标的区分度）
     'north_flow': 5.0, # v2.0: 北向资金市场级因子
     'alpha': 8.0,   # v3.1: GTJA Alpha 5 因子组合 (动量+波动+量价+反转+筹码)
+    'crash_resistance': 5.0, # v3.3o: 抗跌分 (防御板块+大市值+低换手)
 }
-TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 105
-# 注: 实际"加权和"是 102 (8 个非零因子: seal+money+sector+tech+history+stock_sentiment+principal_score+north_flow
-# = 28+17+17+8+6+13+8+5 = 102; sentiment/buyability/sector_res/sector_mom 不参与加权 — sentiment 是
-# 乘法系数 [×0.85~1.15], sector_res/mom 已合并到 sector, buyability 降为纯过滤器)。
-# 历史: 22+6+12+12+4+9+6=71  →  v1.24.1: 31+8+17+17+6+13+8=100 →  v2.0: +north_flow=5, seal 28
+TOTAL_WEIGHT = sum(DEFAULT_WEIGHTS.values())  # 113
+# 注: 实际"加权和"是 110 + 5 (crash_resistance) = 115
 
-# 回测中可调权的因子 (P2-3: 扩展到 8 个, 涵盖全部 Plan A 实际加权因子)
+# 回测中可调权的因子
 BACKTEST_FACTORS = [
     'seal', 'money', 'sector', 'tech', 'history',
     'stock_sentiment', 'principal_score', 'north_flow', 'alpha',
+    'crash_resistance',
 ]
 
 # Plan B 可调权因子 (所有16个因子都参与IC检验, 弱因子自动归零)
@@ -103,7 +102,8 @@ def save_weights(weights: dict, plan_name: str = 'A'):
 # 各因子原始满分 (与 scoring 函数实际最大值一致)
 _RAW_MAX = {'seal': 28.0, 'money': 20.0, 'sector': 15.0, 'sentiment': 10.0,
             'sector_res': 8.0, 'sector_mom': 12.0, 'tech': 10.0, 'history': 6.0,
-            'stock_sentiment': 10.0, 'principal_score': 10.0, 'north_flow': 10.0, 'alpha': 10.0}
+            'stock_sentiment': 10.0, 'principal_score': 10.0, 'north_flow': 10.0, 'alpha': 10.0,
+            'crash_resistance': 12.0}
 
 
 def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
@@ -111,13 +111,15 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                   stock_sentiment_scores=None, principal_scores=None,
                   north_flow_scores=None,  # v2.0: 北向资金因子
                   alpha_scores=None,   # v3.1: GTJA Alpha 因子
+                  crash_resistance_scores=None,  # v3.3o: 抗跌分
                   sector_res=None, sector_mom=None,  # DEPRECATED: 向后兼容
                   buyability_scores=None, weights=None):
     """
-    8因子加权(v2.0) + 大盘情绪温和系数。
+    10因子加权(v3.3o) + 大盘情绪温和系数。
     sector_res/sector_mom 已合并为 sector_scores，旧参数仅向后兼容。
     大盘情绪(sentiment)温和系数调节(×0.85~×1.15)。
     北向资金(north_flow)市场级因子，所有标的统一分。
+    crash_resistance: 抗跌分(防御板块+大市值+低换手)
     """
     if stock_sentiment_scores is None:
         stock_sentiment_scores = pd.Series(5.0, index=seal_scores.index)
@@ -127,6 +129,8 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
         north_flow_scores = pd.Series(5.0, index=seal_scores.index)
     if alpha_scores is None:
         alpha_scores = pd.Series(5.0, index=seal_scores.index)
+    if crash_resistance_scores is None:
+        crash_resistance_scores = pd.Series(5.0, index=seal_scores.index)
     # 向后兼容：如果传了sector_res/sector_mom但没传sector_scores，自动合并
     if sector_scores is None:
         if sector_res is not None and sector_mom is not None:
@@ -139,10 +143,10 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
             sector_scores = pd.Series(6.0, index=seal_scores.index)
     w = weights if weights else DEFAULT_WEIGHTS
 
-    # 9因子加权 (v2.0: +north_flow, v3.1: +alpha)
-    # BUG-FIX 2026-07-14: alpha 重复列出导致 actual_sum 虚高 ~7%，分数整体偏低
+    # 10因子加权 (v2.0: +north_flow, v3.1: +alpha, v3.3o: +crash_resistance)
     non_sentiment = ['seal', 'money', 'sector', 'tech', 'history',
-                     'stock_sentiment', 'principal_score', 'north_flow', 'alpha']
+                     'stock_sentiment', 'principal_score', 'north_flow', 'alpha',
+                     'crash_resistance']
     actual_sum = sum(w.get(k, 0) for k in non_sentiment)
     weighted = (seal_scores * (w.get('seal', 0) / _RAW_MAX['seal']) +
                 money_scores * (w.get('money', 0) / _RAW_MAX['money']) +
@@ -152,7 +156,8 @@ def apply_weights(seal_scores, money_scores, sector_scores, tech_scores,
                 stock_sentiment_scores * (w.get('stock_sentiment', 0) / _RAW_MAX['stock_sentiment']) +
                 principal_scores * (w.get('principal_score', 0) / _RAW_MAX['principal_score']) +
                 north_flow_scores * (w.get('north_flow', 0) / _RAW_MAX['north_flow']) +
-                alpha_scores * (w.get('alpha', 0) / _RAW_MAX['alpha']))
+                alpha_scores * (w.get('alpha', 0) / _RAW_MAX['alpha']) +
+                crash_resistance_scores * (w.get('crash_resistance', 0) / _RAW_MAX['crash_resistance']))
     base_scores = weighted / max(1, actual_sum) * 100
 
     # 大盘情绪温和系数 (×0.85 ~ ×1.15, 缩小到±15%)

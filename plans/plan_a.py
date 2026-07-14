@@ -158,6 +158,44 @@ def compute_factors(filtered, fund_df, principal):
     except Exception as e:
         print(f"  [Plan A] Alpha因子跳过: {e}", file=sys.stderr)
 
+    # v3.3o: 抗跌分 (crash_resistance), 基于行业防御性+市值+换手率
+    # 防御板块: 黄金/银行/保险/公用事业/食品饮料/医药
+    _DEFENSIVE_SECTORS = {'贵金属', '银行', '保险', '公用事业', '食品饮料', '医药生物',
+                          '公路铁路', '机场航运', '电力', '煤炭', '港口'}
+    crash_res = pd.Series(5.0, index=filtered.index)
+    try:
+        ind_col = '所属行业' if '所属行业' in filtered.columns else (filtered.columns[15] if len(filtered.columns) > 15 else None)
+        cap_col = '流通市值' if '流通市值' in filtered.columns else None
+        turn_col = '换手率' if '换手率' in filtered.columns else (filtered.columns[9] if len(filtered.columns) > 9 else None)
+
+        for idx in filtered.index:
+            bonus = 5.0  # 基础分
+
+            # 行业防御性 (0-3)
+            industry = str(filtered.loc[idx, ind_col]) if ind_col else ''
+            if industry in _DEFENSIVE_SECTORS:
+                bonus += 3.0  # 防御板块加分
+
+            # 市值越大越抗跌 (0-2)
+            if cap_col:
+                cap = float(filtered.loc[idx, cap_col])
+                if cap >= 200e8:   bonus += 2.0
+                elif cap >= 100e8: bonus += 1.5
+                elif cap >= 50e8:  bonus += 1.0
+                elif cap >= 20e8:  bonus += 0.5
+
+            # 换手率低=筹码稳定 (0-2)
+            if turn_col:
+                turn = float(filtered.loc[idx, turn_col])
+                if turn < 3:         bonus += 2.0
+                elif turn < 8:       bonus += 1.5
+                elif turn < 15:      bonus += 0.5
+                # 高换手不扣分，只是不加
+
+            crash_res[idx] = min(12, max(0, bonus))
+    except Exception as e:
+        print(f"  [Plan A] 抗跌分跳过: {e}", file=sys.stderr)
+
     return {
         'seal': seal, 'money': money, 'raw_money': raw_money,
         'sector_mom': sector_mom, 'sector_res': sector_res,
@@ -165,6 +203,7 @@ def compute_factors(filtered, fund_df, principal):
         'stock_sentiment': stock_sent, 'principal': pr,
         'north_flow': north_flow,
         'alpha': alpha,
+        'crash_resistance': crash_res,
     }
 
 
@@ -215,6 +254,7 @@ def apply_scores(filtered, factors, sentiment_score, history_scores, lhb_bonus, 
         principal_scores=factors['principal'],
         north_flow_scores=factors.get('north_flow'),
         alpha_scores=factors.get('alpha'),
+        crash_resistance_scores=factors.get('crash_resistance'),
         weights=weights)
 
     from scanner import score_danger_signals
