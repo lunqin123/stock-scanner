@@ -35,7 +35,7 @@ INCLUDE_CHINEXT = False
 # 备选: 'S10-prime' (无行业加权) / 'S9-prime' (换手<5%严苛, 笔数稀)
 #       'S9-strict' (再加行业=top限制, 笔数更稀)
 ENABLE_V2_HARD_FILTER = True
-V2_SCHEME = "S12-prime"  # 默认方案 (每天 3-5 票, 6+7 月双正)
+V2_SCHEME = "S15-prime"  # 宽松方案: 含首板+换手<8%, 笔数充足
 
 # ═══════════════════════════════════════════
 #  缓存配置

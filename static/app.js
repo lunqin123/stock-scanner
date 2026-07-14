@@ -21,7 +21,7 @@ let _btTopN = parseInt(localStorage.getItem('btTopN')) || _tabDefaultTopN[_btTab
 let _btCapital = parseInt(localStorage.getItem('btCapital')) || (_btTopN * 30000);
 let _btStrategy = localStorage.getItem('btStrategy') || '';
 // 回测天数（服务端归档最多到109天，默认60天不过载）
-const _BT_DAYS = 15;  // 本地 engine 缓存有15-19天数据, 用15天覆盖所有tab
+const _BT_DAYS = 20;  // archive.db 有20天数据，全量覆盖
 // v3.3h: 各tab策略参数 — 严格对齐后端 _TAB_BUY_TIME + TAB_DEFAULT_BT_PARAMS
 //   close策略(limit-up/zhaban): T日尾盘买→T+1开盘卖, sell_n参数无效(恒为1)
 //   open策略(trend/reversal/dtqiaoban): T+1开盘买→T+N开盘卖, sell_n有效
@@ -401,18 +401,9 @@ function switchPage(page) {
         const info = PAGES[page];
         if (!info) return;
         _dom.pageTitle().textContent = info.title;
-        // 更新外部 tab 的评分/卖出日显示
+        // 外部 tab 评分显示（已精简）
         var scoreEl = document.getElementById('tab-score-display');
-        if (scoreEl) {
-            var tabMap = {'scan-trend':'trend','scan-limit':'limit-up','scan-zhaban':'zhaban','scan-reversal':'reversal','scan-dtqiaoban':'dtqiaoban'};
-            var btTab = tabMap[page] || '';
-            if (btTab && _getMinScore(btTab) !== undefined) {
-                var mode = _TAB_BUY_MODE[btTab] === 'close' ? '尾盘买T+1卖' : 'T+' + _getSellN(btTab) + '开盘卖';
-                scoreEl.textContent = '最低分 ' + _getMinScore(btTab) + ' · ' + mode;
-            } else {
-                scoreEl.textContent = '';
-            }
-        }
+        if (scoreEl) scoreEl.textContent = '';
         document.body.dataset.page = page;
 
         // 页面切换动画（用 opacity 避免 layout）
@@ -450,33 +441,6 @@ function savePrincipal() {
     var el = document.getElementById('principal-input');
     if (el) localStorage.setItem('_principal', el.value);
 }
-// P2.0 新因子开关: 默认开启 (持续性 + 回撤位置), 用户可关掉回退到老评分
-function getUseV2() {
-    return localStorage.getItem('_useV2') !== 'false';
-}
-function toggleUseV2() {
-    var v = !getUseV2();
-    localStorage.setItem('_useV2', v);
-    updateV2Button();
-    // 清缓存重拉
-    if (typeof _btCache !== 'undefined') _btCache = {};
-    // 当前页如果是涨停, 重拉
-    var cur = location.hash.slice(1) || 'scan-trend';
-    if (cur === 'scan-limit') {
-        if (typeof _runCurrentFromCache === 'function') _runCurrentFromCache(true);
-        else if (typeof switchPage === 'function') switchPage(cur);
-    }
-}
-function updateV2Button() {
-    var btn = document.getElementById('v2ToggleBtn');
-    if (!btn) return;
-    var on = getUseV2();
-    btn.textContent = '🧠 V2 评分 ' + (on ? 'ON' : 'OFF');
-    btn.style.background = on ? '#22c55e' : 'var(--bg-secondary)';
-    btn.style.color = on ? '#fff' : 'var(--text-muted)';
-    btn.style.borderColor = on ? '#22c55e' : 'var(--border)';
-    btn.title = on ? '持续性+回撤位置因子已启用 (关掉=老评分)' : '已回退老评分 (点开=新评分)';
-}
 // 2026-07-05: 仅剩 Plan A, 所有 getPlan/savePlan/loadPlans 改为永远返 'A'
 function getPlan() { return 'A'; }
 function savePlan() { /* no-op */ }
@@ -510,7 +474,7 @@ async function runCurrent() {
     savePrincipal();
     var plan = getPlan();
     // v3.3e: 永远重新拉取, 不加任何条件判断
-    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + (getUseV2() ? '&use_v2=true' : '&use_v2=false') + '&_t=' + Date.now();
+    var url = info.api + '?principal=' + getPrincipal() + (plan ? '&plan=' + plan : '') + '&_t=' + Date.now();
     await callApi(url, currentPage);
 }
 
@@ -792,14 +756,12 @@ async function loadCardView(output, pageKey, apiUrl) {
                 const activeTab = (typeof _btTab !== 'undefined' && _btTab) || 'trend';
                 html += '<div id="tabWeightsArea" style="margin:16px 16px 0 16px"></div>';
                 html += '<div style="margin:16px;padding:12px;background:var(--card-bg);border-radius:8px">'
-                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">📊 多 Tab 真实回测 <span style="font-size:11px">(涨停/炸板=尾盘T日收→T+1开, 趋势/反转/翘板=开盘T+1开→T+N开)</span></div>'
-                      + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">按钮格式: <code>tab名 策略(ms分)</code> · 改ms/TOP/本金后自动重跑</div>'
+                      + '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">📊 多 Tab 真实回测</div>'
+
                       + '<div id="btTabBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
                 tabs.forEach(t => {
                     const active = t.key === activeTab ? 'background:var(--accent);color:#fff' : 'background:var(--bg-secondary);color:var(--text)';
-                    const ms = _getMinScore(t.key);
-                    var strategyLabel = _TAB_BUY_MODE[t.key] === 'close' ? '尾盘T+1卖' : ('T+' + _getSellN(t.key) + '卖');
-                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + ' ' + strategyLabel + ' <span style="opacity:0.7">(' + ms + '分)</span></button>';
+                    html += '<button class="btn" style="font-size:11px;padding:6px 10px;' + active + '" onclick="switchBacktestTab(\'' + t.key + '\',' + t.days + ')">' + t.label + '</button>';
                 });
                 // TOP-N 调权 + 本金输入
                 html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px">'
@@ -812,8 +774,7 @@ async function loadCardView(output, pageKey, apiUrl) {
                     + '<span style="color:var(--text-muted);margin-left:4px">(单只本金, 单笔 EV 跟回测对齐)</span>'
                     // 2026-07-05: 删除 strategy preset 下拉 (limit-prime/trend-elite/limit-sweet)
                     // 唯一过滤逻辑 = plan_a 评分 + min_score 阈值 + sell_n 卖出日.
-                    + '<span style="color:var(--text-muted);margin-left:8px">最低分</span>'
-                    + '<input id="btMinScore" type="number" value="' + _getMinScore(_btTab) + '" oninput="onBacktestMinScoreInput()" onchange="onBacktestMinScoreChange()" style="width:60px;padding:4px 8px;border-radius:4px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border)" step="5" min="0" max="100">'
+
                     + '<button onclick="window._resetBacktestParams()" title="重置回默认 TOP1+3万" style="margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer">↻ 重置</button>'
                     + '<button onclick="loadTomorrowSignals()" title="明日买入信号(盘前规则)" style="margin-left:4px;padding:3px 8px;font-size:11px;background:#f59e0b;color:#fff;border:1px solid #f59e0b;border-radius:4px;cursor:pointer;font-weight:600">📡 明日信号</button>'
                     + '</div>'
@@ -1184,7 +1145,6 @@ function expandOlderVersions() {
 
 // ─── 初始化 ───
 document.addEventListener('DOMContentLoaded', () => {
-    updateV2Button();
     updateCacheStatus();
     loadMarketStatus();
     loadDashboard();

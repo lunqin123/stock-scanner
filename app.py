@@ -517,7 +517,7 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     plan_name = plan or None
     today = _today_trading()
     # 先查每日缓存 (same day reuse)
-    _daily_cache_key = make_key("limit_up_cards", principal=int(principal), plan=plan_name or "default", v2=use_v2)
+    _daily_cache_key = make_key("app", "limit_up_cards", principal=int(principal), plan=plan_name or "default")
     if not refresh:
         cached = daily_get(_daily_cache_key)
         if cached:
