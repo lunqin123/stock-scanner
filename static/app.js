@@ -281,6 +281,11 @@ async function loadTomorrowSignals() {
             + '&dtqiaoban_min_score=' + _getMinScore('dtqiaoban')
             + '&dtqiaoban_sell_n=' + _getSellN('dtqiaoban');
         var resp = await fetch(url);
+        if (!resp.ok) {
+            var errText = await resp.text();
+            el.innerHTML = '<span style="color:#ef4444">❌ 服务端错误 (' + resp.status + '): ' + escapeHtml(errText.slice(0,200)) + '</span>';
+            return;
+        }
         var data = await resp.json();
         if (!data.ok) { el.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || '未知错误') + '</span>'; return; }
         // 头部信息

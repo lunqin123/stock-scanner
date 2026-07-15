@@ -512,17 +512,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
                               plan: str = Query(None, description="评分方案(A/B/...)"),
                               use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子(A/B 对比用)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）
-    缓存策略: daily cache + raw_scan_data.pkl 双重缓存，同一天内秒出。
+    缓存策略: 每次切 tab 都重新拉取+评分，保证前端与后端一致。
+    性能: raw_scan_data.pkl 在 _scan_limit_up_data 内部提供同日内秒级重跑。
     """
     plan_name = plan or None
     today = _today_trading()
-    # 先查每日缓存 (same day reuse)
-    _daily_cache_key = make_key("app", "limit_up_cards", principal=int(principal), plan=plan_name or "default")
-    if not refresh:
-        cached = daily_get(_daily_cache_key)
-        if cached:
-            print("  [涨停卡片] 命中每日缓存", file=sys.stderr)
-            return cached
 
     raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default",
                        v2=use_v2)
@@ -537,15 +531,9 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
         return err
     if data is None or not data.get('stocks'):
         return {"ok": True, "stocks": [], "sentiment": {}}
-    print(f"  [涨停卡片] {'缓存命中' if from_cache else '完成'}, 共 {len(data['stocks'])} 只", file=sys.stderr)
-    result = _make_cache_entry(data['stocks'], data['sentiment_score'],
-                                data['sentiment_level'], data['date'])
-    # 写入每日缓存
-    try:
-        daily_set(_daily_cache_key, result)
-    except Exception:
-        pass
-    return result
+    print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
+    return _make_cache_entry(data['stocks'], data['sentiment_score'],
+                              data['sentiment_level'], data['date'])
 
 # ─── 今日信号综合 (5 tab 各取 top 1, 按历史 EV 排序) ────────────────
 # 设计目标: 回测系统已验证每个 tab 在 60 天内的 EV (commit cfe36f1),
@@ -1541,13 +1529,7 @@ def api_zhaban_cards(refresh: bool = Query(False, description="强制刷新")):
             'url': f"https://stockpage.10jqka.com.cn/{code}/",
         })
 
-    # items 缓存（daily，同一天内复用）
-    result = {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
-    try:
-        daily_set(make_key("app", "zhaban_items", date=today), result)
-    except Exception:
-        pass
-    return result
+    return {"ok": True, "items": items[:10], "fetched_at": _fetched_at()}
 
 
 
@@ -1649,14 +1631,8 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
 
     items, meta = run()
     if not items:
-        result = {"ok": True, "items": [], "fetched_at": _fetched_at()}
-    else:
-        result = {"ok": True, "items": items, "fetched_at": _fetched_at()}
-    try:
-        daily_set(make_key("app", "dtqiaoban_items", date=_today_trading()), result)
-    except Exception:
-        pass
-    return result
+        return {"ok": True, "items": [], "fetched_at": _fetched_at()}
+    return {"ok": True, "items": items, "fetched_at": _fetched_at()}
 
 
 @app.get("/api/backtest")
