@@ -14,9 +14,10 @@
 - 缓存键含 tab: bt_result_{tab}_{start}_{end}_{top_n}_{capital}
 """
 import sys, time, os
-sys.path.insert(0, r"C:\Users\16689\Desktop\stock-scanner")
 # 项目根目录 (__file__ 在 backtest/ 子目录, 上翻一级)
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 import pandas as pd
 import numpy as np
 import akshare as ak

@@ -64,23 +64,23 @@ def seal_time_score(t: str) -> float:
 
 
 def _vectorized_seal_time_score(series: pd.Series) -> pd.Series:
-    """封板时间阶梯化向量化版 (0-12)：非连续，早盘重奖、尾盘重罚
+    """封板时间阶梯化向量化版 (0-10): 与标量版 seal_time_score 范围统一 (BUG-6 修复)
     输入: 形如 '092500'/'14:25:00' 的字符串 Series
-    输出: 同索引的 0-12 分 Series
+    输出: 同索引的 0-10 分 Series
     """
     s = series.astype(str)
     # 安全解析 HHMM -> minutes (无法解析的填 0)
     h = pd.to_numeric(s.str[:2], errors='coerce').fillna(0).astype(int)
     m = pd.to_numeric(s.str[2:4], errors='coerce').fillna(0).astype(int)
     minutes = h * 60 + m
-    # 阶梯: <=10:00=12, 10:30=9, 11:30=6, 13:00=4, 14:00=2, >14:00=0
+    # 阶梯: 与标量版 seal_time_score 统一, 缩放到 0-10
     score = pd.Series(0.0, index=series.index)
-    score[minutes <= 0] = 6.0  # 无法解析的默认中位 6
-    score[(minutes > 0) & (minutes <= 600)] = 12.0  # ≤10:00
-    score[(minutes > 600) & (minutes <= 630)] = 9.0
-    score[(minutes > 630) & (minutes <= 690)] = 6.0
-    score[(minutes > 690) & (minutes <= 780)] = 4.0
-    score[(minutes > 780) & (minutes <= 840)] = 2.0
+    score[minutes <= 0] = 5.0  # 无法解析的默认中位 5
+    score[(minutes > 0) & (minutes <= 600)] = 10.0  # ≤10:00 → 10
+    score[(minutes > 600) & (minutes <= 630)] = 7.5  # 10:00-10:30 → 7.5
+    score[(minutes > 630) & (minutes <= 690)] = 5.0  # 10:30-11:30 → 5
+    score[(minutes > 690) & (minutes <= 780)] = 3.3  # 11:30-13:00 → 3.3
+    score[(minutes > 780) & (minutes <= 840)] = 1.7  # 13:00-14:00 → 1.7
     # >14:00 留 0
     return score
 
