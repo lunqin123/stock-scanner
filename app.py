@@ -21,6 +21,18 @@ from cache import daily_get, daily_set, daily_get_pkl, daily_set_pkl, make_key
 from recommendation_tracker import save_recommendations, get_per_tab_stats as _get_tracker_stats
 app = FastAPI(title="A股超短线选股扫描器", version="1.0.0")
 
+# ── 全局 API 缓存禁用中间件 ──
+# v3.4d: 所有 /api/ 响应强制 no-store，防止浏览器/NGINX 缓存 JSON 导致排行榜不更新
+from starlette.middleware.base import BaseHTTPMiddleware
+class _NoCacheAPIMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+app.add_middleware(_NoCacheAPIMiddleware)
+
 _CST = timezone(timedelta(hours=8))
 
 def _today_trading() -> str:

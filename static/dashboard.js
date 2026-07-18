@@ -13,7 +13,7 @@ async function loadDashboard(force) {
     const bar = document.getElementById('dashboard');
     try {
         const url = '/api/dashboard' + (force ? '?refresh=1' : '');
-        const resp = await fetch(url);
+        const resp = await fetch(url, { cache: 'no-store' });
         const d = await resp.json();
         if (!d.ok) throw new Error('no data');
 

@@ -118,7 +118,7 @@ async function loadBacktestTab(tab, days, topN, capital) {
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
         var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital + '&force=true';
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
-        var resp = await fetch(url, { signal: ctrl.signal });
+        var resp = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
         clearTimeout(tid);
         var data = await resp.json();
         if (myToken !== _btLoadToken) return;
@@ -280,7 +280,7 @@ async function loadTomorrowSignals() {
             + '&zhaban_sell_n=' + _getSellN('zhaban')
             + '&dtqiaoban_min_score=' + _getMinScore('dtqiaoban')
             + '&dtqiaoban_sell_n=' + _getSellN('dtqiaoban');
-        var resp = await fetch(url);
+        var resp = await fetch(url, { cache: 'no-store' });
         if (!resp.ok) {
             var errText = await resp.text();
             el.innerHTML = '<span style="color:#ef4444">❌ 服务端错误 (' + resp.status + '): ' + escapeHtml(errText.slice(0,200)) + '</span>';
@@ -588,7 +588,7 @@ async function _fetchTrackerStats() {
     }
     _trackerFetching = true;
     try {
-        var resp = await fetch('/api/tracker/stats?_r=' + Math.random().toString(36).slice(2));
+        var resp = await fetch('/api/tracker/stats?_r=' + Math.random().toString(36).slice(2), { cache: 'no-store' });
         var data = await resp.json();
         _trackerFetchers.forEach(function(f) { f(data); });
         _trackerFetchers = [];
@@ -635,7 +635,7 @@ async function loadTextView(output, pageKey, apiUrl) {
     }, 300);
 
     try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { cache: 'no-store' });
         const data = await resp.json();
         clearInterval(estInterval);
         showProgress('加载完成', 100);
@@ -665,7 +665,7 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
     await new Promise(r => setTimeout(r, 40));
 
     try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { cache: 'no-store' });
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
@@ -732,7 +732,7 @@ async function loadCardView(output, pageKey, apiUrl) {
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 
     try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { cache: 'no-store' });
         const data = await resp.json();
 
         const items = data.stocks || data.items || [];
@@ -887,7 +887,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
         }
         params.push('_t=' + Date.now());  // 新时间戳防缓存
         streamUrl += '?' + params.join('&');
-        const resp = await fetch(streamUrl);
+        const resp = await fetch(streamUrl, { cache: 'no-store' });
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
@@ -1028,7 +1028,7 @@ var _marketLabels = {
 
 async function loadMarketStatus() {
     try {
-        var resp = await fetch('/api/market-status');
+        var resp = await fetch('/api/market-status', { cache: 'no-store' });
         var d = await resp.json();
         if (d.ok) _marketStatus = d.status;
     } catch(e) {}
@@ -1079,7 +1079,7 @@ function closeSidebar() {
 document.addEventListener('DOMContentLoaded', () => {
     updateCacheStatus();
     loadMarketStatus();
-    loadDashboard();
+    loadDashboard(true);  // v3.4d: 强制刷新，避免 daily_get 缓存旧数据
 
     document.querySelectorAll('.nav-item').forEach(el => {
         el.addEventListener('click', () => { location.hash = el.dataset.page; closeSidebar(); });

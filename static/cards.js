@@ -1417,7 +1417,7 @@ async function loadWeightsTab(tab) {
     if (!output) return;
     output.innerHTML = '<div class="loading">⏳ 加载权重数据...</div>';
     try {
-        var resp = await fetch('/api/weights/tab/' + tab);
+        var resp = await fetch('/api/weights/tab/' + tab, { cache: 'no-store' });
         var data = await resp.json();
         output.innerHTML = renderWeightsPanel(data);
     } catch(e) {
@@ -1449,7 +1449,8 @@ async function applyWeights(tab) {
         var resp = await fetch('/api/weights/tab/' + tab, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({factors: factors})
+            body: JSON.stringify({factors: factors}),
+            cache: 'no-store'
         });
         var data = await resp.json();
         if (data.ok) {
@@ -1471,7 +1472,7 @@ async function resetWeights(tab) {
     if (statusEl) statusEl.textContent = '⏳ 重置中...';
     try {
         // 获取默认权重
-        var resp = await fetch('/api/weights/tab/' + tab);
+        var resp = await fetch('/api/weights/tab/' + tab, { cache: 'no-store' });
         var data = await resp.json();
         if (!data.ok || !data.factors) {
             if (statusEl) statusEl.textContent = '❌ 获取默认权重失败';
@@ -1486,7 +1487,8 @@ async function resetWeights(tab) {
         var saveResp = await fetch('/api/weights/tab/' + tab, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({factors: factors})
+            body: JSON.stringify({factors: factors}),
+            cache: 'no-store'
         });
         var saveData = await saveResp.json();
         if (saveData.ok) {
@@ -1515,6 +1517,7 @@ async function optimizeWeights(tab) {
         var resp = await fetch('/api/weights/optimize/' + tab, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
+            cache: 'no-store'
         });
         var data = await resp.json();
         if (!data.ok) {
