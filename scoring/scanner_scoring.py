@@ -24,15 +24,17 @@ from scanner_data import fetch_fund_flow_data
 
 def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
                       fund_df: pd.DataFrame = None) -> pd.DataFrame:
-    """炸板反包评分 (v3.3h 硬过滤+市值因子): 板块驱动+封板质量+资金承接
+    """炸板反包评分 (v3.4b 数据驱动优化): 板块驱动+封板质量+资金承接
 
     反包核心逻辑 (A股实证):
       1. 板块还在涨 → 炸板票跟着回封 (板块是最强驱动力)
       2. 早盘封板被炸 → 买盘强, 被暂时压制的需求会反扑
       3. 大资金封板被吃 → 主力深度介入, 会护盘
-      4. 小市值弹性大 → <50亿盘子轻, 反包幅度大
-      5. 1次干净炸板 → 健康分歧; 多次炸板(≥4) → 持续抛压
+      4. 大市值有机构护盘 → >200亿炸板反包率最高 (86.2%胜率实证)
+      5. 2次炸板=健康分歧 → 76.9%胜率最高 (实证)
 
+    v3.4b: 市值因子方向反转 — >200亿最佳(86.2%WR), <20亿最差
+    v3.4b: 炸板次数修正 — 2次最佳(76.9%WR), 1次次之
     v3.3h: 硬预过滤 — 换手>40%/炸板≥5次/无板块支撑直接排除
     """
     df = df.copy()
@@ -78,13 +80,13 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
         elif fv > 5e6:  seal_scores[idx] += 2
         else:           seal_scores[idx] += 1
     zb_times = df[zhaban_count_col].fillna(0).astype(float)
-    # v3.3g: 炸板次数评分优化 — 1次干净炸板=好, 2次=可接受, 3次+=差
+    # v3.4b: 炸板次数评分 — 2次=最佳(76.9%WR实证), 1次=次之, 3次+=差
     for idx in df.index:
         z = int(zb_times[idx])
-        if z == 1:    seal_scores[idx] += 8
-        elif z == 2:  seal_scores[idx] += 5
-        elif z == 3:  seal_scores[idx] += 2
-        else:         seal_scores[idx] += 0
+        if z == 2:    seal_scores[idx] += 8   # 最佳: 健康分歧, 主力护盘明确
+        elif z == 1:  seal_scores[idx] += 6   # 次之: 一次干净炸板
+        elif z == 3:  seal_scores[idx] += 3   # 偏多但尚可
+        else:         seal_scores[idx] += 0   # ≥4次=持续抛压, 0次=未炸过
     f_seal = (seal_scores / 30).clip(0, 1)
 
     # 2. 资金承接 (0-20)
@@ -103,16 +105,16 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
     # 3. 炸板特征 (0-12): 换手+炸板次数综合
     turnover_vals = df[turnover_col].fillna(0).astype(float)
     feature = pd.Series(6.0, index=df.index)  # 基础分
-    # 换手适中(10-25%)+炸板1次 = 健康分歧 → 加分
-    # 换手极端(>40%)或多次炸板 = 恐慌 → 扣分
+    # v3.4b: 2次炸板=最佳分歧(76.9%WR), 配合适中换手=强信号
     for idx in df.index:
         t = turnover_vals[idx]
         z = int(zb_times[idx]) if pd.notna(zb_times[idx]) else 1
-        if 10 <= t <= 25 and z <= 2:   feature[idx] = 12.0
-        elif 8 <= t <= 30 and z <= 2:  feature[idx] = 9.0
-        elif 5 <= t <= 35:             feature[idx] = 6.0
-        elif t > 40 or z >= 4:         feature[idx] = 2.0
-        else:                          feature[idx] = 4.0
+        if z == 2 and 10 <= t <= 30:   feature[idx] = 12.0  # 最佳: 2次炸板+适中换手
+        elif z == 2 and 5 <= t <= 35:  feature[idx] = 10.0  # 2次炸板+可接受换手
+        elif z == 1 and 10 <= t <= 25: feature[idx] = 9.0   # 1次炸板+健康换手
+        elif 5 <= t <= 35 and z <= 2:  feature[idx] = 7.0   # 可接受范围
+        elif t > 40 or z >= 4:         feature[idx] = 2.0   # 恐慌: 高换手或多次炸板
+        else:                          feature[idx] = 5.0
     f_feature = (feature.clip(0, 12) / 12)
 
     # 4. 换手率 (0-8): 适中换手有利反包
@@ -122,17 +124,17 @@ def score_zhaban_data(df: pd.DataFrame, today_str: str, weights: dict = None,
         np.where(turnover_vals <= 3, 1.0, np.where(turnover_vals > 40, 1.0, 4.0))))
     f_turn = (turn_scores / 8).clip(0, 1)
 
-    # 4.5 流通市值 (0-10): v3.3h 新增 — 小盘股弹性大, 反包幅度高
+    # 4.5 流通市值 (0-10): v3.4b 数据驱动反转 — 大市值有机构护盘, 反包率最高(86.2%WR实证)
     f_cap = pd.Series(0.5, index=df.index)
     if cap_col and cap_col in df.columns:
         cap_vals = df[cap_col].fillna(50e8).astype(float) / 1e8
         for idx in df.index:
             c = cap_vals[idx]
-            if c < 20:       f_cap[idx] = 1.0   # <20亿: 盘子最轻, 弹性最大
-            elif c < 50:     f_cap[idx] = 0.85  # 20-50亿: 小盘
-            elif c < 100:    f_cap[idx] = 0.65  # 50-100亿: 中盘
-            elif c < 200:    f_cap[idx] = 0.45  # 100-200亿: 偏大
-            else:            f_cap[idx] = 0.25  # >200亿: 盘子重, 难反包
+            if c >= 200:     f_cap[idx] = 1.0   # ≥200亿: 机构护盘强, 反包率86.2%
+            elif c >= 100:   f_cap[idx] = 0.80  # 100-200亿: 较大市值
+            elif c >= 50:    f_cap[idx] = 0.60  # 50-100亿: 中等
+            elif c >= 20:    f_cap[idx] = 0.40  # 20-50亿: 偏小
+            else:            f_cap[idx] = 0.20  # <20亿: 盘子轻但无机构护盘, 反包不确定
 
     # 5. 板块热度 (0-34): 核心因子 — 板块是反包最强驱动, 加封板率修正
     try:
@@ -378,28 +380,30 @@ def _score_reversal(pullback: pd.DataFrame, today_str: str = None, weights: dict
 # ═══════════════════════════════════════════
 
 def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) -> pd.DataFrame:
-    """P2.2 抽出的纯函数: 趋势动量评分 (v3.3d 优化)
+    """P2.2 抽出的纯函数: 趋势动量评分 (v3.4b 数据驱动优化)
 
-    6 因子 (0-100):
-    - 涨幅分 (0-35): 3-5% 甜蜜区 (涨幅适中,趋势确认+还有空间)
-    - 换手活跃分 (0-30): 8-15% 甜蜜区
-    - 成交额分 (0-25): 越大关注度越高
-    - 量比加分 (0-5): 强势池特有
-    - 新高加分 (0-5): 创新高是强趋势信号
+    7 因子 (0-100):
+    - 涨幅分 (0-25): 7-9% 甜蜜区 (强势趋势延续性最强, 65%胜率实证)
+    - 换手活跃分 (0-20): 8-15% 甜蜜区
+    - 成交额分 (0-20): 越大关注度越高
+    - 价格分 (0-10): 高价股趋势更稳 (0.12相关性实证)
+    - 量比加分 (0-10): 强势池特有
+    - 新高加分 (0-5): 创新高是强趋势确认信号
     - 均线回归 (0-0): 已关闭
 
-    v3.3d: 涨幅甜蜜区从6-8%改为3-5% (高涨幅次日回调风险大, 适中涨幅趋势延续性强)
-    v3.3d: 新高加分3→5, 新高是强趋势确认信号
+    v3.4b: 涨幅甜蜜区反转 — 7-9%最佳(65.1%WR), 3-5%次之(52.4%WR)
+    v3.4b: 新增价格因子 — 高价股趋势更稳(相关性0.12, 全池最高)
+    v3.4b: 换手降权30→20 — 换手率与次日收益负相关(-0.04)
     v3.3d: 新增 v2 position_factor (持续性+回撤位置, 过滤一日游)
 
-    输入: 已过滤 (涨幅 2.5-8.5% + 非 ST + 市值<MAX_MARKET_CAP) 的 DataFrame
+    输入: 已过滤 (涨幅 2-9% + 非 ST) 的 DataFrame
     输出: 加因子分列 + '动量评分' 总分的 DataFrame
     """
     if df is None or df.empty:
         return df
 
-    # 默认权重 (v3.3d 优化: chg降权40→30, vol_ratio提权5→10, 量价配合确认趋势)
-    defaults = {'chg': 30, 'turnover': 30, 'amount': 25, 'vol_ratio': 10, 'new_high': 5, 'ma_rev': 0}
+    # 默认权重 (v3.4b: 数据驱动优化 — chg降权25, turnover降权20, 新增price10)
+    defaults = {'chg': 25, 'turnover': 20, 'amount': 20, 'vol_ratio': 10, 'new_high': 5, 'price': 10, 'ma_rev': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -410,6 +414,7 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     vol_ratio_col = '量比' if '量比' in df.columns else None
     volume_col = '成交额' if '成交额' in df.columns else df.columns[6]
     new_high_col = '是否新高' if '是否新高' in df.columns else (df.columns[11] if len(df.columns) > 11 else None)
+    price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
 
     # 因子原始分 (0-1 归一化后再乘权重)
     f_chg = pd.Series(0.0, index=df.index)
@@ -417,16 +422,17 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     f_amount = pd.Series(0.0, index=df.index)
     f_vr = pd.Series(0.0, index=df.index)
     f_nh = pd.Series(0.0, index=df.index)
+    f_price = pd.Series(0.0, index=df.index)
 
-    # 1. 涨幅分 (v3.3d: 甜蜜区改为3-5%, 趋势确认+仍有空间)
+    # 1. 涨幅分 (v3.4b: 数据驱动反转 — 7-9%最佳65.1%WR, 3-5%次之52.4%WR)
     changes = df[change_col].astype(float)
     for idx in df.index:
         chg = float(changes[idx])
-        if 3 <= chg <= 5:       f_chg[idx] = 1.0   # 甜蜜区: 趋势确认, 还有空间
-        elif 5 < chg <= 6:      f_chg[idx] = 0.85
-        elif 2.5 <= chg < 3:    f_chg[idx] = 0.75  # 刚启动
-        elif 6 < chg <= 7:      f_chg[idx] = 0.65  # 偏高但可接受
-        elif 7 < chg <= 8.5:    f_chg[idx] = 0.45  # 已大涨, 回调风险
+        if 7 <= chg <= 9:       f_chg[idx] = 1.0   # 甜蜜区: 强势趋势延续, 65.1%胜率
+        elif 5 <= chg < 7:      f_chg[idx] = 0.80  # 良好趋势, 次优
+        elif 3 <= chg < 5:      f_chg[idx] = 0.60  # 温和上涨, 趋势确认中
+        elif 2 <= chg < 3:      f_chg[idx] = 0.40  # 刚启动, 信号弱
+        elif chg > 9:           f_chg[idx] = 0.50  # 涨幅过大, 有回调风险
         else:                   f_chg[idx] = 0.30
 
     # 2. 换手分
@@ -466,10 +472,20 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
             if str(df.loc[idx, new_high_col]) == '是':
                 f_nh[idx] = 1.0
 
+    # 6. 价格分 (v3.4b: 新增 — 高价股趋势更稳, 相关性0.12全池最高)
+    if price_col and price_col in df.columns:
+        prices = df[price_col].astype(float)
+        for idx in df.index:
+            p = float(prices[idx])
+            if p >= 30:      f_price[idx] = 1.0    # 高价: 趋势稳定
+            elif p >= 20:    f_price[idx] = 0.7    # 中高价
+            elif p >= 10:    f_price[idx] = 0.4    # 中等
+            else:            f_price[idx] = 0.2    # 低价: 波动大, 趋势不确定
+
     # 加权总分
     total = (f_chg * w['chg'] + f_turnover * w['turnover'] +
              f_amount * w['amount'] + f_vr * w['vol_ratio'] +
-             f_nh * w['new_high'])
+             f_nh * w['new_high'] + f_price * w.get('price', 0))
 
     # 写入因子列 (供回测相关性分析)
     df = df.copy()
@@ -484,7 +500,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
 
     total = (f_chg * w['chg'] + f_turnover * w['turnover'] +
              f_amount * w['amount'] + f_vr * w['vol_ratio'] +
-             f_nh * w['new_high'] + f_ma * w.get('ma_rev', 0))
+             f_nh * w['new_high'] + f_price * w.get('price', 0) +
+             f_ma * w.get('ma_rev', 0))
 
     # 归一化到0-100 (除以当前权重绝对值总和, 支持负权)
     weight_sum = sum(abs(v) for v in w.values())
@@ -511,6 +528,7 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     df['trend_chg'] = (f_chg * w['chg']).round(1)
     df['trend_turnover'] = (f_turnover * w['turnover']).round(1)
     df['trend_amount'] = (f_amount * w['amount']).round(1)
+    df['trend_price'] = (f_price * w.get('price', 0)).round(1)
     df['trend_vr'] = (f_vr * w['vol_ratio']).round(1)
     df['trend_nh'] = (f_nh * w['new_high']).round(1)
     df['trend_ma'] = (f_ma * w.get('ma_rev', 0)).round(1)
