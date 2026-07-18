@@ -505,18 +505,35 @@ def _cached_pool_loader(cache_key: str, loader, refresh: bool = False):
         return None, False, {"ok": True, "items": []}
     return data, False, None
 
-@app.get("/api/scan/limit-up/cards")
+def _weight_hash() -> str:
+    """返回当前权重配置的短哈希，用于缓存key（权重变则缓存自动失效）"""
+    import hashlib
+    from weight_manager import load_weights
+    w = load_weights()
+    # 只取active权重（非DEPRECATED），排序后序列化
+    active = {k: v for k, v in sorted(w.items())
+              if v != 0 and not k.endswith('_res') and not k.endswith('_mom') and k != 'buyability'}
+    return hashlib.md5(json.dumps(active, sort_keys=True).encode()).hexdigest()[:8]
 
-def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
-                              principal: float = Query(30000, description="本金(元)"),
-                              plan: str = Query(None, description="评分方案(A/B/...)"),
-                              use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子(A/B 对比用)")):
+@app.get("/api/scan/limit-up/cards")
+async def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷新"),
+                                  principal: float = Query(30000, description="本金(元)"),
+                                  plan: str = Query(None, description="评分方案(A/B/...)"),
+                                  use_v2: bool = Query(True, description="启用 v2 持续性/回撤位置因子(A/B 对比用)")):
     """涨停扫描 — 返回结构化 JSON 数据（供卡片视图使用）
-    缓存策略: 每次切 tab 都重新拉取+评分，保证前端与后端一致。
-    性能: raw_scan_data.pkl 在 _scan_limit_up_data 内部提供同日内秒级重跑。
+    缓存策略(方案C): 权重hash做key，权重变自动失效 + refresh=True手动刷新。
     """
     plan_name = plan or None
     today = _today_trading()
+    wh = _weight_hash()
+
+    # 评分结果缓存（带权重hash，权重变自动失效）
+    scored_key = f"limit_up_scored_{int(principal)}_{plan_name or 'default'}_{wh}"
+    if not refresh:
+        cached = daily_get(scored_key)
+        if cached:
+            print("  [涨停卡片] 使用评分缓存", file=sys.stderr)
+            return cached
 
     raw_key = make_key("app", "limit_up_raw", principal=int(principal), plan=plan_name or "default",
                        v2=use_v2)
@@ -532,8 +549,11 @@ def api_scan_limit_up_cards(refresh: bool = Query(False, description="强制刷�
     if data is None or not data.get('stocks'):
         return {"ok": True, "stocks": [], "sentiment": {}}
     print(f"  [涨停卡片] 完成, 共 {len(data['stocks'])} 只", file=sys.stderr)
-    return _make_cache_entry(data['stocks'], data['sentiment_score'],
-                              data['sentiment_level'], data['date'])
+    result = _make_cache_entry(data['stocks'], data['sentiment_score'],
+                               data['sentiment_level'], data['date'])
+    # 保存评分结果缓存
+    daily_set(scored_key, result)
+    return result
 
 # ─── 今日信号综合 (5 tab 各取 top 1, 按历史 EV 排序) ────────────────
 # 设计目标: 回测系统已验证每个 tab 在 60 天内的 EV (commit cfe36f1),
