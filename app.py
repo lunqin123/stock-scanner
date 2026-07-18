@@ -954,9 +954,6 @@ def api_signals_today(
     return _signals_today_inner(refresh=refresh, user_bt_params=ubp)
 
 
-@app.get('/api/signals/today')
-
-
 @app.get("/api/scan/sector/cards")
 def api_sector_cards(refresh: bool = Query(False, description="强制刷新")):
     """板块热度 — 结构化数据（增强版：含成分股 + 可跳转）
@@ -1152,6 +1149,7 @@ def _build_trend_items(trend, cols, zhaban_codes, hot_industries,
     code_col, name_col = cols['code'], cols['name']
     price_col, turnover_col = cols['price'], cols['turnover']
     industry_col = cols['industry']
+    vol_col = cols.get('vol')
     items = []
     for _, row in trend.iterrows():
         code = str(row[code_col]).strip().zfill(6)
@@ -2471,7 +2469,7 @@ async def api_scan_fetch_all(principal: float = Query(30000, description="本金
                         try:
                             r = f.result()
                             pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
-                        except: pools[futs[f]] = pd.DataFrame()
+                        except Exception: pools[futs[f]] = pd.DataFrame()
                 limit_df = pools.get('limit', pd.DataFrame())
                 zhaban_df = pools.get('zhaban', pd.DataFrame())
                 dieting_df = pools.get('dieting', pd.DataFrame())
@@ -3023,14 +3021,23 @@ async def api_sector_stream(refresh: bool = Query(False)):
                 try:
                     r = f.result()
                     pools[futs[f]] = r if (r is not None and not r.empty) else pd.DataFrame()
-                except: pools[futs[f]] = pd.DataFrame()
+                except Exception: pools[futs[f]] = pd.DataFrame()
         print(f"  [板块] 涨停{len(pools.get('limit',pd.DataFrame()))} 炸板{len(pools.get('zhaban',pd.DataFrame()))} 跌停{len(pools.get('dieting',pd.DataFrame()))}, 计算中...", file=sys.stderr)
         stats = score_sector_data(pools.get('limit',pd.DataFrame()), pools.get('zhaban',pd.DataFrame()), pools.get('dieting',pd.DataFrame()), top_n=15)
         items = []
         for s in stats:
-            items.append({'name': s['industry'], 'limit_count': s['limit_cnt'],
-                          'zhaban_count': s['zhaban_cnt'], 'dieting_count': s['dieting_cnt'],
-                          'score': min(12, 4 + s['limit_cnt'] * 2), 'efficiency': s['seal_rate'],
+            lc = s['limit_cnt']; zc = s['zhaban_cnt']; dc = s['dieting_cnt']
+            eff = s['seal_rate']
+            # 与 api_sector_cards 使用相同评分公式 (BUG-5 修复: 统一 log1p 公式)
+            import math
+            base_score = math.log1p(lc) * 4
+            eff_bonus = (eff - 50) / 25
+            zb_penalty = zc * 0.3
+            dc_penalty = dc * 1.0
+            score = max(0, min(12, round(base_score + eff_bonus - zb_penalty - dc_penalty, 1)))
+            items.append({'name': s['industry'], 'limit_count': lc,
+                          'zhaban_count': zc, 'dieting_count': dc,
+                          'score': score, 'efficiency': eff,
                           'url': f"https://www.10jqka.com.cn/#/search/{s['industry']}"})
         return items, {}
     return _mode_stream_endpoint(run, lambda r, fet: {'items': r.get('items',[]), 'fetched_at': fet}, 'sector_stream', refresh)
