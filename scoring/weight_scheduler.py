@@ -136,7 +136,7 @@ def _adjust_plan_a() -> dict:
         # 复用 _run_t1_backtest_cached 不行 (那是 limit-up only), 用 backtest_engine 直接跑
         from weight_manager import BACKTEST_FACTORS
         result = run_tab_backtest(
-            tab='limit-up', max_days=20, top_n=3, capital=20000, use_cache=False
+            tab='limit-up', max_days=20, top_n=3, capital=30000, use_cache=False
         )
         trades = result.get('trades', [])
         if len(trades) < 3:

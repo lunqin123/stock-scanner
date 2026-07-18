@@ -515,20 +515,6 @@ _REV_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "reversal_weights.json"
 )
 
-# 反转权重（回退原始值）
-REV_DEFAULT_WEIGHTS = {
-    'turnover': 40,
-    'consecutive': 35,
-    'pullback': 15,
-    'sector': 10,
-}
-
-
-# BUG-2 修复: 删除下方 4 因子版 REV_FACTOR_NAMES 旧定义 (L519 已删除)
-# 真正的 REV_FACTOR_NAMES 在 L612 (5 因子版, 含 'retention')
-# 注: REV_DEFAULT_WEIGHTS 是 4 因子 (上面), REV_FACTOR_NAMES 是 5 因子 — 不一致是设计
-# (weights dict 4 key, names dict 5 key 兼容未来扩展), 不应再用 4 因子版覆盖
-
 
 def load_reversal_weights() -> dict:
     try:

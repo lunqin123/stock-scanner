@@ -55,7 +55,7 @@ def compute_seal_time_score(df):
             elif minutes <= 690:  return 0.6   # 11:30前
             elif minutes <= 840:  return 0.3   # 14:00前
             else:                  return 0.1   # 尾盘
-        except: return 0.5
+        except Exception: return 0.5
     return times.apply(_score)
 
 
