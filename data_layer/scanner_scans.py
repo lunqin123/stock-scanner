@@ -270,7 +270,12 @@ def scan_trend(today_str: str, _table_mode: bool = False, top_n: int = None):
 
         if not df.empty:
             # ── 动量评分 (P2.2 抽到 _score_trend) ──
-            df = _score_trend(df)
+            try:
+                from weight_manager import load_trend_weights
+                _w = load_trend_weights()
+            except Exception:
+                _w = None
+            df = _score_trend(df, weights=_w)
             df = df.sort_values('动量评分', ascending=False).head(n)
 
             # ── 输出 ──

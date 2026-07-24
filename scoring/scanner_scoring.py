@@ -402,8 +402,10 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     if df is None or df.empty:
         return df
 
-    # 默认权重 (v3.4b: 数据驱动优化 — chg降权25, turnover降权20, 新增price10)
-    defaults = {'chg': 25, 'turnover': 20, 'amount': 20, 'vol_ratio': 10, 'new_high': 5, 'price': 10, 'ma_rev': 0}
+    # v3.5b: IC驱动重构 — 基于30天回测因子IC数据:
+    #   amount IC=-0.147(反转!), turnover IC=+0.077, nh IC=+0.056, sector IC=-0.059(移除)
+    #   权重和=100, amount因子反转为"低量=高分"方向
+    defaults = {'chg': 5, 'turnover': 30, 'amount': 20, 'vol_ratio': 12, 'new_high': 18, 'price': 5, 'ma_rev': 10}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -424,36 +426,36 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     f_nh = pd.Series(0.0, index=df.index)
     f_price = pd.Series(0.0, index=df.index)
 
-    # 1. 涨幅分 (v3.4b: 数据驱动反转 — 7-9%最佳65.1%WR, 3-5%次之52.4%WR)
+    # 1. 涨幅分 (v3.5: 7-9%甜蜜区, >9%大幅降权 — 涨停边缘的票趋势不可持续)
     changes = df[change_col].astype(float)
     for idx in df.index:
         chg = float(changes[idx])
-        if 7 <= chg <= 9:       f_chg[idx] = 1.0   # 甜蜜区: 强势趋势延续, 65.1%胜率
-        elif 5 <= chg < 7:      f_chg[idx] = 0.80  # 良好趋势, 次优
+        if 7 <= chg <= 9:       f_chg[idx] = 1.0   # 甜蜜区: 强势趋势延续
+        elif 5 <= chg < 7:      f_chg[idx] = 0.85  # 良好趋势
         elif 3 <= chg < 5:      f_chg[idx] = 0.60  # 温和上涨, 趋势确认中
-        elif 2 <= chg < 3:      f_chg[idx] = 0.40  # 刚启动, 信号弱
-        elif chg > 9:           f_chg[idx] = 0.50  # 涨幅过大, 有回调风险
-        else:                   f_chg[idx] = 0.30
+        elif 2 <= chg < 3:      f_chg[idx] = 0.35  # 刚启动, 信号弱
+        elif chg > 9:           f_chg[idx] = 0.30  # 涨幅过大, 涨停边缘回调风险大
+        else:                   f_chg[idx] = 0.00  # 不存在趋势
 
-    # 2. 换手分
+    # 2. 换手分 (v3.5: 趋势股偏好低换手3-8%, 高换手=分歧大=负相关)
     turnovers = df[turnover_col].astype(float)
     for idx in df.index:
         t = float(turnovers[idx])
-        if 8 <= t <= 15:        f_turnover[idx] = 1.0
-        elif 5 <= t < 8:        f_turnover[idx] = 0.833
-        elif 15 < t <= 20:      f_turnover[idx] = 0.667
-        elif 3 <= t < 5:        f_turnover[idx] = 0.5
-        elif 20 < t <= 25:      f_turnover[idx] = 0.333
-        else:                   f_turnover[idx] = 0.167
+        if 3 <= t <= 8:         f_turnover[idx] = 1.0   # 趋势股低换手最佳: 筹码锁定好
+        elif 8 < t <= 12:       f_turnover[idx] = 0.75  # 适中
+        elif 12 < t <= 18:      f_turnover[idx] = 0.45  # 偏高
+        elif 1 <= t < 3:        f_turnover[idx] = 0.40  # 过低, 流动性不足
+        elif 18 < t <= 25:      f_turnover[idx] = 0.20  # 高换手分歧
+        else:                   f_turnover[idx] = 0.05  # 爆量
 
-    # 3. 成交额分 (percentile 归一化, p90=1.0 / p10=0.0)
-    #   旧逻辑用 max 归一化 → 单只头部票(40亿成交)直接压制其他所有票, 30 张里 22 张 amount 分 < 0.2
-    #   新逻辑用 [p10, p90] 区间 → 线性拉伸, 大多数票得到合理区分度
+    # 3. 成交额分 (v3.5b: IC=-0.147 反转方向 — 低量=高分, 高量=低分)
+    #   逻辑: percentile区间[p10, p90]线性拉伸后反转(1-x)
+    #   让低成交额(未被充分交易)的标的获得更高分数
     volumes = df[volume_col].astype(float)
     p10 = volumes.quantile(0.10)
     p90 = volumes.quantile(0.90)
     if p90 > p10:
-        f_amount = ((volumes - p10) / (p90 - p10)).clip(0, 1)
+        f_amount = (1 - ((volumes - p10) / (p90 - p10))).clip(0, 1)
     else:
         f_amount = pd.Series(0.5, index=df.index)
 

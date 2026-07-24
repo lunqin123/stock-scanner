@@ -692,19 +692,23 @@ _TREND_WEIGHTS_FILE = os.path.join(
     "stock_scanner_cache", "trend_weights.json"
 )
 
-# 趋势动量权重——v3.3d: 涨幅甜蜜区3-5%, vol_ratio提权10(量价确认), new_high提权5
+# v3.5b: IC驱动重构 — 基于30天回测因子IC数据
+#   amount IC=-0.147(反转), turnover IC=+0.077, nh IC=+0.056, sector IC=-0.059(移除)
+#   权重和=100, amount因子已反转(低量=高分)
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 30,       # 涨幅分 (3-5%甜蜜区)
-    'turnover': 30,  # 换手分
-    'amount': 25,    # 成交额分
-    'vol_ratio': 10, # 量比加分 (v3.3d: 量价配合确认趋势)
-    'new_high': 5,   # 新高加分 (新高=强趋势确认)
-    'ma_rev': 0,     # MA回归分 (已关闭)
+    'chg': 5,        # 涨幅分 — IC弱负相关(-0.035), 降权
+    'turnover': 30,  # 换手分 — 强正相关(+0.077), 3-8%甜蜜区提权
+    'amount': 20,    # 成交额分 — 反转方向(IC=-0.147), 低量=高分
+    'vol_ratio': 12, # 量比加分 — 正相关(+0.076), 量价确认
+    'new_high': 18,  # 新高加分 — 正相关(+0.056), 提权
+    'price': 5,      # 价格分 — 辅助因子
+    'ma_rev': 10,    # MA回归分 — 偏离均线过滤追高陷阱
 }
 
 TREND_FACTOR_NAMES = {
     'chg': '涨幅', 'turnover': '换手', 'amount': '成交额',
     'vol_ratio': '量比', 'new_high': '新高', 'ma_rev': '均线',
+    'price': '价格', 'sector': '板块',
 }
 
 

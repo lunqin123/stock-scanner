@@ -1309,10 +1309,10 @@ def run_tab_backtest(
         start = start_date
 
     # ── 整体结果缓存 ──
-    # 注意: use_v2/fill_slots 必须进 cache_key, version=2 对应 v2.1.0 权重重调
+    # 注意: use_v2/fill_slots 必须进 cache_key, version=5 对应 v3.5 趋势评分重构
     # 改权重/评分逻辑时记得递增 version 保证旧缓存失效
     if use_cache:
-        cache_key = make_key("bt", "result", version=4, tab=tab,
+        cache_key = make_key("bt", "result", version=5, tab=tab,
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
                              use_v2="v2" if use_v2 else "nov2",
