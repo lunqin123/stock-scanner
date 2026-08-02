@@ -638,7 +638,13 @@ def detect_market_sentiment(today_str: str):
     - score: 0-10 分
     - level: 冰点/低迷/正常/活跃/高潮
     """
-    from cache import _is_trading_day
+    from cache import _is_trading_day, get as _cg, put as _cp
+    # 优化 (2026-08-01): 情绪结果缓存 2h (重复「拉取」秒回;
+    # 原逻辑每次全量重拉 5 个池 + 新浪采样 + 盘前信号 ≈ 20s+)
+    _sent_ck = f'market_sentiment_{str(today_str)[:8]}'
+    _sent_cached = _cg(_sent_ck)
+    if _sent_cached is not None:
+        return tuple(_sent_cached) if isinstance(_sent_cached, list) else _sent_cached
     today_dt = datetime.strptime(today_str, '%Y%m%d') if len(today_str) == 8 else datetime.today()
     # 回退找到最近交易日（处理周末和节假日）
     yesterday = today_dt
@@ -872,7 +878,12 @@ def detect_market_sentiment(today_str: str):
             'premarket': premarket_detail,
             'north_flow': north_detail,
         }
-        return round(score, 1), level, details
+        _result = (round(score, 1), level, details)
+        try:
+            _cp(_sent_ck, _result)
+        except Exception:
+            pass
+        return _result
 
     except Exception as e:
         print(f"  [WARN] 市场情绪评分失败: {e}", file=sys.stderr)
@@ -1003,7 +1014,8 @@ def score_alpha_factors(df: pd.DataFrame, today_str: str = None) -> pd.Series:
     scores = pd.Series(0.0, index=df.index)
     if not codes:
         return scores
-    today = today_str or datetime.now().strftime('%Y%m%d')
+    # 兼容 YYYYMMDD 与 YYYY-MM-DD 两种格式 (生产传入 ISO, 回测传入 YYYYMMDD)
+    today = (today_str or datetime.now().strftime('%Y%m%d')).replace('-', '')
     try:
         td = datetime.strptime(today, '%Y%m%d')
         start_30 = (td - timedelta(days=45)).strftime('%Y%m%d')
@@ -1012,7 +1024,8 @@ def score_alpha_factors(df: pd.DataFrame, today_str: str = None) -> pd.Series:
         hist_map = {}
         def _fetch(code):
             try:
-                h = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start_30, end_date=end_d, adjust='qfq')
+                # 优化 (2026-08-01): 2h 缓存逐股历史, 避免每次拉取全量重扫
+                h = _get_alpha_hist(code, start_30, end_d)
                 if h is not None and len(h) >= 5: return code, h
             except: pass
             return code, None
@@ -1055,4 +1068,42 @@ def score_alpha_factors(df: pd.DataFrame, today_str: str = None) -> pd.Series:
         return scores.round(1)
     except Exception as e:
         print(f"  [alpha] {e}", file=sys.stderr)
+
+
+# ─── alpha 逐股历史缓存 (2026-08-01) ───
+_ALPHA_HIST_CACHE = {}
+
+
+def _get_alpha_hist(code: str, start: str, end: str):
+    """alpha 因子用的逐股日K: 进程内 dict + 2h 文件缓存。
+
+    失败不缓存 (下次重试); 命中时跳过网络, 显著加快重复「拉取」。
+    """
+    key = f'{code}|{start}|{end}'
+    if key in _ALPHA_HIST_CACHE:
+        return _ALPHA_HIST_CACHE[key]
+    try:
+        from cache import get as _cg, put as _cp
+        ck = f'alpha_hist_{code}_{start}_{end}'
+        cached = _cg(ck)
+        if cached is not None and cached != '__NONE__':
+            _ALPHA_HIST_CACHE[key] = cached
+            return cached
+    except Exception:
+        cached = None
+    try:
+        h = ak.stock_zh_a_hist(symbol=code, period='daily',
+                               start_date=start, end_date=end, adjust='qfq')
+        h = h if (h is not None and len(h) >= 5) else None
+        _ALPHA_HIST_CACHE[key] = h
+        if h is not None:
+            try:
+                from cache import put as _cp
+                _cp(f'alpha_hist_{code}_{start}_{end}', h)
+            except Exception:
+                pass
+        return h
+    except Exception:
+        _ALPHA_HIST_CACHE[key] = None
+        return None
         return pd.Series(5.0, index=df.index)

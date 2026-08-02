@@ -1,5 +1,209 @@
 # Changelog
 
+## v3.6.4 (2026-08-02)
+
+### 新增: 涨停扫描「拉取/运行」真实进度条
+
+**背景**: 旧进度条只有 HTML/JS 骨架且缺基础 CSS（桌面端不可见），前端靠关键词猜百分比，
+与真实耗时阶段不对应（资金流/龙虎榜等网络等待期看不到实际进度）。
+
+**改动**:
+- `app.py: _scan_limit_up_data` 按真实阶段上报进度 (5%→100%)：涨停池 → 前置过滤 →
+  资金流 → 股价/可买到/本金过滤 → 第6步并行预测数据 (N/M 逐项推进) → 市场情绪 →
+  评分方案 → 完成
+- `app.py: /api/scan/limit-up/stream`、`/api/scan/fetch-all`、`/api/scan/limit-up/run`
+  SSE 消息增加 `pct` 字段（fetch-all 将扫描进度映射到全局 10-100，前 10% 为三个池子拉取），
+  stderr 文本行继续作为无 pct 的说明性进度
+- `static/app.js: loadCardViewStream` 优先使用后端真实 `pct`，进度条文案同步显示百分比；
+  旧端点无 pct 时保留关键词估算回退
+- `static/style.css` 补进度条基础样式（轨道/填充/状态文字），桌面端与移动端均可见
+
+**验证**: SSE 端点打桩确认 pct 序列 5→100 递增、complete 事件正常；`python -m pytest`
+242 passed（`test_get_sector_rotation_speed` 为既有失败，与本次改动无关）。
+
+## v3.6.3 (2026-08-01)
+
+### 优化: 跌停翘板空状态可解释 (不再是裸"暂无数据")
+
+**背景**: 2026-07-31 (周五) 全市场 0 只跌停 (7/30 有 74 只, 7/29 有 9 只),
+翘板扫描无标的是市场真实情况, 但前端只显示"暂无数据", 容易被误认为故障。
+
+**改动**:
+- `app.py: api_dtqiaoban_cards` 空池时返回 `empty_reason` (今日无跌停股属正常)
+  + `recent_dieting` (近 5 个交易日跌停家数, 2h 缓存)
+- `static/app.js: loadCardView` 空状态渲染原因 + 近期跌停数, 引导用户看强势板块
+
+**验证**: 接口返回 `empty_reason` 与 `recent_dieting` (0730:74 / 0729:9 /
+0728:49 / 0727:6 / 0724:25), 前端资源已更新。
+
+## v3.6.2 (2026-08-01)
+
+### 优化: 涨停扫描「拉取」提速 (24.9s → 1.7s 重复拉取)
+
+**剖析结论** (服务器逐段计时): 全链路 24.9s 中, 市场情绪检测占 22.4s,
+其中 20.4s 花在 `get_premarket_signal` (美股/期货等网络因子, 无缓存)。
+
+**优化**:
+1. `detect_market_sentiment` 结果缓存 2h (`market_sentiment_{date}`):
+   重复「拉取」秒回, 不再每次全量重拉 5 个池 + 新浪采样 + 盘前信号
+2. `get_premarket_signal` 缓存 2h (`premarket_signal_{date}`):
+   盘前信号是日级数据, 20s 的网络因子聚合只需算一次
+3. `_scan_limit_up_data` 并行化: 资金流 + 市场情绪提前与涨停池同时启动
+   (互不依赖, 原串行排队); 每步用非阻塞 executor, 取结果后 shutdown
+4. `score_alpha_factors` 逐股历史加 2h 缓存 (`alpha_hist_{code}_{s}_{e}`):
+   alpha 因子扫全池从 ~1.9s → 0s (第二次起)
+
+**实测 (公网, 服务器)**:
+- 第 1 次拉取 (冷, 每日一次): 25.1s (情绪/盘前全量数据为固有成本, 已在进度条中)
+- 第 2 次拉取 (2h 内): **1.7s** (原 24.9s, 提速 ~14x)
+
+配套: dashboard 刷新受益于同一缓存 (情绪/盘前不再重拉)。
+
+## v3.6.1 (2026-08-01)
+
+### 修复: 首页"今日市场数据加载失败"
+
+**根因**: nginx 代理默认 60s 读超时, 而 `/api/dashboard?refresh=1` 串行拉取
+情绪/涨停池/炸板跌停/盘前/北向/资金流/市场状态合计 ~43s, 偶发超过 60s 被 nginx
+截断 → 前端 catch 显示"数据加载失败"。
+
+**修复**:
+1. nginx `location /` 增加 `proxy_read_timeout 300s` / `proxy_send_timeout 300s` /
+   `proxy_connect_timeout 10s` (公网复测刷新 200)
+2. `app.py:api_dashboard` 刷新路径并行化: 7 个独立数据区块改
+   `ThreadPoolExecutor(max_workers=4)` 并发拉取, 刷新耗时 **43.6s → 22.3s**
+3. 验证: 公网带 token 刷新 HTTP 200, 缓存加载 0.01s, 关键字段完整
+
+## v3.6 (2026-08-01)
+
+### 前端全面优化 + 回测驱动预测概率 (已部署服务器)
+
+**新增: 预测概率条 (每个股票卡片)**
+- 新后端 `scoring/probability_estimator.py`: 用修复后的回测引擎对 5 个榜
+  (涨停/趋势/炸板/翘板/反转) 构建 "评分分档 → 概率" 映射:
+  - 次日上涨概率 (买入后第 2 交易日收盘 > 买入价)
+  - 低开高走概率 (低开且收盘高于开盘, 条件概率)
+  - 5日上涨概率 (信号日往后第 5 交易日收盘 > 买入价, ≈未来一周)
+  - 按评分分档 (<60/60-70/70-80/80-90/≥90), 样本不足回退总体并标注 n
+- 数据源: 回测 trades + 逐代码历史 K 线 (东财优先, 腾讯降级 — 服务器东财被封)
+- API: `GET /api/probabilities?tab=xxx`; 首次请求后台构建, daily 缓存
+- 前端: 卡片新增预测条 (红色次日上涨 / 黄色低开高走 / 绿色5日上涨 + n),
+  数据就绪自动重渲染; 页面切换即加载
+
+**前端清理**
+- 移除所有卡片 "点击查看同花顺详情 →" 提示 (含社区/板块/迷你/龙虎榜卡片)
+- 涨停卡片因子条 9 条 → 4 条关键因子 (资金/板块/量价/情绪), 移除可买性/本金/
+  北向/持续性/回撤等低信息量条
+- 移除工具栏 "方案" 下拉 (仅剩 Plan A)
+- 静态资源版本号统一 v=20260801v1 (服务端另有启动时间戳自动破缓存)
+
+**服务器部署 (134.175.231.8)**
+- scp 直传 82 个源码文件 (GitHub webhook 不可用), 备份
+  `stock-scanner-backup-20260801.tgz`, systemctl restart, 验证通过
+- 首版概率表已预构建 (次日上涨: 涨停 61% / 趋势 46% / 炸板 37% / 翘板 47% /
+  反转 40%; 5日上涨: 趋势 74% / 炸板 68% / 翘板 79% / 反转 51%)
+
+## v3.5e (2026-08-01)
+
+### 调权闭环结果 (前 20 交易日训练 / 后 10 交易日验证, 完整 30 天窗口复验)
+
+**涨停榜 (score_new 权重)**: 训练集 EV 2.90→3.43 (回撤 -9.85%→-3.93%), 但验证集
+EV 4.59 与基线完全一致 (同 17 笔) → **未保存** (默认权重在验证窗口已接近最优)。
+
+**趋势榜**: 训练 -1.61→-1.36, 验证 -2.96→-2.19 (+0.77 pp) → **已保存**
+`trend_weights.json`: chg 4.9 / turnover 29.1 / amount 19.4 / vol_ratio 11.7 /
+new_high 20.4 / price 4.9 / ma_rev 9.7
+完整 30 天复验: EV -2.62→-2.26, 胜率 38.7%→40.0% (75 笔)
+
+**反转榜**: 训练 -1.24→-0.49, 验证 -0.97→-0.72 (+0.25 pp) → **已保存**
+`reversal_weights.json`: turnover 17.9 / consecutive 36.1 / pullback 23.8 /
+sector 17.3 / retention 4.8
+完整 30 天复验: EV -1.46→-0.90, 胜率 47.1%→50.0% (62 笔)
+
+**炸板榜**: 训练改善但验证中性 (n=2 样本过小) → 未保存
+**翘板榜**: 训练 -4.72→-2.70 但验证 3.47→0.44 变差 → **按规则拒绝** (防过拟合生效)
+
+**窗口修复**: `run_tab_backtest` 显式传入 start/end 时不再被 `_detect_available_days`
+收缩窗口 (原"30 天回测"实际只跑 ~21 天且训练/验证重叠)。修复后真实 30 天基线:
+涨停榜 54 笔 / 胜率 72.2% / EV +3.66% / 复利累计 +564% / 回撤 -9.85%。
+
+**缓存版本**: `_CACHE_VER` 15→16, `_RAW_CACHE_VERSION` 11→12, 回测缓存 version 6→7
+(trend/reversal 权重变更, 旧缓存评分失效)
+
+**测试**: Section 12 "回测正确性回归" 18 项, 总计 136 项全过。
+
+## v3.5d (2026-08-01)
+
+### 提升 — 回测→IC→调权闭环 + 文件拆分 (便于 AI 维护)
+
+**调权闭环打通**
+- `scoring/score_new.py` 新增权重持久化 (`load_factor_weights`/`save_factor_weights`,
+  文件 `${TEMP}/stock_scanner_cache/score_new_weights.json`), 生产与回测共用同一份
+- 修复生产/回测权重断点: `scan_reversal` 未加载反转权重、`scan_dtqiaoban` 未加载
+  翘板权重且未传 today_str (v2 位置因子生产端从未生效) — 现统一走
+  `weight_manager.load_tab_weights(tab)` (新增统一入口, 历史函数保留兼容)
+
+**前向验证优化器** (`scripts/optimize_weights_walkforward.py`)
+- 前 20 交易日训练 / 后 10 交易日验证, 验证集 EV 提升才保存, 防过拟合
+- 每轮回测在子进程执行 + 硬超时 (默认 480s), 网络挂起自动杀掉该轮
+- 断点续跑: 每轮结果落盘 `_opt_{tab}.json`, 中断后重启自动跳过已算候选
+
+**文件拆分 — backtest_engine.py (1870 → 917 行)**
+- `backtest/backtest_tabs.py`   tab 常量/默认策略
+- `backtest/backtest_metrics.py` 聚合统计/确定性成交/因子IC
+- `backtest/backtest_pools.py`   信号池拉取 + 归档 fallback
+- `backtest/backtest_ohlcv.py`   OHLCV 获取 + archive 构造兜底
+- `backtest/backtest_scores.py`  6 tab 评分包装
+- `backtest/backtest_engine.py`  主循环 facade, 全部历史符号保留
+- 拆分脚本: `scripts/split_backtest_engine.py` (可重放)
+
+**文档/测试**
+- AGENTS.md 架构/评分/回测章节更新为现状
+- `test_invariants.py` 新增 Section 12 "回测正确性回归" (13 项)
+
+## v3.5c (2026-08-01)
+
+### 正确性修复 — 回测引擎 + 评分体系 (审计驱动)
+
+**P0-1 回测 OHLCV 数据源修复** (`backtest/backtest_engine.py`)
+- `_get_daily_ohlcv_batch` 之前逻辑反了: 拒绝 today、却把 `stock_zh_a_spot_em`
+  **今日实时快照**当作任意历史日期的 OHLCV 缓存, 导致历史回测买卖价全部变成
+  今天的数据 (系统性失真)。现在: 只有当天才可能用快照, 历史日期一律走逐股历史
+  API (腾讯/东财 `stock_zh_a_hist`); 同时 `_SPOT_DISABLED` 默认改为 True。
+
+**P0-2 聚合指标修复** (`backtest/backtest_engine.py` + `backtest/t1_real_backtest.py`)
+- `ev` 全赢样本不再恒为 0 (原 `if losses else 0` bug)
+- `cumulative_ret` 改为**复利累计** `prod(1+r)-1` (原简单求和保留在 `cumulative_ret_sum`)
+- `max_dd` 改为基于**复利资金曲线**的最大回撤 (原为收益求和曲线)
+- 新增 `median_ret` 字段
+
+**P0-3 回测可复现性修复**
+- 尾盘买策略封单成交比 1.0~2.0 的 `random.random()` 改为 `(code,date)` 确定性哈希,
+  同一配置两次运行结果完全一致
+
+**P0-4 构造价交易严格跳过** (`strict_ohlcv` 默认 True)
+- archive.db / stock_daily 构造的 OHLCV (buy_open≈信号日收盘、sell_open≈次日收盘)
+  会系统性高估/失真收益, 默认跳过这类交易, 只统计真实历史 OHLCV;
+  交易记录新增 `data_quality` 字段 (`real`/`constructed`)
+
+**P1 评分体系修复**
+- `plans/plan_a.py` alpha 因子死代码: 引用不存在的 `scoring_base`/`today_fmt`
+  → NameError 被吞 → alpha 永远 5.0。现传入 `filtered + today_str`
+- `scoring/scanner_factors.py:score_alpha_factors` 兼容 `YYYY-MM-DD` / `YYYYMMDD` 两种日期
+- `_score_limit_up` 本金从硬编码 30000 改为透传 `run_tab_backtest(capital=)` (本金过滤
+  与实盘一致)
+- 尾盘买 (close-buy) 交易记录补录因子分列, 因子 IC 分析对涨停榜生效
+
+**缓存版本**
+- `_CACHE_VER` 14→15, `_RAW_CACHE_VERSION` 10→11, 回测缓存 key version 5→6
+  (旧缓存自动失效, 按 AGENTS.md 约定)
+
+**验证结果** (2026-07-01~07-31 30 交易日, 涨停榜 尾盘买 top3, min_score≥65, 真实 OHLCV)
+- 36 笔 / 胜率 75.0% / EV +4.05% / 复利累计 +303.6% / 最大回撤 -9.85% / 完全可复现
+- 因子 IC: 封板强度 +0.53, 封板时间 +0.30, 流通市值 +0.17, 连板数 +0.13
+- 其余榜真实结果为负 (趋势 -2.62 / 炸板 -3.74 / 翘板 -2.19 / 反转 -2.51 EV),
+  属真实信号质量, 留待评分体系优化
+
 ## v1.24.5 (2026-06-14)
 
 ### 修复 — 回测卖出日期错误 (2 项 BUG)

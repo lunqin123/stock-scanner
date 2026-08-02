@@ -15,7 +15,7 @@ from config import CACHE_DIR as _CACHE_DIR, CACHE_TTL as _CACHE_TTL
 # 缓存版本号：每次变更数据格式/运算逻辑后 +1
 # BUG-6 修复: v8→v9 同步 P0/P1/P2 评分逻辑大改 — 旧 daily 缓存里的 total_score/base_score
 # 仍是旧公式算的, 不 bump 的话用户看到的是旧分 (新代码已生效但缓存命中)
-_CACHE_VER = 14  # v13→v14: v3.5 趋势评分全面重构(板块+均线+权重归一化), 旧趋势缓存无效
+_CACHE_VER = 16  # v15→v16: 2026-08-01 调权闭环 — trend/reversal 权重已按前向验证更新, 旧 daily 缓存评分无效
 # 旧 daily 缓存里的 total_score 是用 seal=9.2/money=0.4 等退化权重算的,
 # 恢复 seal=28/money=17 默认权重后, 旧缓存评分与当前评分不一致, 必须 bump
 

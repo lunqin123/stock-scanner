@@ -237,6 +237,16 @@ def get_premarket_signal(verbose: bool = False) -> dict:
         - summary: 一句话总结
     """
     now = datetime.now(_CST)
+    # 优化 (2026-08-01): 盘前信号是日级数据, 缓存 2h 避免每次拉取 20s+
+    # (主要耗时在美股/期货等网络因子); 用 core.cache 通用 pickle (默认 TTL 2h)
+    try:
+        from cache import get as _cg
+        _ck = f'premarket_signal_{now.strftime("%Y%m%d")}'
+        _cached = _cg(_ck)
+        if _cached is not None:
+            return _cached
+    except Exception:
+        _cached = None
     is_premarket = now.hour < 9 or (now.hour == 9 and now.minute < 15)
 
     factors = {}
@@ -399,6 +409,11 @@ def get_premarket_signal(verbose: bool = False) -> dict:
         print(f"  " + "-" * 40, file=sys.stderr)
         print(f"  {summary}", file=sys.stderr)
 
+    try:
+        from cache import put as _cp
+        _cp(f'premarket_signal_{now.strftime("%Y%m%d")}', result)
+    except Exception:
+        pass
     return result
 
 

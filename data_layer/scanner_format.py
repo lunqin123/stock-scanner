@@ -3,6 +3,7 @@
 职责: 把已评分的 DataFrame 渲染成 CLI 文本 (表格 / 详细文本两种风格)。
 约束: 仅依赖 utils / weight_manager (运行时导入) / pandas。
 """
+import sys
 from datetime import date
 
 import pandas as pd

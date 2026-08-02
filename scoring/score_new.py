@@ -27,6 +27,10 @@ v3.3c 优化 (2026-07-06):
 - 因子权重来自业界回测验证 + IC 排序优化
 - 评分范围0-100, 权重和=100
 """
+import os
+import json
+import sys
+
 import pandas as pd
 import numpy as np
 
@@ -151,6 +155,44 @@ FACTOR_WEIGHTS = {
 }
 # 权重和 = 100, 总分直接 = sum(factor * weight), 无需归一化
 
+# ─── 权重持久化 (2026-08-01) ─────────────────────────────
+# 目的: 让"回测 → 因子 IC → 调权"闭环对 score_new 生效。
+# 生产 (plan_a.score → score_new) 与回测 (_score_limit_up → score_new)
+# 共用同一份权重文件, 调权结果两边同时生效。
+# 无文件时回退 FACTOR_WEIGHTS 默认值, 行为与历史完全一致。
+
+_FACTOR_WEIGHTS_FILE = os.path.join(
+    os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+    "stock_scanner_cache", "score_new_weights.json"
+)
+
+
+def load_factor_weights() -> dict:
+    """加载 score_new 因子权重; 无文件/损坏时返回默认 FACTOR_WEIGHTS"""
+    defaults = dict(FACTOR_WEIGHTS)
+    try:
+        if os.path.exists(_FACTOR_WEIGHTS_FILE):
+            with open(_FACTOR_WEIGHTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                defaults.update({k: float(v) for k, v in data.items() if k in defaults})
+    except Exception:
+        pass
+    return defaults
+
+
+def save_factor_weights(weights: dict) -> None:
+    """持久化 score_new 因子权重 (原子写)"""
+    try:
+        os.makedirs(os.path.dirname(_FACTOR_WEIGHTS_FILE), exist_ok=True)
+        tmp = _FACTOR_WEIGHTS_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(weights, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _FACTOR_WEIGHTS_FILE)
+    except Exception as e:
+        print(f"  [score_new] 权重保存失败: {e}", file=sys.stderr)
+
+
 # 交互加分: 早封板(10:00前) + 高封成比(>0.5) → 强确定性
 INTERACTION_BONUS = 3.0
 INTERACTION_SEAL_TIME_CUTOFF = 600  # 10:00 (分钟数)
@@ -206,8 +248,9 @@ def score_new(df, today_str=None):
         'price':        compute_price_score(df),
     }
 
-    # 加权合成 (权重和=100, 直接映射0-100)
-    total = sum(factors[k] * FACTOR_WEIGHTS[k] for k in FACTOR_WEIGHTS)
+    # 加权合成 (权重和=100, 直接映射0-100; 权重可经 load_factor_weights 调权)
+    weights = load_factor_weights()
+    total = sum(factors[k] * weights[k] for k in FACTOR_WEIGHTS)
 
     # 交互加分: 早封板(10:00前) + 高封成比(>0.5) → 强确定性信号
     seal_time_raw = df['首次封板时间'].astype(str).str.replace(':', '').str.zfill(6) \
@@ -244,7 +287,7 @@ def score_new(df, today_str=None):
 
     # 写入因子分列 (供回测IC分析)
     for k, v in factors.items():
-        df[f'f_{k}'] = (v * FACTOR_WEIGHTS[k]).round(1)
+        df[f'f_{k}'] = (v * weights[k]).round(1)
     # v2 因子分列
     df['f_v2_mc'] = mc_series.round(1)
     df['f_v2_pd'] = pd_series.round(1)

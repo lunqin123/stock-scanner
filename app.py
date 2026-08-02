@@ -2,6 +2,20 @@
 """
 A股超短线选股扫描器 — Web 交互界面
 FastAPI 后端，封装各扫描功能为 REST API
+
+文件较大 (4000+ 行), 按功能分区, 搜索 "@app.get"/"@app.post" 定位路由:
+- 扫描 API:     /api/scan/* (limit-up/trend/zhaban/reversal/dtqiaoban/sector,
+               cards/stream/run/fetch-all)
+- 回测 API:     /api/bt/{tab} (+ /top /full), /api/backtest/dashboard,
+               /api/backtest/tab-weights  (实现见 backtest/backtest_engine.py)
+- 权重 API:     /api/weights/* (status/run/tab/preview/optimize)
+- 信号 API:     /api/signals/today, /api/signal/tomorrow, /api/community, /api/indicators
+- 市场 API:     /api/sentiment, /api/premarket/signal, /api/north-flow/*,
+               /api/risk/assessment, /api/market/regime
+- 系统 API:     /api/version, /api/health, /api/market-status, /api/plans, /api/dashboard
+- 扫描管道:     _scan_limit_up_data() (拉取) / _scan_from_raw_cache() (运行)
+               → plans/plan_a.score() → score_new 覆盖排名
+- 收盘调度:     _run_close_scan() → weight_scheduler 盘后调权
 """
 import io
 import os
@@ -121,7 +135,7 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 10  # v9→v10: v3.3c score_new 权重优化+回测对齐, 旧 raw_scan_data.pkl 评分无效
+_RAW_CACHE_VERSION = 12  # v11→v12: 2026-08-01 调权闭环 — trend/reversal 权重更新, 旧 raw_scan_data.pkl 评分无效
 # 旧 raw_scan_data.pkl 里的 factor scores 是 seal=9.2/money=0.4 等退化权重算的, 不 bump 重跑评分仍然用旧权重结果
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
@@ -203,6 +217,37 @@ def _principal_filter(df, principal):
     return df[mask]
 
 
+# ── 真实进度上报: SSE 端点在线程内安装 sink, 扫描管道按实际阶段推送 (text, pct) ──
+_progress_local = threading.local()
+
+
+def _install_progress_sink(sink):
+    """在扫描 worker 线程内安装进度回调 (text, pct)；线程退出前应调用 _clear_progress_sink()"""
+    _progress_local.sink = sink
+
+
+def _clear_progress_sink():
+    try:
+        del _progress_local.sink
+    except AttributeError:
+        pass
+
+
+def _emit_progress(text: str, pct: float = None):
+    """扫描管道真实阶段上报: 有 sink 时推送到 SSE 队列; 无 sink (CLI) 时打印 stderr"""
+    sink = getattr(_progress_local, 'sink', None)
+    if sink is not None:
+        try:
+            sink(text, pct)
+            return
+        except Exception:
+            pass
+    if pct is not None:
+        print(f"  [扫描] {text} ({pct:.0f}%)", file=sys.stderr)
+    else:
+        print(f"  [扫描] {text}", file=sys.stderr)
+
+
 def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str = None, use_v2: bool = True):
     """涨停扫描核心逻辑：拉取数据 + 过滤 + 调用评分方案"""
     from scanner import (fetch_limit_up_pool, pre_filter,
@@ -214,53 +259,65 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
     import pandas as pd
 
     # ── 拉取数据（基础设施，所有plan共享） ──
-    print("  [扫描] 第1步: 获取涨停池...", file=sys.stderr)
+    # 优化 (2026-08-01): 资金流 / 市场情绪 均不依赖涨停池, 提前并行启动,
+    # 与涨停池拉取+过滤重叠, 不再串行排队 (冷拉取省 ~15-30s)。
+    _emit_progress("第1步: 获取涨停池(并行: 资金流+情绪)...", 5)
+    _ex0 = ThreadPoolExecutor(max_workers=3)
+    _fut_fund = _ex0.submit(fetch_fund_flow_data)
+    _fut_sent = _ex0.submit(detect_market_sentiment, today_str)
     pool = fetch_limit_up_pool()
     if pool is None or pool.empty:
+        _ex0.shutdown(wait=False)
         print("  [扫描] 无涨停数据", file=sys.stderr)
         return None
 
-    print(f"  [扫描] 共 {len(pool)} 只, 第2步: 前置过滤...", file=sys.stderr)
+    _emit_progress(f"涨停池就绪: 共 {len(pool)} 只, 第2步: 前置过滤...", 15)
     filtered = pre_filter(pool)
     if filtered.empty:
+        _ex0.shutdown(wait=False)
         print("  [扫描] 过滤后为空", file=sys.stderr)
         return None
+    _emit_progress(f"前置过滤完成: {len(filtered)} 只", 20)
 
-    print(f"  [扫描] 剩余 {len(filtered)} 只, 第3步: 获取资金流...", file=sys.stderr)
-    fund_df, _ = fetch_fund_flow_data()
+    _emit_progress("第3步: 等待资金流数据(并行中)...", 25)
+    _fund_res = _fut_fund.result()
+    fund_df = _fund_res[0] if _fund_res else None
+    _emit_progress("资金流数据就绪", 30)
 
     if fund_df is not None:
-        print("  [扫描] 第4步: 股价过滤...", file=sys.stderr)
+        _emit_progress("第4步: 股价过滤...", 32)
         filtered = filter_by_price(filtered, fund_df)
         if filtered.empty:
             print("  [扫描] 过滤后为空", file=sys.stderr)
             return None
+        _emit_progress("股价过滤完成", 34)
 
     # 保存因子归一化基准集（过滤前，保证归一化不变）
     scoring_base = filtered.copy() if not filtered.empty else filtered
 
     # 可买到过滤（硬过滤，不改变归一化基准）
-    print(f"  [扫描] 第5步: 可买到过滤...", file=sys.stderr)
+    _emit_progress("第5步: 可买到过滤...", 36)
     filtered = can_buy_filter(filtered)
     if filtered.empty:
         print("  [扫描] 可买到过滤后为空", file=sys.stderr)
         return None
+    _emit_progress("可买到过滤完成", 38)
 
     # 本金过滤（硬过滤，不改变归一化基准）
     filtered = _principal_filter(filtered, principal)
     if filtered.empty:
         print("  [扫描] 本金过滤后为空", file=sys.stderr)
         return None
+    _emit_progress(f"本金过滤完成: {len(filtered)} 只", 40)
 
     # 并行获取预测评分 + 按 Plan 声明拉取扩展数据源
     plan_obj = get_plan(plan_name)
     needed_sources = getattr(plan_obj, 'PLAN_SOURCES', [])
     from plans.datasource import SOURCES as EXT_SOURCES
     n_workers = 3 + len(needed_sources)
-    print(f"  [扫描] 第6步: 并行获取预测评分 (Plan {plan_name or 'A'}, {len(needed_sources)} 个扩展源)...", file=sys.stderr)
+    _emit_progress(f"第6步: 并行获取预测评分 (Plan {plan_name or 'A'}, {len(needed_sources)} 个扩展源)...", 42)
     with ThreadPoolExecutor(max_workers=max(4, n_workers)) as ex:
         futs = {
-            ex.submit(detect_market_sentiment, today_str): "sentiment",
             ex.submit(analyze_dragon_tiger, filtered, today_str): "lhb",
             ex.submit(score_stock_history, filtered, today_str): "history",
         }
@@ -268,18 +325,25 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
             if src_name in EXT_SOURCES:
                 futs[ex.submit(EXT_SOURCES[src_name], today_str)] = src_name
         res = {}
+        _fut_total = len(futs)
+        _fut_done = 0
         for f in as_completed(futs):
             key = futs[f]
             try:
                 res[key] = f.result()
             except Exception as e:
                 print(f"  [情绪 future] {key} 失败: {e}", file=sys.stderr)
+            _fut_done += 1
+            _emit_progress(f"第6步: 预测数据 {_fut_done}/{_fut_total} ({key} 就绪)", 42 + int(26 * _fut_done / _fut_total))
 
+    # 情绪结果来自第1步并行 (已与资金流/涨停池重叠)
     sentiment_score, sentiment_level = 5.0, "未知"
     sentiment_detail = {}
     sentiment_ok = False
-    if res.get("sentiment"):
-        sentiment_score, sentiment_level, sentiment_detail = res["sentiment"]
+    _sent_res = _fut_sent.result()
+    _ex0.shutdown(wait=False)
+    if _sent_res:
+        sentiment_score, sentiment_level, sentiment_detail = _sent_res
         sentiment_ok = True
     else:
         print("  [扫描] 市场情绪首次获取失败，重试中...", file=sys.stderr)
@@ -291,6 +355,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
                 print(f"  [扫描] 重试成功: {sentiment_level}", file=sys.stderr)
         except Exception as e2:
             print(f"  [扫描] 重试仍失败: {e2}", file=sys.stderr)
+    _emit_progress("市场情绪就绪", 70)
 
     lhb_bonus = res.get("lhb")
     lhb_bonus = lhb_bonus[0] if lhb_bonus else pd.Series(0.0, index=filtered.index)
@@ -312,7 +377,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
                     **source_data)
 
     # ── 调用评分方案（因子在 scoring_base 上计算，输出用 filtered） ──
-    print(f"  [扫描] 第7步: 调用评分方案 [{plan_name or '默认'}]...", file=sys.stderr)
+    _emit_progress(f"第7步: 调用评分方案 [{plan_name or '默认'}]...", 72)
     plan_inputs = {
         'filtered': filtered,
         'scoring_base': scoring_base,
@@ -337,6 +402,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
     except Exception:
         v2_pool_size = TOP_N if 'TOP_N' in dir() else 10
     result = plan_obj.score(plan_inputs, max_n=v2_pool_size)
+    _emit_progress(f"评分完成: {len(result.get('stocks', []))} 只", 98)
 
     # ── v2 硬过滤 (2026-07-03 上线, 数据驱动: 18 天 1445 笔 T+1 验证) ──
     # 多档 fallback: S15-prime (笔数保证) → S12-prime (高性能) → S12-no-boost
@@ -362,6 +428,7 @@ def _scan_limit_up_data(today_str: str, principal: float = 30000, plan_name: str
     _archive_scan_inputs_async(today_str, fund_df, sentiment_score, sentiment_level,
                                sentiment_detail, sentiment_ok, lhb_bonus, history_scores)
 
+    _emit_progress("扫描完成", 100)
     return result
 
 
@@ -1660,9 +1727,41 @@ def api_dtqiaoban_cards(refresh: bool = Query(False, description="强制刷新")
         return items[:10], {}
 
     items, meta = run()
+    resp = {"ok": True, "items": items, "fetched_at": _fetched_at()}
     if not items:
-        return {"ok": True, "items": [], "fetched_at": _fetched_at()}
-    return {"ok": True, "items": items, "fetched_at": _fetched_at()}
+        # 空状态解释 (2026-08-01): 全市场无跌停属强势日正常现象, 附近 5 日跌停数
+        resp["empty_reason"] = "今日无跌停股（全市场 0 只跌停，强势日无翘板标的属正常）"
+        resp["recent_dieting"] = _recent_dieting_counts(today)
+    return resp
+
+
+def _recent_dieting_counts(today: str) -> list:
+    """近 5 个交易日跌停家数 (空状态上下文, 2h 缓存, 失败项记 None)。"""
+    from cache import get as _cg, put as _cp, _is_trading_day
+    _ck = f'recent_dieting_{today}'
+    cached = _cg(_ck)
+    if cached is not None:
+        return cached
+    import akshare as ak
+    dates = []
+    cur = datetime.strptime(today, '%Y%m%d')
+    while len(dates) < 5:
+        cur = cur - timedelta(days=1)
+        s = cur.strftime('%Y%m%d')
+        if _is_trading_day(s):
+            dates.append(s)
+    counts = []
+    for d in dates:
+        try:
+            df = ak.stock_zt_pool_dtgc_em(date=d)
+            counts.append({'date': d, 'count': 0 if df is None else int(len(df))})
+        except Exception:
+            counts.append({'date': d, 'count': None})
+    try:
+        _cp(_ck, counts)
+    except Exception:
+        pass
+    return counts
 
 
 @app.get("/api/backtest")
@@ -2262,115 +2361,126 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
     import akshare as ak
     import pandas as pd
     from scanner import fetch_limit_up_pool, detect_market_sentiment
+    from concurrent.futures import ThreadPoolExecutor
     today = _today_trading()
     result = {"ok": True, "date": today}
 
-    # 市场情绪
-    try:
-        score, level, detail = detect_market_sentiment(today)
-        result["sentiment"] = {"score": score, "level": level}
-        if detail:
-            for k, v in detail.items():
-                if k not in ("zhaban_count", "dieting_count"):
-                    result[k] = v
-    except Exception as _e:
-        print(f"  [dashboard] 情绪检测失败: {_e}", file=sys.stderr)
-        result["sentiment"] = {"score": 0, "level": "未知"}
+    # 并行拉取 (2026-08-01): 各区块互相独立, 串行 ~43s → 并行 ~15-20s
+    def _sec_sentiment():
+        try:
+            score, level, detail = detect_market_sentiment(today)
+            result["sentiment"] = {"score": score, "level": level}
+            if detail:
+                for k, v in detail.items():
+                    if k not in ("zhaban_count", "dieting_count"):
+                        result[k] = v
+        except Exception as _e:
+            print(f"  [dashboard] 情绪检测失败: {_e}", file=sys.stderr)
+            result["sentiment"] = {"score": 0, "level": "未知"}
 
-    # 涨停池 + 行业分布
-    try:
-        pool = fetch_limit_up_pool()
-        if pool is not None and not pool.empty:
-            result["limit_up_count"] = len(pool)
-            ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
-            top5 = pool[ind_col].value_counts().head(5)
-            result["hot_sectors"] = [
-                {
-                    "name": str(name),
-                    "count": int(cnt),
-                    "url": f"https://www.10jqka.com.cn/#/search/{str(name)}"
-                }
-                for name, cnt in top5.items()
-            ]
-        else:
+    def _sec_limit_pool():
+        try:
+            pool = fetch_limit_up_pool()
+            if pool is not None and not pool.empty:
+                result["limit_up_count"] = len(pool)
+                ind_col = '所属行业' if '所属行业' in pool.columns else (pool.columns[15] if len(pool.columns) > 15 else None)
+                top5 = pool[ind_col].value_counts().head(5)
+                result["hot_sectors"] = [
+                    {"name": str(name), "count": int(cnt),
+                     "url": f"https://www.10jqka.com.cn/#/search/{str(name)}"}
+                    for name, cnt in top5.items()
+                ]
+            else:
+                result["limit_up_count"] = 0
+                result["hot_sectors"] = []
+        except Exception as _e:
+            print(f"  [dashboard] 涨停池拉取失败: {_e}", file=sys.stderr)
             result["limit_up_count"] = 0
             result["hot_sectors"] = []
-    except Exception as _e:
-        print(f"  [dashboard] 涨停池拉取失败: {_e}", file=sys.stderr)
-        result["limit_up_count"] = 0
-        result["hot_sectors"] = []
 
-    # 炸板/跌停
-    for api_name, key in [("stock_zt_pool_zbgc_em", "zhaban_count"),
-                           ("stock_zt_pool_dtgc_em", "dieting_count")]:
+    def _sec_zb_dt():
+        for api_name, key in [("stock_zt_pool_zbgc_em", "zhaban_count"),
+                               ("stock_zt_pool_dtgc_em", "dieting_count")]:
+            try:
+                df = getattr(ak, api_name)(date=today)
+                result[key] = len(df) if df is not None and not df.empty else 0
+            except Exception as _e:
+                print(f"  [dashboard] {api_name} 拉取失败: {_e}", file=sys.stderr)
+                result[key] = 0
+
+    def _sec_premarket():
         try:
-            df = getattr(ak, api_name)(date=today)
-            result[key] = len(df) if df is not None and not df.empty else 0
-        except Exception as _e:
-            print(f"  [dashboard] {api_name} 拉取失败: {_e}", file=sys.stderr)
-            result[key] = 0
-
-    # v2.0: 盘前信号 + 北向资金 + 市场状态 + 全市场资金流
-    try:
-        from premarket import get_premarket_signal
-        pm = get_premarket_signal()
-        result["premarket"] = {
-            "direction": pm.get("direction", ""),
-            "score": pm.get("score", 5),
-            "confidence": pm.get("confidence", "低"),
-            "summary": pm.get("summary", ""),
-        }
-    except Exception as _e:
-        print(f"  [dashboard] 盘前信号失败: {_e}", file=sys.stderr)
-        result["premarket"] = {"direction": "无数据", "score": 5}
-
-    try:
-        from north_flow_tracker import get_north_flow_signal
-        nf = get_north_flow_signal()
-        result["north_flow"] = {
-            "direction": nf.get("direction", ""),
-            "cumulative_net": nf.get("cumulative_net", 0),
-            "signal": nf.get("signal", "中性"),
-        }
-    except Exception as _e:
-        print(f"  [dashboard] 北向资金失败: {_e}", file=sys.stderr)
-        result["north_flow"] = {"direction": "无数据", "cumulative_net": 0}
-
-    # 全市场主力资金净流入 (从同花顺个股资金流聚合)
-    try:
-        from scanner_data import fetch_fund_flow_data
-        fund_df, _ = fetch_fund_flow_data()
-        if fund_df is not None and not fund_df.empty and '_net' in fund_df.columns:
-            def _parse_net(val):
-                s = str(val).replace('--', '0').strip()
-                try:
-                    if '亿' in s: return float(s.replace('亿', '')) * 1e8
-                    if '万' in s: return float(s.replace('万', '')) * 1e4
-                    return float(s)
-                except (ValueError, TypeError):
-                    return 0.0
-            total_net = fund_df['_net'].apply(_parse_net).sum()
-            result["market_fund_flow"] = {
-                "total_net": round(total_net / 1e8, 1),  # 亿
-                "direction": "流入" if total_net > 0 else "流出",
+            from premarket import get_premarket_signal
+            pm = get_premarket_signal()
+            result["premarket"] = {
+                "direction": pm.get("direction", ""),
+                "score": pm.get("score", 5),
+                "confidence": pm.get("confidence", "低"),
+                "summary": pm.get("summary", ""),
             }
-        else:
-            result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
-    except Exception as _e:
-        print(f"  [dashboard] 全市场资金流失败: {_e}", file=sys.stderr)
-        result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
+        except Exception as _e:
+            print(f"  [dashboard] 盘前信号失败: {_e}", file=sys.stderr)
+            result["premarket"] = {"direction": "无数据", "score": 5}
 
-    try:
-        from market_regime import classify_regime
-        regime = classify_regime()
-        result["regime"] = {
-            "label": regime.get("label", ""),
-            "position_advice": regime.get("position_advice", 1.0),
-            "summary": regime.get("summary", ""),
-        }
-    except Exception as _e:
-        print(f"  [dashboard] 市场状态失败: {_e}", file=sys.stderr)
-        result["regime"] = {"label": "未知", "position_advice": 1.0}
+    def _sec_north():
+        try:
+            from north_flow_tracker import get_north_flow_signal
+            nf = get_north_flow_signal()
+            result["north_flow"] = {
+                "direction": nf.get("direction", ""),
+                "cumulative_net": nf.get("cumulative_net", 0),
+                "signal": nf.get("signal", "中性"),
+            }
+        except Exception as _e:
+            print(f"  [dashboard] 北向资金失败: {_e}", file=sys.stderr)
+            result["north_flow"] = {"direction": "无数据", "cumulative_net": 0}
+
+    def _sec_fundflow():
+        try:
+            from scanner_data import fetch_fund_flow_data
+            fund_df, _ = fetch_fund_flow_data()
+            if fund_df is not None and not fund_df.empty and '_net' in fund_df.columns:
+                def _parse_net(val):
+                    s = str(val).replace('--', '0').strip()
+                    try:
+                        if '亿' in s: return float(s.replace('亿', '')) * 1e8
+                        if '万' in s: return float(s.replace('万', '')) * 1e4
+                        return float(s)
+                    except (ValueError, TypeError):
+                        return 0.0
+                total_net = fund_df['_net'].apply(_parse_net).sum()
+                result["market_fund_flow"] = {
+                    "total_net": round(total_net / 1e8, 1),  # 亿
+                    "direction": "流入" if total_net > 0 else "流出",
+                }
+            else:
+                result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
+        except Exception as _e:
+            print(f"  [dashboard] 全市场资金流失败: {_e}", file=sys.stderr)
+            result["market_fund_flow"] = {"total_net": 0, "direction": "无数据"}
+
+    def _sec_regime():
+        try:
+            from market_regime import classify_regime
+            regime = classify_regime()
+            result["regime"] = {
+                "label": regime.get("label", ""),
+                "position_advice": regime.get("position_advice", 1.0),
+                "summary": regime.get("summary", ""),
+            }
+        except Exception as _e:
+            print(f"  [dashboard] 市场状态失败: {_e}", file=sys.stderr)
+            result["regime"] = {"label": "未知", "position_advice": 1.0}
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = [ex.submit(fn) for fn in (
+            _sec_sentiment, _sec_limit_pool, _sec_zb_dt,
+            _sec_premarket, _sec_north, _sec_fundflow, _sec_regime)]
+        for f in futs:
+            try:
+                f.result()
+            except Exception:
+                pass  # 各区块内部已捕获异常
 
     result["fetched_at"] = _fetched_at()
     daily_set("dashboard_latest", result, force=refresh)
@@ -2415,7 +2525,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
                     line = self._buf[:idx].strip('\r').strip()
                     self._buf = self._buf[idx+1:]
                     if line and not line.startswith('\r'):
-                        q.put(("progress", line))
+                        q.put(("progress", line, None))
             def flush(self):
                 pass
             def reconfigure(self, **kwargs):
@@ -2428,6 +2538,7 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             try:
                 sys.stderr = cap
                 sys.stdout = cap
+                _install_progress_sink(lambda text, pct: q.put(("progress", text, pct)))
                 data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name, use_v2=use_v2)
                 result_holder["data"] = data
                 if data and data.get('sentiment_ok'):
@@ -2437,9 +2548,10 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
+                _clear_progress_sink()
                 sys.stderr = old_stderr
                 sys.stdout = old_stdout
-                q.put(("done", None))
+                q.put(("done", None, None))
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
@@ -2447,10 +2559,13 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
 
         while True:
             try:
-                typ, val = q.get(timeout=0.2)
+                typ, val, pct = q.get(timeout=0.2)
                 if typ == "done":
                     break
-                yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+                _msg = {'type': 'progress', 'text': val}
+                if pct is not None:
+                    _msg['pct'] = pct
+                yield f"data: {json.dumps(_msg)}\n\n"
                 await asyncio.sleep(0.03)
             except queue.Empty:
                 continue
@@ -2487,9 +2602,36 @@ async def api_scan_fetch_all(principal: float = Query(30000, description="本金
         q = queue.Queue()
         result = {}
 
+        def _map_scan_pct(pct):
+            # 涨停扫描内部进度 0-100 → 全局 10-100 (前 0-10 为三个池子拉取)
+            return None if pct is None else 10 + round(pct * 0.9)
+
+        class _Capture:
+            """拦截 stderr 行推入队列 (无 pct 的文本进度)"""
+            def __init__(self):
+                self._buf = ""
+            def write(self, text):
+                self._buf += text
+                while '\n' in self._buf:
+                    idx = self._buf.index('\n')
+                    line = self._buf[:idx].strip('\r').strip()
+                    self._buf = self._buf[idx+1:]
+                    if line and not line.startswith('\r'):
+                        q.put(("progress", line, None))
+            def flush(self):
+                pass
+            def reconfigure(self, **kwargs):
+                pass  # 兼容 akshare/scanner 中 sys.stderr.reconfigure() 调用
+
         def _run():
+            cap = _Capture()
+            old_stderr = sys.stderr
+            old_stdout = sys.stdout
             try:
-                q.put(("progress", "📡 拉取涨停池+炸板池+跌停池..."))
+                sys.stderr = cap
+                sys.stdout = cap
+                _install_progress_sink(lambda text, pct: q.put(("progress", text, _map_scan_pct(pct))))
+                q.put(("progress", "📡 拉取涨停池+炸板池+跌停池...", 3))
                 # 并行拉取三个池子
                 def _get_limit(): return ak.stock_zt_pool_em(date=today)
                 def _get_zhaban(): return ak.stock_zt_pool_zbgc_em(date=today)
@@ -2506,17 +2648,17 @@ async def api_scan_fetch_all(principal: float = Query(30000, description="本金
                 zhaban_df = pools.get('zhaban', pd.DataFrame())
                 dieting_df = pools.get('dieting', pd.DataFrame())
                 result['pools'] = {'limit': limit_df, 'zhaban': zhaban_df, 'dieting': dieting_df}
-                q.put(("progress", f"  涨停{len(limit_df)} 炸板{len(zhaban_df)} 跌停{len(dieting_df)} 只"))
+                q.put(("progress", f"  涨停{len(limit_df)} 炸板{len(zhaban_df)} 跌停{len(dieting_df)} 只", 8))
 
                 # 拉取涨停扫描完整数据（含资金流 + 情绪等）
-                q.put(("progress", "📡 拉取资金流+情绪+龙虎榜..."))
+                q.put(("progress", "📡 拉取资金流+情绪+龙虎榜...", 10))
                 scan_data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
                 if scan_data:
                     result['scan'] = scan_data
-                    q.put(("progress", f"  涨停扫描完成, {len(scan_data.get('stocks',[]))} 只上榜"))
+                    q.put(("progress", f"  涨停扫描完成, {len(scan_data.get('stocks',[]))} 只上榜", 100))
                 else:
                     result['scan'] = None
-                    q.put(("progress", "  ⚠ 涨停扫描无数据"))
+                    q.put(("progress", "  ⚠ 涨停扫描无数据", 100))
 
                 result['ok'] = True
                 result['date'] = today
@@ -2525,7 +2667,10 @@ async def api_scan_fetch_all(principal: float = Query(30000, description="本金
                 result['error'] = str(e)
                 result['ok'] = False
             finally:
-                q.put(("done", None))
+                _clear_progress_sink()
+                sys.stderr = old_stderr
+                sys.stdout = old_stdout
+                q.put(("done", None, None))
 
         import threading
         t = threading.Thread(target=_run, daemon=True)
@@ -2534,9 +2679,12 @@ async def api_scan_fetch_all(principal: float = Query(30000, description="本金
 
         while True:
             try:
-                typ, val = q.get(timeout=0.2)
+                typ, val, pct = q.get(timeout=0.2)
                 if typ == "done": break
-                yield f"data: {json.dumps({'type':'progress','text':val})}\n\n"
+                _msg = {'type': 'progress', 'text': val}
+                if pct is not None:
+                    _msg['pct'] = pct
+                yield f"data: {json.dumps(_msg)}\n\n"
                 await asyncio.sleep(0.03)
             except queue.Empty:
                 continue
@@ -2564,12 +2712,61 @@ async def api_scan_limit_up_run(principal: float = Query(30000, description="本
     async def _generate():
         data = _scan_from_raw_cache(principal=principal, plan_name=plan_name)
         if data is None or not data.get('stocks'):
-            # 无缓存→自动降级为全量拉取
-            yield f"data: {json.dumps({'type':'progress','text':'📡 无缓存，自动拉取数据...'})}\n\n"
-            await asyncio.sleep(0.03)
-            data = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
+            # 无缓存→自动降级为全量拉取（后台线程 + 真实进度上报）
+            q = queue.Queue()
+            result_holder = {}
+
+            class _Capture:
+                """拦截 stderr 行推入队列 (无 pct 的文本进度)"""
+                def __init__(self):
+                    self._buf = ""
+                def write(self, text):
+                    self._buf += text
+                    while '\n' in self._buf:
+                        idx = self._buf.index('\n')
+                        line = self._buf[:idx].strip('\r').strip()
+                        self._buf = self._buf[idx+1:]
+                        if line and not line.startswith('\r'):
+                            q.put(("progress", line, None))
+                def flush(self):
+                    pass
+                def reconfigure(self, **kwargs):
+                    pass
+
+            def _run():
+                cap = _Capture()
+                old_stderr = sys.stderr
+                old_stdout = sys.stdout
+                try:
+                    sys.stderr = cap
+                    sys.stdout = cap
+                    _install_progress_sink(lambda text, pct: q.put(("progress", text, pct)))
+                    result_holder['data'] = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
+                except Exception as e:
+                    result_holder['error'] = str(e)
+                finally:
+                    _clear_progress_sink()
+                    sys.stderr = old_stderr
+                    sys.stdout = old_stdout
+                    q.put(("done", None, None))
+
+            threading.Thread(target=_run, daemon=True).start()
+            yield f"data: {json.dumps({'type':'progress','text':'📡 无缓存，自动拉取数据...','pct':5})}\n\n"
+            while True:
+                try:
+                    typ, val, pct = q.get(timeout=0.2)
+                    if typ == "done":
+                        break
+                    _msg = {'type': 'progress', 'text': val}
+                    if pct is not None:
+                        _msg['pct'] = pct
+                    yield f"data: {json.dumps(_msg)}\n\n"
+                except queue.Empty:
+                    continue
+
+            data = result_holder.get('data')
             if data is None or not data.get('stocks'):
-                yield f"data: {json.dumps({'type':'error','text':'无涨停数据'})}\n\n"
+                yield f"data: {json.dumps({'type':'error','text':result_holder.get('error') or '无涨停数据'})}\n\n"
                 return
             fet = _fetched_at()
             yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date']})}\n\n"
@@ -2578,7 +2775,7 @@ async def api_scan_limit_up_run(principal: float = Query(30000, description="本
                 daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
         else:
             fet = _fetched_at()
-            yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...'})}\n\n"
+            yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...','pct':80})}\n\n"
             await asyncio.sleep(0.05)
             yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
             if data.get('sentiment_ok'):
@@ -3248,6 +3445,17 @@ def api_version():
             return json.load(f)
     except Exception:
         return {"version": "unknown", "changes": []}
+
+
+@app.get("/api/probabilities")
+def api_probabilities(tab: str = Query('limit-up',
+                                       pattern='^(limit-up|trend|zhaban|dtqiaoban|reversal)$')):
+    """回测驱动的预测概率 (次日上涨 / 低开高走 / 5日上涨, 按评分分档)。
+
+    首次请求触发后台构建, 返回 {'status': 'building'}; 构建完成走 daily 缓存。
+    """
+    from scoring.probability_estimator import get_probabilities
+    return get_probabilities(tab)
 
 
 @app.get("/api/market-status")

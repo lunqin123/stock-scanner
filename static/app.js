@@ -384,7 +384,7 @@ function showProgress(text, pct) {
     if (!bar || !fill || !txt) return;
     bar.style.display = 'block';
     fill.style.width = (pct || 10) + '%';
-    txt.textContent = text || '加载中...';
+    txt.textContent = (pct ? text + ' (' + Math.round(pct) + '%)' : text) || '加载中...';
 }
 
 function hideProgress() {
@@ -724,6 +724,7 @@ async function loadCardView(output, pageKey, apiUrl) {
     const token = _pageToken;
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     const url = apiUrl || info.api;
+    loadProbabilities(pageKey);  // 2026-08-01: 加载回测驱动预测概率(异步,就绪后自动重渲染)
 
     // 非涨停扫描也显示加载状态
     // 注: scan-limit 的流式路径在 callApi 中通过 isStream 判断走 loadCardViewStream
@@ -742,7 +743,22 @@ async function loadCardView(output, pageKey, apiUrl) {
             (pageKey === 'weights' && data.factors !== undefined)) {
             // handled below
         } else if (!data.ok || !items.length) {
-            output.innerHTML = '<span class="loading">暂无数据</span>';
+            if (data.empty_reason) {
+                var recentHtml = '';
+                if (data.recent_dieting && data.recent_dieting.length) {
+                    recentHtml = '<div style="margin-top:10px;font-size:12px;color:var(--text-muted,#94a3b8)">近5个交易日跌停数：'
+                        + data.recent_dieting.map(function(r) {
+                            var dd = String(r.date).slice(4);
+                            return dd.slice(0,2) + '月' + dd.slice(2) + '日 ' + (r.count == null ? '?' : r.count) + '只';
+                        }).join(' · ') + '</div>';
+                }
+                output.innerHTML = '<div class="empty-state" style="padding:30px 16px;text-align:center;color:var(--text-muted,#94a3b8)">'
+                    + '<div style="font-size:15px;margin-bottom:4px">📉 ' + escapeHtml(data.empty_reason) + '</div>'
+                    + recentHtml
+                    + '<div style="margin-top:12px;font-size:11px;opacity:.75">无跌停时翘板策略无标的属正常，强势日可关注涨停/趋势板块</div></div>';
+            } else {
+                output.innerHTML = '<span class="loading">暂无数据</span>';
+            }
             hideProgress();
             return;
         }
@@ -831,6 +847,7 @@ async function loadCardView(output, pageKey, apiUrl) {
 // ─── SSE 流式加载（防抖 + RAF 优化） ───
 async function loadCardViewStream(output, pageKey, apiUrl) {
     const token = _pageToken;
+    loadProbabilities(pageKey);  // 2026-08-01: 加载回测驱动预测概率
     const bar = _dom.progress();
     const fill = _dom.fill();
     const txt = _dom.txt();
@@ -842,31 +859,41 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
 
     const STEP_PCT = { '第1步':5, '第2步':10, '第3步':40, '第4步':55, '第5步':65, '第6步':80, '第7步':90 };
     let currentPct = 3;
+    let _hasRealPct = false;   // 收到后端真实 pct 后不再用关键词估算
 
     // 防抖累积：在下一个 RAF 中一次性应用
     let _pendingUpdate = null;
     const flushProgress = () => {
         if (_pendingUpdate) {
-            txt.textContent = _pendingUpdate;
+            var _text = _pendingUpdate.text;
+            var _pct = _pendingUpdate.pct;
             _pendingUpdate = null;
+            if (typeof _pct === 'number') {
+                // 后端真实进度：直接覆盖进度条
+                _hasRealPct = true;
+                currentPct = Math.max(currentPct, Math.min(100, _pct));
+                txt.textContent = _text + ' (' + Math.round(currentPct) + '%)';
+            } else {
+                txt.textContent = _text;
+                if (!_hasRealPct) {
+                    for (const [kw, pct] of Object.entries(STEP_PCT)) {
+                        if (_text.includes(kw)) {
+                            currentPct = Math.max(currentPct, pct);
+                            break;
+                        }
+                    }
+                }
+            }
+            fill.style.width = Math.min(100, currentPct) + '%';
         }
     };
-    const scheduleProgress = (text) => {
-        _pendingUpdate = text;
+    const scheduleProgress = (text, pct) => {
+        _pendingUpdate = { text: text, pct: pct };
         if (!window._rafScheduled) {
             window._rafScheduled = true;
             requestAnimationFrame(() => {
                 window._rafScheduled = false;
                 flushProgress();
-
-                // 同时更新进度条
-                for (const [kw, pct] of Object.entries(STEP_PCT)) {
-                    if (txt.textContent.includes(kw)) {
-                        currentPct = Math.max(currentPct, pct);
-                        break;
-                    }
-                }
-                fill.style.width = Math.min(95, currentPct) + '%';
             });
         }
     };
@@ -907,9 +934,9 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                         const msg = JSON.parse(line.slice(6));
 
                         if (msg.type === 'progress') {
-                            scheduleProgress(msg.text);
-                            if (msg.text.includes('命中本地缓存')) currentPct = Math.max(currentPct, 48);
-                            else if (msg.text.includes('同花顺资金流')) currentPct = Math.max(currentPct, 18);
+                            scheduleProgress(msg.text, msg.pct);
+                            if (msg.pct == null && msg.text.includes('命中本地缓存')) currentPct = Math.max(currentPct, 48);
+                            else if (msg.pct == null && msg.text.includes('同花顺资金流')) currentPct = Math.max(currentPct, 18);
 
                         } else if (msg.type === 'complete') {
                             // 先 flush 剩余进度更新

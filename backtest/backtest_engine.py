@@ -18,6 +18,9 @@ import sys, time, os
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PKG_DIR not in sys.path:
+    sys.path.insert(0, _PKG_DIR)
 import pandas as pd
 import numpy as np
 import akshare as ak
@@ -48,6 +51,31 @@ from scanner import (
     _score_sector as scanner_score_sector,
 )
 from data_manager import save_backtest_result as _save_backtest_result
+# ── 子模块 (2026-08-01 拆分: 常量/指标/信号池/OHLCV/评分) ──
+# 本文件保留全部历史符号 (公共 API 不变), 实现见各子模块。
+from backtest_tabs import (
+    TAB_LIMIT_UP, TAB_TREND, TAB_ZHABAN, TAB_DTQIAOBAN, TAB_REVERSAL, TAB_SECTOR,
+    ALL_TABS, TAB_NAMES_CN, _TAB_BUY_TIME, _PENDING_TABS, _SELF_FETCHING_TABS,
+)
+from backtest_metrics import _deterministic_fill, _aggregate, _compute_factor_ics
+from backtest_pools import (
+    SIGNAL_POOL_FETCHERS, _detect_available_days, _try_local_fallback,
+    _is_placeholder_data, _cached_pool_get, _pool_cache_put,
+    _fetch_limit_up_pool, _fetch_reversal_pool, _fetch_zhaban_pool,
+    _fetch_dtqiaoban_pool, _fetch_trend_pool, _fetch_sector_pool,
+    _TAB_POOL_TYPE, _LOCAL_FALLBACK_ENABLED,
+)
+from backtest_ohlcv import (
+    _get_daily_ohlcv_batch, _try_archive_db_ohlcv, _try_stock_daily_ohlcv,
+    _ARCHIVE_DB_PATH, _ARCHIVE_OHLCV_CACHE, _SPOT_DISABLED,
+)
+from backtest_scores import (
+    SCORE_FUNCS, SCORE_COLUMNS, _apply_v2_to_score, _BACKTEST_USE_SCORE_NEW,
+    _BACKTEST_USE_V2_DEFAULT, _score_limit_up, _score_zhaban, _score_dtqiaoban,
+    _score_reversal, _score_trend, _score_sector,
+)
+
+
 
 # 本地归档 fallback (P1.3: 回测引擎从本地 pickle 读取历史池数据)
 try:
@@ -64,7 +92,6 @@ _LOCAL_FALLBACK_ENABLED = True
 # plan_a.score() 在生产中会用 score_new 覆盖 total_score (见 plans/plan_a.py:398-422),
 # 回测必须同样使用 score_new 排名, 否则回测验证的是 plan_a 但用户交易的是 score_new。
 # plan_a 因子分列保留供 IC 分析和自动调权 (调的是 plan_a 权重, score_new 是独立覆盖层)。
-_BACKTEST_USE_SCORE_NEW = True
 
 # 是否填仓: 当 top_n 中部分股票一字板买不到时,
 # True  = 沿评分列表向下继续扫描, 凑满 top_n 只买入
@@ -72,6 +99,12 @@ _BACKTEST_USE_SCORE_NEW = True
 # True 更接近实盘操作 (资金要投出去, 买不到第一选择就找第二选择),
 # 但可能拉低单笔平均收益 (买入排名更靠后的股票)。
 _BACKTEST_FILL_SLOTS = False
+
+# 正确性修复 (2026-08-01): archive.db / stock_daily 构造的 OHLCV
+# (buy_open≈信号日收盘、sell_open≈次日收盘) 会系统性高估/失真收益。
+# 默认严格模式: 买卖价任一来自构造数据则跳过该笔, 只统计真实历史 OHLCV。
+# 可通过 strict_ohlcv=False 关闭(回到含构造价的宽松口径)。
+_BACKTEST_STRICT_OHLCV = True
 
 # ═══════════════════════════════════════════
 #  Tab 常量
@@ -125,151 +158,22 @@ _PENDING_TABS = set()  # 全部实现
 # 这些 tab 的 score_fn 自行拉数据 (不依赖 fetcher 返回的 pool)
 _SELF_FETCHING_TABS = {TAB_SECTOR}
 # P1.2.1: OHLCV 批量缓存进程级开关 (默认禁用,服务器环境东方财富 spot 接口不稳定)
-# v3.3i: 启用以获取真实OHLCV数据
-_SPOT_DISABLED = False
+# 正确性修复 (2026-08-01): stock_zh_a_spot_em 是"今日实时快照",
+# 对历史日期无效 → 一律禁用批量 spot 路径, 回测只用逐股历史 API
+# (腾讯/东财 stock_zh_a_hist)。保留开关仅供极端场景手动启用。
 
 # P1.3: 自动检测本地归档可用天数 (不再硬编码 7)
 # 每个 tab 的 pool_type 对应 archive_pools/ 中的 pickle 文件名前缀
-_TAB_POOL_TYPE = {
-    TAB_LIMIT_UP: 'limit_up',
-    TAB_REVERSAL: 'prev_pool',
-    TAB_TREND: 'strong',
-    TAB_ZHABAN: 'zhaban',
-    TAB_DTQIAOBAN: 'dtqiaoban',
-    TAB_SECTOR: 'limit_up',
-}
 
 
-def _detect_available_days(tab: str) -> int:
-    """扫描本地数据源, 返回该 tab 实际可用的历史天数。
-
-    数据源优先级:
-      1. data/cache/engine_{pool_type}_*.pkl (回测引擎池缓存, 最准确)
-      2. archive.db daily_stocks 表 (每日存档, 数据丰富)
-      3. archive_pools/{pool_type}_*.pkl (归档目录)
-      4. akshare 可用窗口 fallback (10天)
-    """
-    import os as _os
-    import re as _re
-    pool_type = _TAB_POOL_TYPE.get(tab, 'limit_up')
-
-    # 1. 统计 data/cache/engine_{pool_type}_*.pkl 的不同日期数
-    try:
-        cache_dir = _os.path.join(_PROJECT_ROOT, 'data', 'cache')
-        engine_prefix = f'engine_{pool_type}_'
-        dates = set()
-        if _os.path.exists(cache_dir):
-            for f in _os.listdir(cache_dir):
-                if f.startswith(engine_prefix) and f.endswith('.pkl') and not f.startswith('persistent_'):
-                    m = _re.search(r'(\d{8})', f)
-                    if m:
-                        dates.add(m.group(1))
-        if dates:
-            return max(10, min(len(dates), 120))
-    except Exception:
-        pass
-
-    # 2. archive.db daily_stocks 表 (用户实际存储的每日数据)
-    try:
-        _db_path = _os.path.join(_PROJECT_ROOT, 'archive.db')
-        if _os.path.exists(_db_path):
-            import sqlite3
-            conn = sqlite3.connect(_db_path, timeout=2)
-            cur = conn.cursor()
-            # pool_type → archive.db stock_type 映射
-            _stock_type_map = {
-                'limit_up': 'limit_up',
-                'prev_pool': 'limit_up',   # 反转也用 limit_up
-                'strong': 'trend',
-                'zhaban': 'zhaban',
-                'dtqiaoban': 'dtqiaoban',
-            }
-            st = _stock_type_map.get(pool_type, pool_type)
-            cur.execute(
-                "SELECT COUNT(DISTINCT trade_date) FROM daily_stocks WHERE stock_type=?",
-                (st,)
-            )
-            row = cur.fetchone()
-            conn.close()
-            if row and row[0] >= 5:
-                return max(10, min(row[0], 120))
-    except Exception:
-        pass
-
-    # 3. fallback: 检查 archive.db 总天数 (所有类型共享的时间窗口)
-    try:
-        _db_path = _os.path.join(_PROJECT_ROOT, 'archive.db')
-        if _os.path.exists(_db_path):
-            import sqlite3
-            conn = sqlite3.connect(_db_path, timeout=2)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(DISTINCT trade_date) FROM daily_stocks")
-            row = cur.fetchone()
-            conn.close()
-            if row and row[0] >= 5:
-                return max(10, min(row[0], 120))
-    except Exception:
-        pass
-
-    # 4. 最后 fallback: akshare 实际可用窗口
-    return 10
 
 # ═══════════════════════════════════════════
 #  信号池获取函数 (P1.1 骨架: limit-up 和 reversal 可用,其他 TBD 待 P2)
 #  P1.3: 所有 fetcher 在 akshare 返回空时 fallback 读本地 pickle 归档
 # ═══════════════════════════════════════════
 
-def _try_local_fallback(date_str: str, pool_type: str, cache_key: str) -> pd.DataFrame:
-    """尝试从本地 pickle 归档加载池数据
-
-    当 akshare API 返回空(窗口限制/网络错误)时调用此函数,
-    从 archiver 每日保存的本地 pickle 中读取历史数据。
-
-    Args:
-        date_str: YYYYMMDD 信号日期
-        pool_type: 'prev_pool' | 'zhaban' | 'dtqiaoban' | 'strong'
-        cache_key: 缓存键,命中后写入**持久**缓存 (池数据历史不变)
-    Returns:
-        DataFrame or None
-    """
-    if not _LOCAL_FALLBACK_ENABLED or _load_pool_pickle is None:
-        return None
-    try:
-        df = _load_pool_pickle(date_str, pool_type)
-        if df is not None:
-            # 数据质量检查：跳过占位值数据（如封板资金全为零的劣质归档）
-            if _is_placeholder_data(df, pool_type):
-                return None
-            _persistent_put(cache_key, df)  # 持久化 (历史不变, 不该 2h 失效)
-            return df
-    except Exception:
-        pass
-    return None
 
 
-def _is_placeholder_data(df, pool_type: str) -> bool:
-    """检查 DataFrame 是否是占位值数据（而非真实的 akshare 原始数据）"""
-    if df is None or df.empty:
-        return True
-    # 检查封板资金：如果存在且全部为 0，说明是占位数据
-    for col in ['封板资金', '封单资金', '封单金额']:
-        if col in df.columns:
-            try:
-                vals = df[col].fillna(0).astype(float)
-                if vals.max() == 0 and vals.min() == 0:
-                    return True  # 全部为零 → 占位数据
-            except (ValueError, TypeError):
-                pass
-            break  # 找到一个列就够
-    # 检查名称列：如果名称==代码，说明是占位数据
-    if '名称' in df.columns and '代码' in df.columns:
-        try:
-            match = (df['名称'].astype(str) == df['代码'].astype(str)).sum()
-            if match > len(df) * 0.5:  # 超过50%的名称和代码相同
-                return True
-        except (ValueError, TypeError):
-            pass
-    return False
 
 
 # Tier1.C: archive.db 兜底 OHLCV
@@ -291,360 +195,27 @@ def _is_placeholder_data(df, pool_type: str) -> bool:
 # 这样 T+1 开盘买的 return = (sell_open / buy_open - 1)
 #                       ≈ (D+1 close / D close - 1) = next_day_change (粗略)
 # 偏差: 忽略 D+1 跳空和 D+2 走势, 实测偏差 ~1-3%, 但比 skip 强
-_ARCHIVE_DB_PATH = os.path.join(_PROJECT_ROOT, 'archive.db')
-_ARCHIVE_OHLCV_CACHE = {}  # 进程内 LRU 简化版
 
 
-def _try_archive_db_ohlcv(code: str, d_signal: str, stock_type: str = 'limit_up') -> dict:
-    """从 archive.db daily_stocks 构造简化 OHLCV
-
-    Args:
-        code: 股票代码
-        d_signal: 信号日 (YYYYMMDD)
-        stock_type: 池类型 ('limit_up' | 'zhaban' | 'dtqiaoban' | ...)
-
-    智能匹配策略:
-        - limit_up: 直接查 d_signal 当天
-        - zhaban/dtqiaoban: 查 d_signal-1 (前一天涨停 → next_day_change 即 D 那天真实涨幅)
-        - reversal/trend: 查 d_signal 前 1~3 天内任何 stock_type, 优先 limit_up
-    """
-    cache_key = (code, d_signal, stock_type)
-    if cache_key in _ARCHIVE_OHLCV_CACHE:
-        return _ARCHIVE_OHLCV_CACHE[cache_key]
-
-    try:
-        import sqlite3
-        from datetime import datetime, timedelta
-        conn = sqlite3.connect(_ARCHIVE_DB_PATH, timeout=2)
-        cur = conn.cursor()
-
-        if stock_type == 'limit_up':
-            cur.execute(
-                "SELECT price, change_pct, next_day_change, turnover "
-                "FROM daily_stocks WHERE code=? AND trade_date=? AND stock_type='limit_up'",
-                (code, d_signal)
-            )
-        elif stock_type in ('zhaban', 'dtqiaoban'):
-            # v3.3i: 炸板日=D日本身就是涨停日(然后炸板), 查D/D-1/D-2三天
-            # limit_up 记录的 next_day_change 可用于推算 T+1 涨幅
-            dt = datetime.strptime(d_signal, '%Y%m%d')
-            d_same = dt.strftime('%Y%m%d')
-            d_prev = (dt - timedelta(days=1)).strftime('%Y%m%d')
-            d_prev2 = (dt - timedelta(days=2)).strftime('%Y%m%d')
-            cur.execute(
-                "SELECT price, change_pct, next_day_change, turnover "
-                "FROM daily_stocks "
-                "WHERE code=? AND trade_date IN (?, ?, ?) AND stock_type='limit_up' "
-                "ORDER BY ABS(julianday(trade_date) - julianday(?)) "
-                "LIMIT 1",
-                (code, d_same, d_prev, d_prev2, d_signal)
-            )
-        else:
-            # reversal/trend: 向前 3 天内查任何 stock_type, 优先 limit_up
-            dt = datetime.strptime(d_signal, '%Y%m%d')
-            date_window = [(dt - timedelta(days=i)).strftime('%Y%m%d') for i in range(1, 4)]
-            placeholders = ','.join('?' * len(date_window))
-            cur.execute(
-                f"SELECT price, change_pct, next_day_change, turnover, stock_type, trade_date "
-                f"FROM daily_stocks WHERE code=? AND trade_date IN ({placeholders}) "
-                f"ORDER BY CASE stock_type WHEN 'limit_up' THEN 0 ELSE 1 END, "
-                f"ABS(julianday(trade_date) - julianday(?)) "
-                f"LIMIT 1",
-                [code] + date_window + [d_signal]
-            )
-        row = cur.fetchone()
-        conn.close()
-    except Exception:
-        return None
-
-    if row is None or row[0] is None or row[0] == 0:
-        # Tier1.D: daily_stocks 找不到 → 试 stock_daily (21 只重点股的 chg_pct)
-        sd_ohlcv = _try_stock_daily_ohlcv(code, d_signal)
-        if sd_ohlcv is not None:
-            _ARCHIVE_OHLCV_CACHE[cache_key] = sd_ohlcv
-            return sd_ohlcv
-        _ARCHIVE_OHLCV_CACHE[cache_key] = None
-        return None
-    price, chg, next_d_chg, turn = row[:4]
-    if next_d_chg is None:
-        # Tier1.D: daily_stocks 有但 next_day_change 空 → 试 stock_daily 推 T+1
-        sd_ohlcv = _try_stock_daily_ohlcv(code, d_signal)
-        if sd_ohlcv is not None:
-            _ARCHIVE_OHLCV_CACHE[cache_key] = sd_ohlcv
-            return sd_ohlcv
-        _ARCHIVE_OHLCV_CACHE[cache_key] = None
-        return None
-
-    # 构造粗略 OHLCV
-    # D 收盘 = 昨收 * (1 + chg/100) = price * (1 + chg/100)
-    base = float(price)
-    d_close = base * (1 + (chg or 0) / 100)
-    d1_close = d_close * (1 + float(next_d_chg) / 100)
-    # D+1 开盘 = D 收盘 (无跳空, 一字板由 _is_limit_open 单独检测)
-    buy_open = d_close
-    buy_close = d1_close
-    # D+2 开盘 = D+1 收盘 (T+2 数据缺失, 退化)
-    sell_open = d1_close
-    # 高低用 1% 振幅模拟
-    buy_high = max(buy_open, buy_close) * 1.005
-    buy_low = min(buy_open, buy_close) * 0.995
-    sell_high = sell_open * 1.005
-    sell_low = sell_open * 0.995
-
-    result = {
-        'open': round(buy_open, 2),
-        'close': round(buy_close, 2),
-        'high': round(buy_high, 2),
-        'low': round(buy_low, 2),
-        'volume': 0,
-        'amount': 0,
-        'turnover': float(turn or 0),
-        'change_pct': float(chg or 0),
-        'prev_close': base,
-        # 标记是 fallback, 后续可识别
-        '_fallback': 'archive_db',
-    }
-    _ARCHIVE_OHLCV_CACHE[cache_key] = result
-    return result
 
 
-def _try_stock_daily_ohlcv(code: str, d_signal: str) -> dict:
-    """Tier1.D: 从 stock_daily 表取 T+1/T+2 真实 chg_pct 构造 OHLCV
-
-    stock_daily 只覆盖 21 只重点关注股 (5/21~6/11), 是 score_stock_history 攒的
-    历史表现数据。包含 T+1 / T+2 / T+3 ... 的真实日涨跌幅。
-
-    相比 daily_stocks.next_day_change 的优势: 给定信号日 D, 可同时拿到 D+1 和 D+2 的 chg_pct,
-    拼出真正的 T+1 开盘买 T+2 开盘卖 的 return。
-    """
-    try:
-        import sqlite3
-        from datetime import datetime, timedelta
-        dt = datetime.strptime(d_signal, '%Y%m%d')
-        d1 = (dt + timedelta(days=1)).strftime('%Y%m%d')
-        d2 = (dt + timedelta(days=2)).strftime('%Y%m%d')
-        conn = sqlite3.connect(_ARCHIVE_DB_PATH, timeout=2)
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT trade_date, chg_pct FROM stock_daily "
-            "WHERE code=? AND trade_date IN (?, ?, ?)",
-            (code, d_signal, d1, d2)
-        )
-        rows = dict(cur.fetchall())
-        conn.close()
-    except Exception:
-        return None
-
-    if not rows:
-        return None
-    # 缺 T+1 (D+1) 的 chg_pct 就没法算 T+1 收益
-    if d1 not in rows or rows[d1] is None:
-        return None
-
-    # 构造: 假设信号日 D 收盘 100 (归一化), 然后按 chg_pct 推
-    # 实际: 缺 D 收盘价, 用归一化 (后续 pnl 计算会按比例还原)
-    # 简化: 用 100 当 D 收盘基准
-    base = 100.0
-    d_close = base
-    d1_close = base * (1 + float(rows[d1]) / 100)
-    d2_open = d1_close  # T+1 收 → T+2 开 假设无跳空
-    if d2 in rows and rows[d2] is not None:
-        d2_close = d1_close * (1 + float(rows[d2]) / 100)
-    else:
-        d2_close = d1_close  # T+2 数据缺失, 退化
-
-    result = {
-        'open': round(base, 2),       # buy_open (D+1 开盘 ≈ D 收盘)
-        'close': round(d1_close, 2),  # buy_close (D+1 收盘)
-        'high': round(d1_close * 1.005, 2),
-        'low': round(d1_close * 0.995, 2),
-        'volume': 0,
-        'amount': 0,
-        'turnover': 0,
-        'change_pct': 0,
-        'prev_close': base,
-        # 给 T+2 也填好让 sell_ohlcv 有数据
-        '_sell_open': round(d2_open, 2),
-        '_sell_close': round(d2_close, 2),
-        # 标记是 fallback
-        '_fallback': 'stock_daily',
-        '_normalized': True,  # 价格是归一化 100 起的, 实际买入金额按比例折算
-    }
-    return result
-
-def _fetch_limit_up_pool(date_str: str) -> pd.DataFrame:
-    """涨停池: 当日涨停 (stock_zt_pool_em, 含封板时间/封板资金等 plan_a 所需列)
-
-    P3.1: 改用 stock_zt_pool_em 替代 stock_zt_pool_previous_em,
-    这样 plan_a 9因子评分能拿到封板/资金等完整数据, 与前端排名一致。
-    """
-    key = f"engine_limit_up_{date_str}"
-    cached = _cached_pool_get(key)
-    if cached is not None:
-        return cached
-    try:
-        df = ak.stock_zt_pool_em(date=date_str)
-    except Exception:
-        df = None
-    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        df = _try_local_fallback(date_str, 'limit_up', key)
-    if df is not None and hasattr(df, 'empty') and not df.empty:
-        _pool_cache_put(key, df)
-        return df
-    _pool_cache_put(key, '__NONE__')
-    return None
 
 
-def _fetch_reversal_pool(date_str: str) -> pd.DataFrame:
-    """反转池: 上交易日涨停今日下跌 (P3.2: 使用 prev_pool, 含涨跌幅列)"""
-    key = f"engine_reversal_{date_str}"
-    cached = _cached_pool_get(key)
-    if cached is not None:
-        return cached
-    df = ak.stock_zt_pool_previous_em(date=date_str)
-    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        df = _try_local_fallback(date_str, 'prev_pool', key)
-    if df is None or not hasattr(df, 'empty') or df.empty:
-        _pool_cache_put(key, '__NONE__')
-        return None
-    # 列识别
-    chg_col = None
-    for c in df.columns:
-        if '涨跌幅' in str(c):
-            chg_col = c
-            break
-    chg_col = chg_col or df.columns[3]
-    df = filter_xr_xd_dr(df)
-    df = filter_non_main_board(df)
-    df['_chg'] = df[chg_col].astype(float)
-    pullback = df[(df['_chg'] >= -7) & (df['_chg'] <= 1)].copy()
-    if not pullback.empty:
-        _pool_cache_put(key, pullback)
-    else:
-        _pool_cache_put(key, '__NONE__')
-    return pullback
 
 
-def _cached_pool_get(key: str):
-    """池缓存读取: 先查持久(历史不变), 再查 2h(防今天重复拉)
-
-    历史池数据 (limit-up / zhaban / dtqiaoban / reversal / trend) 一旦拉下来
-    就不再变, 用 persistent 缓存避免 2h 失效导致回测引擎反复重拉 akshare
-    (akshare 7天窗口限制 → 静默返回空 → 信号池空 → 跳过全部交易)。
-    """
-    cached = _persistent_get(key)
-    if cached is not None:
-        if isinstance(cached, str) and cached == '__NONE__':
-            return None
-        if hasattr(cached, 'empty'):
-            try:
-                if cached.empty:
-                    return None
-            except ValueError:
-                pass
-        return cached
-    # Fallback: 2h 缓存 (兼容老数据)
-    cached = _cache_get(key)
-    if cached is None:
-        return None
-    if isinstance(cached, str) and cached == '__NONE__':
-        return None
-    if hasattr(cached, 'empty'):
-        try:
-            if cached.empty:
-                return None
-        except ValueError:
-            pass
-        # 把 2h 命中升级为持久 (下次免查)
-        try:
-            _persistent_put(key, cached)
-        except Exception:
-            pass
-        return cached
-    return None
 
 
-def _pool_cache_put(key: str, value):
-    """池缓存写入: 用持久缓存, 历史不变, 不该 2h 失效
-
-    value 可能是 DataFrame 或 '__NONE__' 标记
-    """
-    _persistent_put(key, value)
 
 
-def _fetch_zhaban_pool(date_str: str) -> pd.DataFrame:
-    """炸板池: 当日炸板 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
-    key = f"engine_zhaban_{date_str}"
-    cached = _cached_pool_get(key)
-    if cached is not None:
-        return cached
-    try:
-        df = ak.stock_zt_pool_zbgc_em(date=date_str)
-    except Exception:
-        df = None
-    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        df = _try_local_fallback(date_str, 'zhaban', key)
-    if df is not None and hasattr(df, 'empty') and not df.empty:
-        _pool_cache_put(key, df)
-        return df
-    _pool_cache_put(key, '__NONE__')
-    return None
 
 
-def _fetch_dtqiaoban_pool(date_str: str) -> pd.DataFrame:
-    """跌停/翘板池: 当日跌停 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
-    key = f"engine_dtqiaoban_{date_str}"
-    cached = _cached_pool_get(key)
-    if cached is not None:
-        return cached
-    try:
-        df = ak.stock_zt_pool_dtgc_em(date=date_str)
-    except Exception:
-        df = None
-    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        df = _try_local_fallback(date_str, 'dtqiaoban', key)
-    if df is not None and hasattr(df, 'empty') and not df.empty:
-        _pool_cache_put(key, df)
-        return df
-    _pool_cache_put(key, '__NONE__')
-    return None
 
 
-def _fetch_trend_pool(date_str: str) -> pd.DataFrame:
-    """强势/趋势池: 当日强势股 (P1.3: akshare 不可用时 fallback 本地 pickle)"""
-    key = f"engine_trend_{date_str}"
-    cached = _cached_pool_get(key)
-    if cached is not None:
-        return cached
-    try:
-        df = ak.stock_zt_pool_strong_em(date=date_str)
-    except Exception:
-        df = None
-    if (df is None or df.empty) and _LOCAL_FALLBACK_ENABLED:
-        df = _try_local_fallback(date_str, 'strong', key)
-    if df is not None and hasattr(df, 'empty') and not df.empty:
-        _pool_cache_put(key, df)
-        return df
-    _pool_cache_put(key, '__NONE__')
-    return None
 
 
-def _fetch_sector_pool(date_str: str):
-    """板块 tab 不需要单独的 pool (由 _score_sector 直接生成个股级 DF)
-
-    返回 None 让 _score_sector 自己拉数据,简化流程。
-    """
-    return None
 
 
-SIGNAL_POOL_FETCHERS = {
-    TAB_LIMIT_UP: _fetch_limit_up_pool,
-    TAB_REVERSAL: _fetch_reversal_pool,
-    TAB_ZHABAN: _fetch_zhaban_pool,
-    TAB_DTQIAOBAN: _fetch_dtqiaoban_pool,
-    TAB_TREND: _fetch_trend_pool,
-    TAB_SECTOR: _fetch_sector_pool,
-}
+
 
 # ═══════════════════════════════════════════
 #  V2 因子注入 helper
@@ -653,470 +224,33 @@ SIGNAL_POOL_FETCHERS = {
 # 的 limit-up tab 接入路径, 让 trend/reversal/zhaban/dtqiaoban 也吃到
 # V2 因子预测力 (数据驱动分析见: commit ace0597, n=2231 票, ρ=+0.0906 p<0.001)
 
-_BACKTEST_USE_V2_DEFAULT = True
 
 
-def _apply_v2_to_score(df: pd.DataFrame, score_col: str, today_str: str,
-                       use_v2: bool = None) -> pd.DataFrame:
-    """对 ``df[score_col]`` 乘上 position_factor 调整。
-
-    factor = (0.85 + mc/50) * (0.90 + pd/50)
-        mc=10 pd=10 → 1.05 × 1.10 = 1.155 (+15.5%)
-        mc=0  pd=0  → 0.85 × 0.90 = 0.765 (-23.5%)
-        mc=pd=5 (中性) → 0.95 × 1.00 = 0.95 (-5%, 与 baseline 校准)
-
-    历史票 mc/pd 拿不到时降为 5.0 → factor=0.95。这是 archive.db 在 v8/v9/v10
-    cache 升级后被 backfill_archive.py (commit 7b1549f) 补回的覆盖 — 现在 mc/pd
-    真值命中率 ~50%, 50% 票用 5.0 默认温和调整。
-
-    Args:
-        df: 评分后 DataFrame (含 '代码'/'最新价'/'名称' 列)
-        score_col: 要调整的评分列名 (如 '动量评分', '反转评分', '总分', '翘板评分')
-        today_str: YYYYMMDD 格式, 内部转 YYYY-MM-DD 给 factors_v2
-        use_v2: None=读 _BACKTEST_USE_V2_DEFAULT, True/False=强制
-    """
-    if df is None or df.empty:
-        return df
-    if use_v2 is None:
-        use_v2 = _BACKTEST_USE_V2_DEFAULT
-    if not use_v2:
-        return df
-    try:
-        from plans.factors_v2 import compute_v2_factors as _compute_v2
-        today_iso = f'{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}'
-        v2 = _compute_v2(df, today_iso)
-        mc = v2['momentum_consistency']
-        pd_ = v2['pullback_depth']
-        mc_factor = 0.85 + mc / 50.0
-        pd_factor = 0.90 + pd_ / 50.0
-        position = (mc_factor * pd_factor).reindex(df.index, fill_value=0.95)
-        df = df.copy()
-        df[score_col] = (df[score_col].astype(float) * position).round(1)
-    except Exception as e:
-        # V2 不可用 (历史不足等) — 静默回退到 baseline, 不阻塞回测
-        print(f'  [_apply_v2_to_score] {today_str} 跳过: {type(e).__name__}: {str(e)[:80]}',
-              file=__import__('sys').stderr)
-    return df
 
 
 # ═══════════════════════════════════════════
 #  评分函数 (P1.1: limit-up / zhaban / dtqiaoban 可用)
 # ════════════════════════════════════
 
-def _score_limit_up(df: pd.DataFrame, date_str: str):
-    """涨停评分: plan_a 9因子 (与前端排名一致)
-
-    P3.1: 替代 backtest_score_prev (6因子简化版),
-    直接调用 plan_a 完整评分管道, 回测胜率与实盘推荐对齐。
-    fund_df/history_scores/lhb_bonus 等实时数据用降级模式(全零/默认值)。
-    """
-    if df is None or df.empty:
-        return None
-
-    # plan_a 内部 auto_verify_backtest 需要 YYYYMMDD 格式
-    today_fmt = date_str
-
-    # 1. 过滤 (保留全池做 scoring_base, 与 scan pipeline 对齐归一化)
-    from scanner import filter_non_main_board
-    scoring_base = filter_non_main_board(df.copy())
-    if scoring_base.empty:
-        return None
-
-    cap_col = '流通市值' if '流通市值' in scoring_base.columns else None
-    if cap_col and cap_col in scoring_base.columns:
-        scoring_base = scoring_base[scoring_base[cap_col].astype(float) <= 200 * 1e8]
-    price_col = '最新价' if '最新价' in scoring_base.columns else (scoring_base.columns[4] if len(scoring_base.columns) > 4 else None)
-    if price_col and price_col in scoring_base.columns:
-        scoring_base = scoring_base[scoring_base[price_col].astype(float) <= MAX_PRICE]
-    if scoring_base.empty:
-        return None
-
-    filtered = scoring_base.copy()
-
-    # ── P4 修复: 本金过滤 (与实盘 _principal_filter 一致, 至少买 2 手) ──
-    try:
-        from scanner import _dynamic_positions
-        _n_positions = _dynamic_positions(principal)
-        _position_size = principal / _n_positions
-        _price_col = '最新价' if '最新价' in filtered.columns else (filtered.columns[4] if len(filtered.columns) > 4 else filtered.columns[3])
-        _mask = pd.Series(True, index=filtered.index)
-        for _idx in filtered.index:
-            _p = float(filtered.loc[_idx, _price_col])
-            if _position_size / (_p * 100) < 2:
-                _mask[_idx] = False
-        _excluded = (~_mask).sum()
-        if _excluded > 0:
-            print(f"  [PlanA/回测] 本金过滤排除 {_excluded} 只 (本金{principal}买不了2手)", file=sys.stderr)
-        filtered = filtered[_mask]
-    except Exception:
-        pass
-    if filtered.empty:
-        return None
-
-    # 2. plan_a 因子计算 (在 scoring_base 上归一化, 与前端一致)
-    from plans.plan_a import compute_factors, apply_scores
-    principal = 30000
-
-    # P3.2: 尝试加载历史归档的实时数据
-    try:
-        from archiver import load_scan_inputs
-        archived = load_scan_inputs(date_str)
-    except Exception:
-        archived = None
-
-    if archived is not None:
-        fund_df = archived.get('fund_df')
-        sentiment_score = archived.get('sentiment_score', 3.0)
-        sentiment_level = archived.get('sentiment_level', 'neutral')
-        sentiment_detail = archived.get('sentiment_detail', {})
-        sentiment_ok = archived.get('sentiment_ok', True)
-        # lhb_bonus/history_scores 重新对齐到当前 filtered.index
-        lhb_raw = archived.get('lhb_bonus', pd.Series(0.0, index=filtered.index))
-        if lhb_raw is not None and hasattr(lhb_raw, 'reindex'):
-            lhb_bonus = lhb_raw.reindex(filtered.index, fill_value=0.0)
-        else:
-            lhb_bonus = pd.Series(0.0, index=filtered.index)
-        hist_raw = archived.get('history_scores', pd.Series(2.5, index=filtered.index))
-        if hist_raw is not None and hasattr(hist_raw, 'reindex'):
-            history_scores = hist_raw.reindex(filtered.index, fill_value=2.5)
-        else:
-            history_scores = pd.Series(2.5, index=filtered.index)
-    else:
-        fund_df = None
-        sentiment_score = 3.0
-        sentiment_level = 'neutral'
-        sentiment_detail = {}
-        sentiment_ok = True
-        lhb_bonus = pd.Series(0.0, index=filtered.index)
-        history_scores = pd.Series(2.5, index=filtered.index)
-
-    factors = compute_factors(scoring_base, fund_df=fund_df, principal=principal)
-
-    # v2 因子 (持续性 + 回撤位置) — 回测路径此前缺失, 导致 mc/pd 一律 5.0,
-    # 等价于 baseline (use_v2=False). 现补回显式注入, 与 plan_a.score() 前端路径对齐。
-    from plans.factors_v2 import compute_v2_factors as _compute_v2
-    v2_factors = _compute_v2(scoring_base, today_fmt)
-    factors['momentum_consistency'] = v2_factors['momentum_consistency']
-    factors['pullback_depth'] = v2_factors['pullback_depth']
-    n_with_hist = int((v2_factors['momentum_consistency'] != 5.0).sum())
-    print(f"  [PlanA v2 / backtest] {n_with_hist}/{len(scoring_base)} 票有历史, mc/pd 启用",
-          file=sys.stderr)
-
-    # 使用与生产环境一致的权重（load_weights = DEFAULT_WEIGHTS，live 端也是用同一份）
-    # BUG-FIX 2026-07-14: 此前误用 _load_tab_weights('limit-up')（DEFAULT_WEIGHTS_LIMIT_UP，
-    # seal=20/sector=25），而 live 端 plan_a.score()→apply_scores 未传 weights 时
-    # 走 load_weights()（DEFAULT_WEIGHTS, seal=28/sector=17/money=17/alpha=8）→ 两套权重
-    # 不一致，导致回测结果与实盘不可比。现统一为 load_weights()。
-    from weight_manager import load_weights
-    limit_up_weights = load_weights()
-
-    # use_v2=True 已经内置在 apply_scores 路径 (factors 里已注入 mc/pd),
-    # 无需再走 _apply_v2_to_score (那是给其它 tab 评分函数末位套用的 helper)
-    total_scores, base_scores, danger_flags, weights = apply_scores(
-        filtered, factors, sentiment_score, history_scores, lhb_bonus, today_fmt,
-        weights=limit_up_weights, use_v2=_BACKTEST_USE_V2_DEFAULT)
-
-    # 3. 附加评分列到 DataFrame
-    filtered = filtered.copy()
-    filtered['plan_a总分'] = total_scores.round(1)
-    filtered['plan_a基础分'] = base_scores.round(1)
-    # 危险信号标记
-    filtered['_danger'] = ''
-    for idx, flags in danger_flags.items():
-        if flags and idx in filtered.index:
-            filtered.loc[idx, '_danger'] = ','.join(flags)
-
-    # ── IC 分析: 存储 plan_a 各因子原始分 (回测引擎用 f_ 前缀捕获) ──
-    _FACTOR_IC_COLS = {
-        'seal': 'f_seal', 'money': 'f_money',
-        'sector_mom': 'f_sector', 'tech': 'f_tech',
-        'stock_sentiment': 'f_stock_sentiment', 'principal': 'f_principal',
-        'north_flow': 'f_north_flow',
-        'momentum_consistency': 'f_v2_mc', 'pullback_depth': 'f_v2_pd',
-        'alpha': 'f_alpha',
-    }
-    for fk, col_name in _FACTOR_IC_COLS.items():
-        if fk in factors:
-            filtered[col_name] = factors[fk].reindex(filtered.index, fill_value=0.0).round(1)
-    filtered['f_history'] = history_scores.reindex(filtered.index, fill_value=2.5).round(1)
-
-    # ── v3.3c: score_new 评分 (与生产排行榜一致) ──
-    # score_new 使用涨停池自身数据 (封板/时间/换手/连板/炸板/市值/板块),
-    # 不依赖外部数据, 回测和生产天然对齐。权重和=100, 直接映射 0-100 分。
-    if _BACKTEST_USE_SCORE_NEW:
-        try:
-            from scoring.score_new import score_new as _score_new_fn
-            import sys as _sys
-            today_iso = f'{today_fmt[:4]}-{today_fmt[4:6]}-{today_fmt[6:8]}'
-            scored_new = _score_new_fn(filtered, today_str=today_iso)
-            if scored_new is not None and not scored_new.empty and '新评分' in scored_new.columns:
-                # 将 score_new 的评分列和因子分列合并到 filtered
-                filtered['新评分'] = scored_new['新评分'].reindex(filtered.index, fill_value=50.0).round(1)
-                # score_new 因子分列 (供 IC 分析)
-                for col in scored_new.columns:
-                    if col.startswith('f_') and col not in filtered.columns:
-                        filtered[col] = scored_new[col].reindex(filtered.index, fill_value=0.0).round(1)
-                n_scored = len(filtered)
-                print(f"  [score_new/回测] {n_scored} 票完成评分, "
-                      f"范围 {filtered['新评分'].min():.0f}-{filtered['新评分'].max():.0f}",
-                      file=_sys.stderr)
-        except Exception as e:
-            print(f"  [score_new/回测] 跳过: {e}", file=_sys.stderr)
-            # fallback: 用 plan_a 总分
-            filtered['新评分'] = filtered['plan_a总分']
-
-    # ── v2 硬过滤 (与生产环境 app.py 一致) ──
-    # 对评分后的 stocks 应用换手率/封板时间/行业/连板数等硬规则过滤
-    # 使用 score_new 的 新评分 做排序 (如果可用)
-    _rank_col = '新评分' if '新评分' in filtered.columns else 'plan_a总分'
-    try:
-        from config import ENABLE_V2_HARD_FILTER
-        if ENABLE_V2_HARD_FILTER and len(filtered) > 0:
-            from strategy_filters_v2 import apply_v2_with_fallback
-            _stocks_list = []
-            _code_col = '代码' if '代码' in filtered.columns else filtered.columns[1]
-            _name_col = '名称' if '名称' in filtered.columns else filtered.columns[2]
-            for _idx in filtered.index:
-                _r = filtered.loc[_idx]
-                _stocks_list.append({
-                    'code': str(_r.get('代码', '')).strip().zfill(6),
-                    'name': str(_r.get('名称', '')),
-                    'total_score': float(_r.get(_rank_col, 0)),
-                })
-            _filtered_stocks, _used_scheme = apply_v2_with_fallback(
-                _stocks_list, filtered, top_n=len(_stocks_list), tier_min=1)
-            if _filtered_stocks:
-                _valid_codes = set(s['code'] for s in _filtered_stocks)
-                _before = len(filtered)
-                filtered = filtered[filtered[_code_col].astype(str).str.strip().str.zfill(6).isin(_valid_codes)].copy()
-                print(f"  [v2 硬过滤/回测] {_used_scheme}: {_before}→{len(filtered)} 票", file=sys.stderr)
-            else:
-                print(f"  [v2 硬过滤/回测] 三档过滤后 0 票, 保持原池 {len(filtered)} 票", file=sys.stderr)
-    except Exception as e:
-        print(f"  [v2 硬过滤/回测] 跳过: {e}", file=sys.stderr)
-
-    return filtered  # 含 '新评分' + 'plan_a总分' 列
 
 
-def _score_zhaban(df: pd.DataFrame, date_str: str):
-    """炸板评分: score_zhaban_data + 可调权 (P5)
-
-    P8 修复: 尝试加载历史存档的资金流数据，避免评分使用实时数据产生未来偏差。
-    """
-    if df is None or df.empty:
-        return None
-    df = filter_non_main_board(df)
-    df = filter_xr_xd_dr(df)
-    if df.empty:
-        return None
-    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
-    cap_col = '流通市值' if '流通市值' in df.columns else None
-    if cap_col and cap_col in df.columns:
-        df = df[df[cap_col].astype(float) <= MAX_MARKET_CAP * 1e8]
-    df = df[df[price_col].astype(float) <= MAX_PRICE]
-    if df.empty:
-        return None
-    try:
-        from weight_manager import _load_tab_weights
-        w = _load_tab_weights('zhaban')
-    except Exception:
-        w = None
-    # 尝试加载存档资金流数据（回测时信号日的历史数据）
-    fund_df = None
-    try:
-        from archiver import load_scan_inputs
-        archived = load_scan_inputs(date_str)
-        if archived is not None:
-            fund_df = archived.get('fund_df')
-    except Exception:
-        pass
-    # v3.3d: 传入 date_str 启用 v2 position_factor
-    return score_zhaban_data(df, date_str, weights=w, fund_df=fund_df)
 
 
-def _score_dtqiaoban(df: pd.DataFrame, date_str: str):
-    """跌停翘板评分: score_dtqiaoban_data + 可调权 (P5)"""
-    if df is None or df.empty:
-        return None
-    df = filter_non_main_board(df)
-    df = filter_xr_xd_dr(df)
-    if df.empty:
-        return None
-    price_col = '最新价' if '最新价' in df.columns else df.columns[4]
-    cap_col = '流通市值' if '流通市值' in df.columns else None
-    if cap_col and cap_col in df.columns:
-        df = df[df[cap_col].astype(float) <= MAX_MARKET_CAP * 1e8]
-    df = df[df[price_col].astype(float) <= MAX_PRICE]
-    if df.empty:
-        return None
-    try:
-        from weight_manager import _load_tab_weights
-        w = _load_tab_weights('dtqiaoban')
-    except Exception:
-        w = None
-    # v3.3d: 传入 date_str 启用 v2 position_factor
-    return score_dtqiaoban_data(df, weights=w, today_str=date_str)
 
 
-def _score_reversal(df: pd.DataFrame, date_str: str):
-    """反转评分: scanner._score_reversal + 可调权 (P5)"""
-    try:
-        from weight_manager import _load_tab_weights
-        w = _load_tab_weights('reversal')
-    except Exception:
-        w = None
-    # v3.3d: today_str 已传入, v2 position_factor 在 _score_reversal 内部应用
-    return scanner_score_reversal(df, today_str=date_str, weights=w)
 
 
-def _score_trend(df: pd.DataFrame, date_str: str):
-    """趋势评分: scanner._score_trend + 可调权 (P4)
-
-    df 来自 _fetch_trend_pool (stock_zt_pool_strong_em 当日强势池)
-    _score_trend 内部已含板块/价格/市值过滤 + 评分
-    """
-    if df is None or df.empty:
-        return None
-
-    df = df.copy()
-    code_col = '代码' if '代码' in df.columns else df.columns[1]
-    df = filter_non_main_board(df, code_col=code_col)
-
-    cap_col = '流通市值' if '流通市值' in df.columns else None
-    if cap_col and cap_col in df.columns:
-        df = df[df[cap_col].astype(float) <= 200 * 1e8]
-
-    price_col = '最新价' if '最新价' in df.columns else (df.columns[4] if len(df.columns) > 4 else None)
-    if price_col and price_col in df.columns:
-        df = df[df[price_col].astype(float) <= MAX_PRICE]
-
-    change_col = '涨跌幅' if '涨跌幅' in df.columns else df.columns[3]
-    changes = df[change_col].astype(float)
-    df = df[(changes >= 2.5) & (changes < 8.5)]
-
-    if df.empty:
-        return None
-
-    # P4: 用可调权评分
-    try:
-        from weight_manager import load_trend_weights
-        w = load_trend_weights()
-    except Exception:
-        w = None
-    # v3.3d: 传入 date_str 启用 v2 position_factor
-    return scanner_score_trend(df, weights=w, today_str=date_str)
 
 
-def _score_sector(df: pd.DataFrame, date_str: str):
-    """板块 tab 回测评分: P2.3 已抽到 scanner._score_sector
-
-    df 参数被忽略 (板块 tab 自己拉数据生成个股级 DF)
-    date_str 用于调用 scanner._score_sector(date_str)
-    """
-    try:
-        return scanner_score_sector(date_str, top_n=TOP_N_DEFAULT)
-    except Exception as e:
-        print(f"  [sector] {date_str} 评分失败: {e}", file=sys.stderr)
-        return None
 
 
-SCORE_FUNCS = {
-    TAB_LIMIT_UP: _score_limit_up,
-    TAB_REVERSAL: _score_reversal,
-    TAB_ZHABAN: _score_zhaban,
-    TAB_DTQIAOBAN: _score_dtqiaoban,
-    TAB_TREND: _score_trend,
-    TAB_SECTOR: _score_sector,
-}
 
 # 各 tab 的评分列名
-SCORE_COLUMNS = {
-    TAB_LIMIT_UP: '新评分',    # v3.3c: 统一用 score_new 排名, 与生产排行榜一致
-    TAB_REVERSAL: '反转评分',
-    TAB_ZHABAN: '总分',         # score_zhaban_data 输出
-    TAB_DTQIAOBAN: '翘板评分',
-    TAB_TREND: '动量评分',
-    TAB_SECTOR: '板块强度',
-}
 
 # ═══════════════════════════════════════════
 #  OHLCV 批量缓存 (P1.2 性能优化)
 # ═══════════════════════════════════════════
 
-def _get_daily_ohlcv_batch(date_str: str) -> dict:
-    """P1.2: 按日期批量拉取当日所有股票的 OHLCV
-
-    返回: {code: {open, close, high, low, volume, amount, turnover, change_pct}}
-    注: akshare stock_zh_a_spot_em 是当日实时快照,收盘后数据稳定
-    注2: stock_zh_a_spot_em 不支持历史 date → 历史回测仍需逐股调用
-
-    P1.2.1 修复: 服务器上东方财富 spot_em 反复 Connection aborted
-    (akshare urllib3 默认重试 3 次,每次连接断开耗 30+ 秒)
-    → 改用**进程级开关** _SPOT_DISABLED 控制是否启用批量缓存。
-    默认禁用,确保服务器跑得通;本地高性能环境可手动开启。
-
-    P1.24.3 修复: 当 date_str == today, stock_zh_a_spot_em 返回的"今开"实际是当日 9:30 开盘价,
-    用作"次日开盘"是错的 (跨日数据错位), 直接返回空 → 降级到 _get_ohlcv_batch 逐股 (用历史 API)
-    """
-    global _SPOT_DISABLED
-    if _SPOT_DISABLED:
-        return {}  # 主循环会降级到 _get_ohlcv_batch 逐股
-
-    # P1.24.3: 拒绝用 spot_em 处理 today (今日实时数据无"次日"语义)
-    from datetime import datetime as _dt
-    if date_str == _dt.now().strftime('%Y%m%d'):
-        return {}
-
-    cache_key = f"daily_ohlcv_all_{date_str}"
-    cached = _cache_get(cache_key)
-    if cached is not None and not isinstance(cached, str):
-        return cached
-
-    result = {}
-    try:
-        df = ak.stock_zh_a_spot_em()
-    except Exception as e:
-        print(f"  [OHLCV 批量] {date_str} spot_em 失败(降级逐股): {type(e).__name__}", file=sys.stderr)
-        # 一次失败就禁用,避免后续重复触发 urllib3 重试
-        _SPOT_DISABLED = True
-        _cache_put(cache_key, '__NONE__')
-        return {}
-
-    if df is None or df.empty:
-        _cache_put(cache_key, '__NONE__')
-        return {}
-
-    # 列名识别 (spot_em 列名固定)
-    # 常见列: 代码/名称/最新价/涨跌幅/涨跌额/成交量/成交额/振幅/最高/最低/今开/昨收/换手率
-    col_map = {
-        'code': '代码', 'name': '名称',
-        'open': '今开', 'high': '最高', 'low': '最低',
-        'close': '最新价', 'prev_close': '昨收',
-        'volume': '成交量', 'amount': '成交额',
-        'turnover': '换手率', 'change_pct': '涨跌幅',
-    }
-    for _, row in df.iterrows():
-        try:
-            code = str(row.get(col_map['code'], '')).strip().zfill(6)
-            if not code or len(code) != 6:
-                continue
-            prev_close = float(row.get(col_map['prev_close'], 0)) if pd.notna(row.get(col_map['prev_close'], 0)) else 0
-            result[code] = {
-                'open': float(row.get(col_map['open'], 0)) if pd.notna(row.get(col_map['open'], 0)) else 0,
-                'close': float(row.get(col_map['close'], 0)) if pd.notna(row.get(col_map['close'], 0)) else 0,
-                'high': float(row.get(col_map['high'], 0)) if pd.notna(row.get(col_map['high'], 0)) else 0,
-                'low': float(row.get(col_map['low'], 0)) if pd.notna(row.get(col_map['low'], 0)) else 0,
-                'volume': int(row.get(col_map['volume'], 0)) if pd.notna(row.get(col_map['volume'], 0)) else 0,
-                'amount': float(row.get(col_map['amount'], 0)) if pd.notna(row.get(col_map['amount'], 0)) else 0,
-                'turnover': float(row.get(col_map['turnover'], 0)) if pd.notna(row.get(col_map['turnover'], 0)) else 0,
-                'change_pct': float(row.get(col_map['change_pct'], 0)) if pd.notna(row.get(col_map['change_pct'], 0)) else 0,
-                'prev_close': prev_close,
-            }
-        except Exception:
-            continue
-
-    _cache_put(cache_key, result)
-    return result
 
 
 # ═══════════════════════════════════════════
@@ -1142,88 +276,14 @@ def _trading_dates_in_range(start_str: str, end_str: str, max_count: int = 60):
 #  聚合辅助 (复用于 t1 的逻辑)
 # ═══════════════════════════════════════════
 
-def _aggregate(records, label='backtest'):
-    if not records:
-        return None
-    rets = [r['net_ret_pct'] for r in records]
-    wins = [r for r in rets if r > 0]
-    losses = [r for r in rets if r <= 0]
-    n = len(rets)
-    win_n = len(wins)
-    win_avg_v = float(np.mean(wins)) if wins else 0
-    loss_avg_v = float(np.mean(losses)) if losses else 0
-    cum = np.cumsum(rets)
-    peak = np.maximum.accumulate(cum)
-    return {
-        'trade_count': n,
-        'win_count': win_n, 'loss_count': n - win_n,
-        'win_rate': round(win_n / n * 100, 1),
-        'avg_ret': round(float(np.mean(rets)), 2),
-        'win_avg': round(win_avg_v, 2),
-        'loss_avg': round(loss_avg_v, 2),
-        'total_pnl': round(sum(r['pnl'] for r in records), 0),
-        'plr': round(abs(win_avg_v / loss_avg_v), 2) if loss_avg_v != 0 else 0,
-        'max_dd': round(float((cum - peak).min()), 2),
-        'best': round(max(rets), 2),
-        'worst': round(min(rets), 2),
-        'ev': round(win_n/n*win_avg_v + (n-win_n)/n*loss_avg_v, 2) if losses else 0,
-        'cumulative_ret': round(float(cum[-1]), 2),
-    }
+
+
 
 
 # ═══════════════════════════════════════════
 #  IC 因子分析 (回测后, 计算各因子与收益的相关性)
 # ═══════════════════════════════════════════
 
-def _compute_factor_ics(records: list, tab: str = 'limit-up') -> dict:
-    """从交易记录计算各因子 IC (因子分 × net_ret_pct 的 Pearson 相关系数)
-
-    根据 tab 自动识别因子列前缀:
-      limit-up → f_       (plan_a 9 因子)
-      zhaban   → zb_      (封板/资金/特征/换手/板块)
-      dtqiaoban→ dt_      (放量/封单/连跌/换手/时间)
-      reversal → rev_     (换手/连板/回调/板块/留存)
-      trend    → trend_   (涨幅/换手/成交额/量比/新高/均线)
-
-    Args:
-        records: records_open 列表, 每笔含对应前缀的因子列 + net_ret_pct
-        tab: tab 名称
-
-    Returns:
-        {factor_name: ic_value}
-    """
-    if not records or len(records) < 3:
-        return {}
-    import pandas as pd
-    df = pd.DataFrame(records)
-
-    # tab → 因子列前缀映射
-    _PREFIX_MAP = {
-        'limit-up': 'f_',
-        'zhaban': 'zb_',
-        'dtqiaoban': 'dt_',
-        'reversal': 'rev_',
-        'trend': 'trend_',
-        'sector': None,
-    }
-    prefix = _PREFIX_MAP.get(tab)
-    if prefix is None:
-        return {}
-
-    factor_cols = sorted([c for c in df.columns if c.startswith(prefix)])
-    if 'net_ret_pct' not in df.columns or not factor_cols:
-        return {}
-    rets = df['net_ret_pct'].astype(float)
-    ics = {}
-    for col in factor_cols:
-        vals = df[col].astype(float)
-        if vals.std() < 0.01:
-            continue
-        c = vals.corr(rets)
-        if not pd.isna(c):
-            display_name = col[len(prefix):] if col.startswith(prefix) else col
-            ics[display_name] = round(float(c), 4)
-    return ics
 
 
 # ═══════════════════════════════════════════
@@ -1244,6 +304,7 @@ def run_tab_backtest(
     use_v2: bool = True,
     fill_slots: bool = _BACKTEST_FILL_SLOTS,
     buy_time: str = 'open',
+    strict_ohlcv: bool = None,
 ):
     """多 tab 回测主入口 (v3.0: 支持尾盘买)
 
@@ -1267,6 +328,9 @@ def run_tab_backtest(
         use_v2: limit-up tab 是否启用 v2 持续性+回撤位置因子
         fill_slots: True=沿评分列表向下扫描补满 top_n 只买入;
                     False=仅取 top_n 只, 买不到的跳过不补.
+        strict_ohlcv: True=买卖价任一来自 archive/stock_daily 构造数据则跳过该笔
+                      (默认 _BACKTEST_STRICT_OHLCV=True, 只统计真实历史 OHLCV);
+                      False=保留构造价交易 (标记 data_quality='constructed').
 
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
@@ -1291,10 +355,14 @@ def run_tab_backtest(
     # strategy 参数保留兼容性但实际不应用任何外部 preset.
 
     # ── 默认日期 ──
-    # 自动检测本地归档可用天数 (超7天时无需手动改配置)
-    tab_max = _detect_available_days(tab)
-    if max_days > tab_max:
-        max_days = tab_max
+    # 自动检测本地归档可用天数 (超7天时无需手动改配置)。
+    # 正确性修复 (2026-08-01): 仅当调用方**未显式指定 start/end** 时才按
+    # 本地缓存天数收缩窗口; 显式区间必须原样尊重 (缺数据的日子自然进 skipped),
+    # 否则 "30 天回测" 会被悄悄缩成 ~21 天, 且训练/验证窗口相互重叠。
+    if start_date is None and end_date is None:
+        tab_max = _detect_available_days(tab)
+        if max_days > tab_max:
+            max_days = tab_max
 
     if end_date is None:
         from cache import _trading_date as _get_td
@@ -1309,15 +377,20 @@ def run_tab_backtest(
         start = start_date
 
     # ── 整体结果缓存 ──
-    # 注意: use_v2/fill_slots 必须进 cache_key, version=5 对应 v3.5 趋势评分重构
+    # 注意: use_v2/fill_slots/strict_ohlcv 必须进 cache_key,
+    # version=7 对应 2026-08-01 正确性修复 + 调权闭环 (构造价严格跳过 + 复利累计/
+    # 资金曲线回撤 + 确定性成交 + 历史OHLCV数据源修复 + 显式窗口尊重 + 权重更新),
+    # 旧 version=6 缓存自动失效。
     # 改权重/评分逻辑时记得递增 version 保证旧缓存失效
+    strict = _BACKTEST_STRICT_OHLCV if strict_ohlcv is None else bool(strict_ohlcv)
     if use_cache:
-        cache_key = make_key("bt", "result", version=5, tab=tab,
+        cache_key = make_key("bt", "result", version=7, tab=tab,
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
                              use_v2="v2" if use_v2 else "nov2",
                              fill_slots="fs" if fill_slots else "nfs",
-                             buy_time=buy_time)
+                             buy_time=buy_time,
+                             strict="s" if strict else "ns")
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
@@ -1371,7 +444,7 @@ def run_tab_backtest(
             # 板块 tab 等特殊场景: pool 为 None, 由 score_fn 自行处理 (内部拉数据)
             if pool is None:
                 if tab in _SELF_FETCHING_TABS:
-                    df_scored = score_fn(None, d_signal)
+                    df_scored = score_fn(None, d_signal, capital=capital)
                 else:
                     skipped.append({'signal': d_signal, 'reason': '信号池空'})
                     continue
@@ -1382,7 +455,7 @@ def run_tab_backtest(
                         continue
                 except ValueError:
                     pass
-                df_scored = score_fn(pool, d_signal)
+                df_scored = score_fn(pool, d_signal, capital=capital)
 
             if df_scored is None:
                 skipped.append({'signal': d_signal, 'reason': '评分后空'})
@@ -1500,11 +573,19 @@ def run_tab_backtest(
                 # → 标记 trade 为低可信, 不入统计 / 仅当 gap 可控时保留
                 _is_constructed_buy = bool(buy_ohlcv.get('_fallback'))
                 _is_constructed_sell = bool(sell_ohlcv.get('_fallback'))
-                if _is_constructed_buy or _is_constructed_sell:
+                _is_constructed_signal = bool(signal_ohlcv.get('_fallback'))
+                _is_constructed = _is_constructed_buy or _is_constructed_sell or _is_constructed_signal
+                if _is_constructed:
                     print(f"  [OHLCV] {name}({code}) {d_signal}: "
                           f"{'买' if _is_constructed_buy else ''}{'卖' if _is_constructed_sell else ''}"
                           f"价来自 archive.db 构造, 收益可能不准",
                           file=sys.stderr)
+                # 正确性修复: 严格模式跳过构造价交易 (系统性高估/失真收益)
+                if strict and _is_constructed:
+                    skipped.append({'signal': d_signal,
+                                    'reason': f'{name}({code}) 构造OHLCV价(archive/stock_daily)不可信, 严格模式跳过'})
+                    continue
+                data_quality = 'constructed' if _is_constructed else 'real'
 
                 signal_close = signal_ohlcv['close']
                 buy_open_real = buy_ohlcv['open']
@@ -1577,9 +658,11 @@ def run_tab_backtest(
                             skipped.append({'signal': d_signal, 'reason': f'{name} 封单成交比{_seal_ratio:.1f}>2.0, 尾盘封死买不到'})
                             continue
                         elif _seal_ratio > 1.0:
-                            import random as _random
-                            if _random.random() > 0.5:
-                                skipped.append({'signal': d_signal, 'reason': f'{name} 封单成交比{_seal_ratio:.1f}, 尾盘排队未成交'})
+                            # 正确性修复: 原 random.random() 让回测不可复现;
+                            # 改为 (code,date) 确定性哈希, 结果稳定可复现。
+                            _fill_prob = max(0.0, 2.0 - _seal_ratio)  # 1.0→100%, 1.5→50%, 2.0→0%
+                            if not _deterministic_fill(code, d_signal, _fill_prob):
+                                skipped.append({'signal': d_signal, 'reason': f'{name} 封单成交比{_seal_ratio:.1f}, 排队未成交(确定性模拟)'})
                                 continue
                         rec_seal_ratio = round(_seal_ratio, 2)
                     else:
@@ -1593,8 +676,24 @@ def run_tab_backtest(
                         'buy_price': round(buy_px, 2), 'sell_price': round(sell_px, 2),
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
-                        'seal_ratio': rec_seal_ratio,
+                        'seal_ratio': rec_seal_ratio, 'data_quality': data_quality,
                     }
+                    # 因子分列 (与 open-buy 分支一致, 供 IC 分析/调权)
+                    for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
+                               'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
+                               'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector','zb_market_cap',
+                               'dt_deal','dt_seal','dt_cont','dt_turnover','dt_time']:
+                        val = row.get(fk)
+                        if val is not None:
+                            rec[fk] = round(float(val), 1)
+                    for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
+                               'f_stock_sentiment','f_principal','f_north_flow',
+                               'f_v2_mc','f_v2_pd',
+                               'f_seal_ratio','f_seal_time','f_turnover','f_consecutive',
+                               'f_zhaban','f_market_cap','f_price']:
+                        val = row.get(fk)
+                        if val is not None:
+                            rec[fk] = round(float(val), 1)
                     records_open.append(rec)
                     bought_count += 1
                 elif buyable:
@@ -1609,6 +708,7 @@ def run_tab_backtest(
                         'buy_price': round(buy_px, 2), 'sell_price': round(sell_px, 2),
                         'raw_ret_pct': round(raw_ret, 2), 'net_ret_pct': round(net_ret, 2),
                         'pnl': round(capital * net_ret / 100, 0), **intraday,
+                        'data_quality': data_quality,
                     }
                     # P4: 趋势因子分列(供调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',

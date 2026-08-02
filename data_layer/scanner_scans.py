@@ -69,7 +69,10 @@ def scan_reversal(today_str: str, table_mode: bool = False, top_n: int = None):
     print(f"  → 上交易日涨停今回调: {len(pullback)} 只 (总{len(df)}只)", file=sys.stderr)
 
     # ── 反转评分 (P2.1 抽到 _score_reversal) ──
-    pullback = _score_reversal(pullback, today_str=today_str)
+    # 2026-08-01: 与回测对齐, 加载反转权重文件
+    # (此前生产用默认值, 回测调了权但生产不生效 — 调权闭环断点)
+    from weight_manager import load_tab_weights
+    pullback = _score_reversal(pullback, today_str=today_str, weights=load_tab_weights('reversal'))
 
     pullback = pullback.sort_values('反转评分', ascending=False).head(n)
 
@@ -564,7 +567,9 @@ def scan_dtqiaoban(today_str: str, table_mode: bool = False, top_n: int = None):
         return
 
     # 统一评分
-    df = score_dtqiaoban_data(df)
+    # 2026-08-01: 与回测对齐, 加载翘板权重文件 + 传入 today_str 启用 v2 位置因子
+    from weight_manager import load_tab_weights
+    df = score_dtqiaoban_data(df, weights=load_tab_weights('dtqiaoban'), today_str=today_str)
     if n < TOP_N: df = df.head(n)
 
     # ── 列识别（用于输出） ──

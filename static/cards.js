@@ -37,6 +37,82 @@ function scoreRingHTML(score) {
     return `<div class="sr-wrap"><div class="sr-ring" style="background:conic-gradient(${col} ${pct}%, transparent ${pct}%)"><div class="sr-inner">${score}</div></div></div>`;
 }
 
+// ─── 回测驱动预测概率 (2026-08-01) ───
+// 数据源: /api/probabilities?tab=xxx (scoring/probability_estimator.py),
+// 按评分分档展示 次日上涨 / 低开高走 / 5日上涨 概率, 并标注样本量 n。
+var _probData = {};   // tab -> {overall, bands} | {status:'building'}
+var _probTab = '';    // 当前卡片页对应的 tab
+
+function _tabFromPage(pageKey) {
+    return {'scan-limit':'limit-up','scan-trend':'trend','scan-zhaban':'zhaban',
+            'scan-reversal':'reversal','scan-dtqiaoban':'dtqiaoban'}[pageKey] || '';
+}
+
+async function loadProbabilities(pageKey) {
+    const tab = _tabFromPage(pageKey);
+    if (!tab) return;
+    _probTab = tab;
+    if (_probData[tab] && _probData[tab].overall) return;  // 已就绪
+    try {
+        const resp = await fetch('/api/probabilities?tab=' + tab, { cache: 'no-store' });
+        const d = await resp.json();
+        _probData[tab] = d;
+        if (d.status === 'building') {
+            setTimeout(function() { loadProbabilities(pageKey); }, 20000);  // 轮询后台构建
+            return;
+        }
+        // 就绪后若当前页相同, 轻量重渲染让卡片立即带概率
+        if (_probTab === tab && typeof runCurrent === 'function') {
+            try { runCurrent(); } catch (e) {}
+        }
+    } catch (e) {}
+}
+
+function probBandFor(tab, score) {
+    const d = _probData[tab];
+    if (!d || !d.bands || !d.overall) return null;
+    const s = Number(score) || 0;
+    for (let i = 0; i < d.bands.length; i++) {
+        const parts = String(d.bands[i].band).split('-');
+        const lo = Number(parts[0]), hi = Number(parts[1]);
+        if (s >= lo && s < hi) return d.bands[i];
+    }
+    return d.overall;
+}
+
+function probStripHTML(tab, score) {
+    const d = _probData[tab];
+    if (!d || !d.overall) return '';
+    const b = probBandFor(tab, score) || d.overall;
+    if (!b || !b.n) return '';
+    const chipStyle = 'display:inline-flex;flex-direction:column;align-items:center;gap:1px;'
+        + 'padding:4px 10px;border-radius:6px;font-size:12px;line-height:1.15;min-width:74px';
+    const labelStyle = 'font-size:10px;color:var(--text-muted,#94a3b8)';
+    const nStyle = 'font-size:9px;color:rgba(148,163,184,0.75)';
+    const chips = [];
+    if (b.next_day_up != null) {
+        chips.push('<span class="prob-chip" style="' + chipStyle + ';background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.28)">'
+            + '<span style="' + labelStyle + '">次日上涨</span>'
+            + '<b style="color:#ef4444;font-size:14px">' + Number(b.next_day_up).toFixed(0) + '%</b>'
+            + '<i style="' + nStyle + '">n=' + b.n + '</i></span>');
+    }
+    if (b.low_open_high_walk != null && b.low_open_n > 0) {
+        chips.push('<span class="prob-chip" style="' + chipStyle + ';background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.28)">'
+            + '<span style="' + labelStyle + '">低开高走</span>'
+            + '<b style="color:#f59e0b;font-size:14px">' + Number(b.low_open_high_walk).toFixed(0) + '%</b>'
+            + '<i style="' + nStyle + '">n=' + b.low_open_n + '</i></span>');
+    }
+    if (b.week_up != null && b.week_n > 0) {
+        chips.push('<span class="prob-chip" style="' + chipStyle + ';background:rgba(52,211,153,0.10);border:1px solid rgba(52,211,153,0.28)">'
+            + '<span style="' + labelStyle + '">5日上涨</span>'
+            + '<b style="color:#34d399;font-size:14px">' + Number(b.week_up).toFixed(0) + '%</b>'
+            + '<i style="' + nStyle + '">n=' + b.week_n + '</i></span>');
+    }
+    if (!chips.length) return '';
+    return '<div class="prob-strip" style="display:flex;gap:8px;flex-wrap:wrap;padding:8px 0 2px;margin-top:6px;border-top:1px solid rgba(255,255,255,0.07)">'
+        + chips.join('') + '</div>';
+}
+
 // ─── 股票卡片渲染 ───
 function renderStockCards(stocks, data) {
     const parts = ['<div class="card-list">'];
@@ -46,16 +122,12 @@ function renderStockCards(stocks, data) {
         const msgn = s.net_money >= 0 ? '+' : '';
         const st = s.seal_time || '0000';
 
+        // 精简为 4 条关键因子 (2026-08-01: 可买性/本金/北向等恒为 5 分的信息量低, 移除)
         const bars = [
-            [s.buyability_score || 5, 10, '可买性'],
-            [s.stock_sentiment_score || 5, 10, '个股情绪'],
-            [s.tech_score, 10, '量价结构'],
-            [s.sector_mom, 12, '板块热度'],
             [s.money_score, 20, '资金驱动'],
-            [s.principal_score || 5, 10, '本金适配'],
-            [s.north_flow_score || 5, 10, '北向资金'],
-            [s.momentum_consistency != null ? s.momentum_consistency : 5, 10, '持续性'],
-            [s.pullback_depth != null ? s.pullback_depth : 5, 10, '回撤位置'],
+            [s.sector_mom, 12, '板块热度'],
+            [s.tech_score, 10, '量价结构'],
+            [s.stock_sentiment_score || 5, 10, '个股情绪'],
         ];
 
         let barsHTML = '';
@@ -100,9 +172,9 @@ function renderStockCards(stocks, data) {
             '</div>',
             '<div class="card-bars" style="flex:1.5;min-width:150px">' + barsHTML + '</div>',
             '</div>',
+            probStripHTML('limit-up', s.total_score),
             auctionHTML,
             tagsHTML,
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -222,7 +294,6 @@ function renderCommunityCards(items) {
             reasonHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             newsHtml,
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -322,7 +393,6 @@ function renderSectorCards(items) {
             auctionHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
             stockListHtml,
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -347,7 +417,6 @@ function renderMiniStockCards(items, pageKey) {
             chg !== undefined ? `<span class="card-score" style="color:${cv}">${fmtPct(chg)}</span>` : '',
             '</div>',
             item.seal_time ? `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">封板时间: ${item.seal_time.slice(0,2)}:${item.seal_time.slice(2)}</div>` : '',
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -429,9 +498,9 @@ function renderDtqiaobanCards(items) {
             infoHtml,
             barsHtml,
             '</div>',
+            probStripHTML('dtqiaoban', sc),
             adviceHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -532,7 +601,6 @@ function renderIndicatorsCards(items) {
             '</div></div>',
             infoHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -615,9 +683,9 @@ function renderTrendCards(items) {
             infoHtml,
             barsHtml,
             '</div>',
+            probStripHTML('trend', sc),
             adviceHtml,
             tagsHtml,
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -687,9 +755,9 @@ function renderReversalCards(items) {
             infoHtml,
             barsHtml,
             '</div>',
+            probStripHTML('reversal', sc),
             adviceHtml,
             '<div class="card-analysis">' + tags.map(function(t) { return '<span class="tag ' + t[1] + '">' + esc(t[0]) + '</span>'; }).join('') + '</div>',
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }
@@ -773,9 +841,9 @@ function renderZhabanCards(items) {
             infoHtml,
             barsHtml,
             '</div>',
+            probStripHTML('zhaban', sc),
             adviceHtml,
             tagsHtml,
-            '<div class="card-hint"><span>点击查看同花顺详情 →</span></div>',
             '</a>'
         );
     }

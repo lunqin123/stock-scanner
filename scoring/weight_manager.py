@@ -647,6 +647,20 @@ def _save_tab_weights(tab: str, weights: dict):
         print(f"  [_save_tab_weights] {tab} 写入失败: {e}", file=sys.stderr)
 
 
+def load_tab_weights(tab: str) -> dict:
+    """统一权重入口 (2026-08-01): 生产扫描与回测共用同一份权重。
+    - limit-up: plan_a 全局权重 load_weights() (排名实际由 score_new 覆盖)
+    - trend:    趋势专用权重 load_trend_weights()
+    - 其他:     各 tab 专用权重文件 _load_tab_weights()
+    历史专用函数 (load_weights/load_trend_weights/_load_tab_weights) 保持兼容。
+    """
+    if tab == 'limit-up':
+        return load_weights()
+    if tab == 'trend':
+        return load_trend_weights()
+    return _load_tab_weights(tab)
+
+
 def adjust_tab_weights_from_backtest(tab: str, records: list, lr: float = 0.1):
     if len(records) < 5:
         return _load_tab_weights(tab), "数据不足"

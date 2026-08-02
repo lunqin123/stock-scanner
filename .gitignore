@@ -23,3 +23,4 @@ test_score_stable.py
 test_score_direct.py
 _tmp*
 _tmp_*/
+_opt_*.json

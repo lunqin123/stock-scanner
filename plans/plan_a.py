@@ -106,8 +106,12 @@ def _gen_auction_check(row, idx, sector_mom, money_scores, filtered, pool=None):
 #  因子计算
 # ═══════════════════════════════════════════
 
-def compute_factors(filtered, fund_df, principal):
-    """计算所有因子得分。返回 dict[str, pd.Series]"""
+def compute_factors(filtered, fund_df, principal, today_str=None):
+    """计算所有因子得分。返回 dict[str, pd.Series]
+
+    today_str: YYYYMMDD 或 YYYY-MM-DD, 用于 alpha 等历史 K 线因子
+    (避免回测时用"今天"的数据产生未来偏差)。
+    """
     from scanner import (score_seal_strength, get_money_flow_scores,
                          get_sector_heat_scores, score_tech_form, score_buyability,
                          score_stock_sentiment, score_by_principal, get_sector_resonance)
@@ -153,7 +157,11 @@ def compute_factors(filtered, fund_df, principal):
     alpha = pd.Series(5.0, index=filtered.index)
     try:
         from scoring.scanner_factors import score_alpha_factors
-        alpha_scores = score_alpha_factors(scoring_base, today_fmt)
+        # 正确性修复 (2026-08-01): 原代码引用不存在的 scoring_base/today_fmt
+        # → NameError 被 except 吞掉 → alpha 永远 5.0 中性分 (死因子)。
+        # 现传入 filtered + today_str (score_alpha_factors 内部用 today_str 截断历史,
+        # 避免 lookahead)。
+        alpha_scores = score_alpha_factors(filtered, today_str)
         alpha = alpha_scores.reindex(filtered.index, fill_value=5.0)
     except Exception as e:
         print(f"  [Plan A] Alpha因子跳过: {e}", file=sys.stderr)
@@ -390,7 +398,7 @@ def score(inputs: dict, max_n: int = None, use_v2: bool = True) -> dict:
 
     # 1. 在归一化基准集上计算因子，再缩到最终 filtered 集
     print("  [PlanA] 计算9因子...", file=sys.stderr)
-    factors_full = compute_factors(scoring_base, fund_df, principal)
+    factors_full = compute_factors(scoring_base, fund_df, principal, today_str=today_str)
 
     # v2.0 新增: 持续性 + 回撤位置因子 (解决"评分高=追高陷阱"问题)
     # 无历史数据时降级到 5.0 (中性, 不影响总评分)

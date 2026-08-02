@@ -409,31 +409,37 @@ def run_t1_backtest(
 
     # ── 聚合辅助 ──
     def _aggregate(records, label):
+        """聚合统计 (2026-08-01 与 backtest_engine 对齐):
+        ev 全赢样本不再恒 0; cumulative_ret 改复利; max_dd 基于复利资金曲线。"""
         if not records:
             return None
-        rets = [r['net_ret_pct'] for r in records]
+        rets = [float(r['net_ret_pct']) for r in records]
         wins = [r for r in rets if r > 0]
         losses = [r for r in rets if r <= 0]
         n = len(rets)
         win_n = len(wins)
-        win_avg_v = np.mean(wins) if wins else 0
-        loss_avg_v = np.mean(losses) if losses else 0
-        cum = np.cumsum(rets)
-        peak = np.maximum.accumulate(cum)
+        win_avg_v = np.mean(wins) if wins else 0.0
+        loss_avg_v = np.mean(losses) if losses else 0.0
+        win_rate = win_n / n
+        ev = win_rate * win_avg_v + (1.0 - win_rate) * loss_avg_v
+        equity = np.cumprod(1.0 + np.asarray(rets) / 100.0)
+        compound_ret = (equity[-1] - 1.0) * 100.0
+        peak = np.maximum.accumulate(equity)
+        max_dd = float(((equity - peak) / peak).min() * 100.0)
         return {
             'trade_count': n,
             'win_count': win_n, 'loss_count': n - win_n,
-            'win_rate': round(win_n / n * 100, 1),
+            'win_rate': round(win_rate * 100, 1),
             'avg_ret': round(float(np.mean(rets)), 2),
             'win_avg': round(win_avg_v, 2),
             'loss_avg': round(loss_avg_v, 2),
             'total_pnl': round(sum(r['pnl'] for r in records), 0),
             'plr': round(abs(win_avg_v / loss_avg_v), 2) if loss_avg_v != 0 else 0,
-            'max_dd': round(float((cum - peak).min()), 2),
+            'max_dd': round(max_dd, 2),
             'best': round(max(rets), 2),
             'worst': round(min(rets), 2),
-            'ev': round(win_n/n*win_avg_v + (n-win_n)/n*loss_avg_v, 2) if losses else 0,
-            'cumulative_ret': round(float(cum[-1]), 2),
+            'ev': round(ev, 2),
+            'cumulative_ret': round(compound_ret, 2),
         }
 
     sum_open = _aggregate(records_open, '开盘买')
