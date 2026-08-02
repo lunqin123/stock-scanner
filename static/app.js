@@ -855,6 +855,8 @@ async function loadCardView(output, pageKey, apiUrl) {
                 .catch(function() {});
             // 加载当前tab的回测数据
             setTimeout(function() { loadBacktestTab(_btTab, _BT_DAYS, _btTopN, _btCapital); }, 100);
+            // 后台预取其余 tab 的回测结果(与当前参数一致, 切换时直接命中缓存秒开)
+            setTimeout(function() { _prefetchBacktestTabs(_btTab, _BT_DAYS, _btTopN, _btCapital); }, 500);
         }
     } catch (err) {
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
