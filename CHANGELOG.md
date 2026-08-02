@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.6.6 (2026-08-02)
+
+### 优化: 回测系统点开秒显(命中缓存直接展示)
+
+**背景**: 前端 `loadBacktestTab` 每次请求都带 `force=true`(v3.3i 为破旧缓存加的),
+导致每次点进回测页/切 tab 都全量重算, 后端本可 30ms 命中的结果缓存被完全绕开。
+
+**改动**:
+- `static/app.js: loadBacktestTab` 去掉 `force=true`, 默认走后端 daily 缓存:
+  同一天/同参数/同权重直接返回, 首次计算后即"提前算好"
+- `backtest/backtest_engine.py` 回测缓存 key 增加 `wh`(当前 tab 权重 hash):
+  调权/权重优化保存后 hash 变 → 缓存自动失效重算一次, 之后秒开
+  (取代"每次 force"方案, 保证权重变化后数据仍然新鲜)
+
+**验证**: 缓存 key 含 `wh=<权重hash>`、命中缓存直接返回、权重稳定时 key 稳定;
+`python -m pytest` 240 passed。
+
 ## v3.6.5 (2026-08-02)
 
 ### 修复: 缓存命中时进度条一闪而过/完全不显示

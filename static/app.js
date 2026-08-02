@@ -116,7 +116,9 @@ async function loadBacktestTab(tab, days, topN, capital) {
     try {
         var ctrl = new AbortController();
         var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital + '&force=true';
+        // 不走 force: 后端回测缓存 key 已含权重 hash(调权自动失效),
+        // 同一天/同参数/同权重直接命中缓存秒回; 首次计算后即"提前算好"
+        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
         if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
         var resp = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
         clearTimeout(tid);

@@ -290,6 +290,21 @@ def _trading_dates_in_range(start_str: str, end_str: str, max_count: int = 60):
 #  主入口: run_tab_backtest
 # ═══════════════════════════════════════════
 
+def _tab_weight_hash(tab: str) -> str:
+    """回测结果依赖当前 tab 权重: 调权后 hash 变化 → 缓存自动失效。
+    取代旧的"前端每次 force=true 破缓存"方案: 权重没变则命中缓存秒回。"""
+    import hashlib
+    import json as _json
+    try:
+        from weight_manager import load_tab_weights
+        w = load_tab_weights(tab)
+        return hashlib.md5(
+            _json.dumps(w, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        ).hexdigest()[:8]
+    except Exception:
+        return 'w0'
+
+
 def run_tab_backtest(
     tab: str,
     start_date: str = None,
@@ -381,7 +396,8 @@ def run_tab_backtest(
     # version=7 对应 2026-08-01 正确性修复 + 调权闭环 (构造价严格跳过 + 复利累计/
     # 资金曲线回撤 + 确定性成交 + 历史OHLCV数据源修复 + 显式窗口尊重 + 权重更新),
     # 旧 version=6 缓存自动失效。
-    # 改权重/评分逻辑时记得递增 version 保证旧缓存失效
+    # 改权重/评分逻辑时记得递增 version 保证旧缓存失效;
+    # wh=当前 tab 权重 hash — 日常调权(weight_scheduler)后无需升 version 即可自动失效
     strict = _BACKTEST_STRICT_OHLCV if strict_ohlcv is None else bool(strict_ohlcv)
     if use_cache:
         cache_key = make_key("bt", "result", version=7, tab=tab,
@@ -390,7 +406,8 @@ def run_tab_backtest(
                              use_v2="v2" if use_v2 else "nov2",
                              fill_slots="fs" if fill_slots else "nfs",
                              buy_time=buy_time,
-                             strict="s" if strict else "ns")
+                             strict="s" if strict else "ns",
+                             wh=_tab_weight_hash(tab))
         cached = _daily_get(cache_key)
         if cached and 'summary' in cached:
             return cached
