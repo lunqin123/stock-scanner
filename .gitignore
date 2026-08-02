@@ -24,3 +24,5 @@ test_score_direct.py
 _tmp*
 _tmp_*/
 _opt_*.json
+deploy.tgz
+deploy_files.txt
