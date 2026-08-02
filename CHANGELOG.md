@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.7.0 (2026-08-02, 分支 codex/trend-factors-pilot)
+
+### 试点: 趋势评分增加历史形态因子 (回测验证后只保留正 IC 因子)
+
+**背景**: 用户希望其他 tab 也像涨停一样"算得更多"。选定趋势做试点,
+在隔离分支上实现并做 20 天 A/B 回测验证。
+
+**改动**:
+- `scoring/scanner_scoring.py` 新增 5 个因子:
+  5日动量(hist_mom)、连阳天数(up_days)、距20日高点回撤(drawdown)、
+  均线多头排列(ma_align)、板块热度(sector_heat)
+  - 历史数据来自回测引擎 t1_ohlcv 持久缓存(腾讯源, 东财被封时可用),
+    按信号日截断, 无未来泄漏
+  - 修复 MA 回归因子原来看未来数据(用今天而非信号日)的未来函数
+- `scoring/weight_manager.py` 新因子进 TREND_DEFAULT_WEIGHTS 可调权
+- `backtest/backtest_engine.py` 交易记录捕获新因子列, 缓存 version 7→8
+- `core/cache.py` _CACHE_VER 16→17, `app.py` _RAW_CACHE_VERSION 12→13
+- `scripts/optimize_weights_walkforward.py` 修复权重注入打到根 shim
+  模块的问题(此前趋势调权验证可能一直用默认权重)
+
+**A/B 验证 (生产服务器, 20 天, use_cache=False)**:
+- TOP1 (面板默认): 基线 wr=47.1% ev=-1.18% cum=-22.0%
+  → 增强(hist_mom+drawdown) wr=52.9% ev=-0.32% cum=-10.4% (回撤不变)
+- TOP3: 基线 wr=40.9% ev=-2.40% → 增强 wr=38.6% ev=-2.92% (略降)
+- 因子 IC: 5日动量 +0.16 四次运行稳定为正; 回撤 +0.11(TOP1);
+  连阳 -0.27 / 均线排列 -0.30 / 板块热度 -0.23 为负(追高被套)
+- 结论: 只保留正 IC 的 hist_mom(权重10)+drawdown(权重3),
+  其余三个默认权重置 0 (代码保留可调); TOP1 提升、TOP3 微降,
+  样本较小(17~45笔), 上线后需实盘观察
+
 ## v3.6.9 (2026-08-02)
 
 ### 修复: 回测/涨停加载进度条"固定30%后突然完成"

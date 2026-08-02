@@ -81,7 +81,7 @@ def test_last_trading_date(monkeypatch):
 def test_daily_set_get(cache_dir):
     cache_mod.daily_set('key1', {'x': 1})
     assert cache_mod.daily_get('key1') == {'x': 1}
-    path = os.path.join(cache_dir, "daily_2026-08-01_key1_v16.json")
+    path = os.path.join(cache_dir, f"daily_2026-08-01_key1_v{cache_mod._CACHE_VER}.json")
     assert os.path.exists(path)
 
 

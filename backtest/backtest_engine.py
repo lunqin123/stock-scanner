@@ -396,6 +396,7 @@ def run_tab_backtest(
 
     # ── 整体结果缓存 ──
     # 注意: use_v2/fill_slots/strict_ohlcv 必须进 cache_key,
+    # version=8 对应 2026-08-02 趋势因子试点 (历史形态+板块热度, MA未来函数修复)
     # version=7 对应 2026-08-01 正确性修复 + 调权闭环 (构造价严格跳过 + 复利累计/
     # 资金曲线回撤 + 确定性成交 + 历史OHLCV数据源修复 + 显式窗口尊重 + 权重更新),
     # 旧 version=6 缓存自动失效。
@@ -403,7 +404,7 @@ def run_tab_backtest(
     # wh=当前 tab 权重 hash — 日常调权(weight_scheduler)后无需升 version 即可自动失效
     strict = _BACKTEST_STRICT_OHLCV if strict_ohlcv is None else bool(strict_ohlcv)
     if use_cache:
-        cache_key = make_key("bt", "result", version=7, tab=tab,
+        cache_key = make_key("bt", "result", version=8, tab=tab,
                              start=start, end=end, top_n=top_n,
                              min_score=int(min_score), sell_n=sell_n, capital=int(capital),
                              use_v2="v2" if use_v2 else "nov2",
@@ -706,6 +707,7 @@ def run_tab_backtest(
                     }
                     # 因子分列 (与 open-buy 分支一致, 供 IC 分析/调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
+                               'trend_hist_mom','trend_up_days','trend_drawdown','trend_ma_align','trend_sector_heat',
                                'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
                                'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector','zb_market_cap',
                                'dt_deal','dt_seal','dt_cont','dt_turnover','dt_time']:
@@ -715,6 +717,7 @@ def run_tab_backtest(
                     for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
                                'f_stock_sentiment','f_principal','f_north_flow',
                                'f_v2_mc','f_v2_pd',
+                               'f_hist_mom','f_up_days','f_drawdown','f_ma_align','f_sector_heat',
                                'f_seal_ratio','f_seal_time','f_turnover','f_consecutive',
                                'f_zhaban','f_market_cap','f_price']:
                         val = row.get(fk)
@@ -738,6 +741,7 @@ def run_tab_backtest(
                     }
                     # P4: 趋势因子分列(供调权)
                     for fk in ['trend_chg','trend_turnover','trend_amount','trend_vr','trend_nh','trend_ma',
+                               'trend_hist_mom','trend_up_days','trend_drawdown','trend_ma_align','trend_sector_heat',
                                'rev_turnover','rev_consecutive','rev_pullback','rev_sector',
                                'zb_seal','zb_money','zb_feature','zb_turnover','zb_sector','zb_market_cap',
                                'dt_deal','dt_seal','dt_cont','dt_turnover','dt_time']:
@@ -749,6 +753,7 @@ def run_tab_backtest(
                     for fk in ['f_alpha','f_seal','f_money','f_sector','f_tech','f_history',
                                'f_stock_sentiment','f_principal','f_north_flow',
                                'f_v2_mc','f_v2_pd',
+                               'f_hist_mom','f_up_days','f_drawdown','f_ma_align','f_sector_heat',
                                'f_seal_ratio','f_seal_time','f_turnover','f_consecutive',
                                'f_zhaban','f_market_cap','f_sector','f_price']:
                         val = row.get(fk)

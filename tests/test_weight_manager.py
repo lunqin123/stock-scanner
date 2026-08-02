@@ -242,7 +242,7 @@ def test_adjust_trend_weights_from_backtest(tmp_files):
         {'net_ret_pct': 5, 'trend_chg': 5, 'trend_turnover': 5, 'trend_amount': 5},
     ]
     w, msg = wm.adjust_trend_weights_from_backtest(records, lr=0.1)
-    assert w['chg'] == pytest.approx(5 + 0.1 * 5)
+    assert w['chg'] == pytest.approx(wm.TREND_DEFAULT_WEIGHTS['chg'] + 0.1 * 5)
     assert '↑' in msg
     w2, msg2 = wm.adjust_trend_weights_from_backtest([{}] * 3)
     assert '数据不足' in msg2

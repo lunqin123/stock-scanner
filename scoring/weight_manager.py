@@ -710,19 +710,29 @@ _TREND_WEIGHTS_FILE = os.path.join(
 #   amount IC=-0.147(反转), turnover IC=+0.077, nh IC=+0.056, sector IC=-0.059(移除)
 #   权重和=100, amount因子已反转(低量=高分)
 TREND_DEFAULT_WEIGHTS = {
-    'chg': 5,        # 涨幅分 — IC弱负相关(-0.035), 降权
-    'turnover': 30,  # 换手分 — 强正相关(+0.077), 3-8%甜蜜区提权
-    'amount': 20,    # 成交额分 — 反转方向(IC=-0.147), 低量=高分
-    'vol_ratio': 12, # 量比加分 — 正相关(+0.076), 量价确认
-    'new_high': 18,  # 新高加分 — 正相关(+0.056), 提权
-    'price': 5,      # 价格分 — 辅助因子
-    'ma_rev': 10,    # MA回归分 — 偏离均线过滤追高陷阱
+    'chg': 4,        # 涨幅分 — IC弱负相关(-0.035), 降权
+    'turnover': 24,  # 换手分 — 强正相关(+0.077), 3-8%甜蜜区提权
+    'amount': 16,    # 成交额分 — 反转方向(IC=-0.147), 低量=高分
+    'vol_ratio': 10, # 量比加分 — 正相关(+0.076), 量价确认
+    'new_high': 14,  # 新高加分 — 正相关(+0.056), 提权
+    'price': 4,      # 价格分 — 辅助因子
+    'ma_rev': 8,     # MA回归分 — 偏离均线过滤追高陷阱
+    # v3.7 试点因子 (2026-08-02, codex/trend-factors-pilot):
+    # 20天A/B验证: 5日动量 IC=+0.16 稳定为正, 回撤 IC=+0.11(TOP1) 保留;
+    # 连阳/均线排列/板块热度 IC 为负(追高被套), 默认权重置0, 代码保留可调
+    'hist_mom': 10,  # 5日累计涨幅 — 动量延续 (正IC)
+    'up_days': 0,    # 连阳天数 — 负IC, 默认关闭
+    'drawdown': 3,   # 距20日高点回撤 — 弱正IC, 小权重
+    'ma_align': 0,   # 均线多头排列 — 负IC, 默认关闭
+    'sector_heat': 0,  # 板块热度 — 负IC, 默认关闭
 }
 
 TREND_FACTOR_NAMES = {
     'chg': '涨幅', 'turnover': '换手', 'amount': '成交额',
     'vol_ratio': '量比', 'new_high': '新高', 'ma_rev': '均线',
     'price': '价格', 'sector': '板块',
+    'hist_mom': '5日动量', 'up_days': '连阳', 'drawdown': '回撤',
+    'ma_align': '均线排列', 'sector_heat': '板块热度',
 }
 
 

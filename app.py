@@ -135,7 +135,7 @@ def _make_cache_entry(stocks, sentiment_score, sentiment_level, date_str):
 
 # ─── 原始数据缓存（分离「拉取」和「运行」） ───
 
-_RAW_CACHE_VERSION = 12  # v11→v12: 2026-08-01 调权闭环 — trend/reversal 权重更新, 旧 raw_scan_data.pkl 评分无效
+_RAW_CACHE_VERSION = 13  # v12→v13: 2026-08-02 趋势因子试点 — 评分逻辑变化, 旧 raw_scan_data.pkl 无效
 # 旧 raw_scan_data.pkl 里的 factor scores 是 seal=9.2/money=0.4 等退化权重算的, 不 bump 重跑评分仍然用旧权重结果
 _RAW_CACHE_PATH = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
                                  "claude_stock_cache", "raw_scan_data.pkl")
@@ -3862,9 +3862,12 @@ _TAB_FACTOR_MAP = {
         'prefix': 'f_',
     },
     'trend': {
-        'factor_keys': ['chg', 'turnover', 'amount', 'vol_ratio', 'new_high'],
+        'factor_keys': ['chg', 'turnover', 'amount', 'vol_ratio', 'new_high',
+                        'hist_mom', 'up_days', 'drawdown', 'ma_align', 'sector_heat'],
         'factor_names': {'chg':'涨幅','turnover':'换手','amount':'成交额',
-                         'vol_ratio':'量比','new_high':'新高'},
+                         'vol_ratio':'量比','new_high':'新高',
+                         'hist_mom':'5日动量','up_days':'连阳','drawdown':'回撤',
+                         'ma_align':'均线排列','sector_heat':'板块热度'},
         'prefix': 'trend_',
     },
     'zhaban': {

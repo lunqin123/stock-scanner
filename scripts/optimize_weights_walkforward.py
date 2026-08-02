@@ -144,17 +144,23 @@ def _patch_target(tab, weights):
         sn.load_factor_weights = lambda: dict(weights)
     else:
         import scoring.weight_manager as wm
+        import sys as _sys
+        import weight_manager as _root_wm  # 根 shim: 代码实际从它导入
         _orig = wm.load_tab_weights
 
         def _patched(t):
             return dict(weights) if t == tab else _orig(t)
 
         wm.load_tab_weights = _patched
+        _root_wm.load_tab_weights = _patched
         # 兼容历史入口: 趋势走 load_trend_weights, 其它走 _load_tab_weights
         if tab == 'trend':
             wm.load_trend_weights = lambda: dict(weights)
+            _root_wm.load_trend_weights = lambda: dict(weights)
         else:
-            wm._load_tab_weights = lambda t: dict(weights) if t == tab else _orig(t)
+            _patched_private = lambda t: dict(weights) if t == tab else _orig(t)
+            wm._load_tab_weights = _patched_private
+            _root_wm._load_tab_weights = _patched_private
 
 
 def _fingerprint(weights, start=None, end=None, min_score=None):

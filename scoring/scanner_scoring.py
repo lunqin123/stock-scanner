@@ -405,7 +405,8 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     # v3.5b: IC驱动重构 — 基于30天回测因子IC数据:
     #   amount IC=-0.147(反转!), turnover IC=+0.077, nh IC=+0.056, sector IC=-0.059(移除)
     #   权重和=100, amount因子反转为"低量=高分"方向
-    defaults = {'chg': 5, 'turnover': 30, 'amount': 20, 'vol_ratio': 12, 'new_high': 18, 'price': 5, 'ma_rev': 10}
+    defaults = {'chg': 4, 'turnover': 24, 'amount': 16, 'vol_ratio': 10, 'new_high': 14, 'price': 4, 'ma_rev': 8,
+                'hist_mom': 10, 'up_days': 0, 'drawdown': 3, 'ma_align': 0, 'sector_heat': 0}
     w = dict(defaults)
     if weights:
         w.update({k: v for k, v in weights.items() if k in defaults})
@@ -496,14 +497,103 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     if w.get('ma_rev', 0) != 0:  # 权重非零才拉取MA数据(支持负权因子)
         code_col_ma = '代码' if '代码' in df.columns else df.columns[1]
         try:
-            f_ma = _calc_ma_regression(df, code_col=code_col_ma)
+            f_ma = _calc_ma_regression(df, code_col=code_col_ma, end_date=today_str)
         except Exception:
             pass
+
+    # ── v3.7 试点: 历史形态 + 板块热度因子 (按信号日截断, 无未来泄漏) ──
+    f_hist_mom = pd.Series(0.0, index=df.index)
+    f_up_days = pd.Series(0.0, index=df.index)
+    f_drawdown = pd.Series(0.0, index=df.index)
+    f_ma_align = pd.Series(0.0, index=df.index)
+    f_sector_heat = pd.Series(0.0, index=df.index)
+    need_hist = any(w.get(k, 0) != 0 for k in ('hist_mom', 'up_days', 'drawdown', 'ma_align'))
+    if need_hist and today_str is not None:
+        code_col_h = '代码' if '代码' in df.columns else df.columns[1]
+        hists = {}
+
+        def _fetch_hist(code):
+            return code, _load_daily_hist(code, today_str)
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            _futs = {ex.submit(_fetch_hist, str(c).strip().zfill(6)): str(c).strip().zfill(6)
+                     for c in df[code_col_h]}
+            for _f in as_completed(_futs):
+                _c, _h = _f.result()
+                if _h is not None and not _h.empty:
+                    hists[_c] = _h
+        for idx in df.index:
+            code = str(df.loc[idx, code_col_h]).strip().zfill(6)
+            h = hists.get(code)
+            if h is None or len(h) < 6:
+                # 无历史数据: 中性分, 不惩罚
+                f_hist_mom[idx] = 0.4
+                f_up_days[idx] = 0.5
+                f_drawdown[idx] = 0.5
+                f_ma_align[idx] = 0.5
+                continue
+            tail = h.tail(20)
+            ret5 = float(tail['pct_chg'].tail(5).sum())
+            if ret5 < 0:
+                f_hist_mom[idx] = 0.0
+            elif ret5 <= 5:
+                f_hist_mom[idx] = 0.4
+            elif ret5 <= 12:
+                f_hist_mom[idx] = 1.0
+            elif ret5 <= 20:
+                f_hist_mom[idx] = 0.6
+            else:
+                f_hist_mom[idx] = 0.2
+            ups = 0
+            for _pc in reversed(tail['pct_chg'].values):
+                if _pc > 0:
+                    ups += 1
+                else:
+                    break
+            f_up_days[idx] = min(1.0, ups / 4.0)
+            hi20 = float(tail['high'].max())
+            cur = float(tail['close'].iloc[-1])
+            dd = (hi20 - cur) / hi20 * 100.0 if hi20 > 0 else 0.0
+            if dd <= 3:
+                f_drawdown[idx] = 1.0
+            elif dd <= 8:
+                f_drawdown[idx] = 0.7
+            elif dd <= 15:
+                f_drawdown[idx] = 0.4
+            else:
+                f_drawdown[idx] = 0.1
+            _closes = tail['close'].astype(float)
+            _ma5 = _closes.tail(5).mean()
+            _ma10 = _closes.tail(10).mean()
+            _ma20 = _closes.tail(20).mean()
+            if _ma5 > _ma10 > _ma20:
+                f_ma_align[idx] = 1.0
+            elif _ma5 > _ma10:
+                f_ma_align[idx] = 0.5
+            else:
+                f_ma_align[idx] = 0.2
+    if w.get('sector_heat', 0) != 0:
+        ind_col_h = '所属行业' if '所属行业' in df.columns else (df.columns[15] if len(df.columns) > 15 else None)
+        if ind_col_h is not None:
+            _ind_counts = df[ind_col_h].astype(str).value_counts()
+            for idx in df.index:
+                _cnt = int(_ind_counts.get(str(df.loc[idx, ind_col_h]), 1))
+                if _cnt >= 5:
+                    f_sector_heat[idx] = 1.0
+                elif _cnt >= 3:
+                    f_sector_heat[idx] = 0.7
+                elif _cnt == 2:
+                    f_sector_heat[idx] = 0.4
+                else:
+                    f_sector_heat[idx] = 0.1
 
     total = (f_chg * w['chg'] + f_turnover * w['turnover'] +
              f_amount * w['amount'] + f_vr * w['vol_ratio'] +
              f_nh * w['new_high'] + f_price * w.get('price', 0) +
-             f_ma * w.get('ma_rev', 0))
+             f_ma * w.get('ma_rev', 0) +
+             f_hist_mom * w.get('hist_mom', 0) + f_up_days * w.get('up_days', 0) +
+             f_drawdown * w.get('drawdown', 0) + f_ma_align * w.get('ma_align', 0) +
+             f_sector_heat * w.get('sector_heat', 0))
 
     # 归一化到0-100 (除以当前权重绝对值总和, 支持负权)
     weight_sum = sum(abs(v) for v in w.values())
@@ -534,18 +624,74 @@ def _score_trend(df: pd.DataFrame, weights: dict = None, today_str: str = None) 
     df['trend_vr'] = (f_vr * w['vol_ratio']).round(1)
     df['trend_nh'] = (f_nh * w['new_high']).round(1)
     df['trend_ma'] = (f_ma * w.get('ma_rev', 0)).round(1)
+    df['trend_hist_mom'] = (f_hist_mom * w.get('hist_mom', 0)).round(1)
+    df['trend_up_days'] = (f_up_days * w.get('up_days', 0)).round(1)
+    df['trend_drawdown'] = (f_drawdown * w.get('drawdown', 0)).round(1)
+    df['trend_ma_align'] = (f_ma_align * w.get('ma_align', 0)).round(1)
+    df['trend_sector_heat'] = (f_sector_heat * w.get('sector_heat', 0)).round(1)
     df['f_v2_mc'] = mc_series.round(1)
     df['f_v2_pd'] = pd_series.round(1)
+    df['f_hist_mom'] = f_hist_mom.round(1)
+    df['f_up_days'] = f_up_days.round(1)
+    df['f_drawdown'] = f_drawdown.round(1)
+    df['f_ma_align'] = f_ma_align.round(1)
+    df['f_sector_heat'] = f_sector_heat.round(1)
 
     return df
 
 
-def _calc_ma_regression(df: pd.DataFrame, code_col: str = None) -> pd.Series:
+_TREND_HIST_CACHE = {}  # code -> {YYYYMMDD: ohlcv dict} (进程内缓存)
+
+
+def _load_daily_hist(code: str, need_date: str = None) -> pd.DataFrame:
+    """加载个股日线 (close/high/pct_chg), 按 need_date 截断, 无未来泄漏。
+
+    数据源: 回测引擎 t1_ohlcv 持久缓存 + 腾讯日线 (东财接口被封时可用),
+    由 _get_ohlcv_batch 批量取数并回填持久缓存; 进程内按 code 缓存。
+    """
+    nd = str(need_date or '').replace('-', '')
+    if len(nd) != 8:
+        return pd.DataFrame()
+    from t1_real_backtest import _get_ohlcv_batch, _trading_dates_in_range
+    start = (datetime.strptime(nd, '%Y%m%d') - timedelta(days=60)).strftime('%Y%m%d')
+    dates = _trading_dates_in_range(start, nd, max_count=26)
+    if not dates:
+        return pd.DataFrame()
+    ohlcv_map = _TREND_HIST_CACHE.get(code)
+    if ohlcv_map is None:
+        ohlcv_map = {}
+        _TREND_HIST_CACHE[code] = ohlcv_map
+    missing = [d for d in dates if d not in ohlcv_map]
+    if missing:
+        try:
+            for d, o in _get_ohlcv_batch(code, missing).items():
+                if isinstance(o, dict):
+                    ohlcv_map[d] = o
+        except Exception:
+            pass
+    rows = []
+    for d in dates:
+        o = ohlcv_map.get(d)
+        if isinstance(o, dict) and o.get('close') is not None:
+            rows.append({
+                'trade_date': d,
+                'close': float(o['close']),
+                'high': float(o.get('high') or o['close']),
+            })
+    if len(rows) < 6:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values('trade_date').reset_index(drop=True)
+    # 涨跌幅由收盘价计算 (缓存 change_pct 在腾讯源下不可靠)
+    df['pct_chg'] = (df['close'].pct_change().fillna(0.0) * 100.0).round(2)
+    return df
+def _calc_ma_regression(df: pd.DataFrame, code_col: str = None, end_date: str = None) -> pd.Series:
     """计算MA回归因子: 当前价 vs 5日/10日均线的偏离度
 
     偏离越小(贴近均线) → 分数越高 (趋势健康)
     偏离越大(远离均线) → 分数越低 (超买回调风险)
 
+    end_date: 信号日 (YYYY-MM-DD/YYYYMMDD), 按该日截断历史, 防止回测未来泄漏;
+              为 None 时用今天。
     返回 0-10 的 Series
     """
     if df is None or df.empty:
@@ -561,37 +707,27 @@ def _calc_ma_regression(df: pd.DataFrame, code_col: str = None) -> pd.Series:
     if not codes:
         return pd.Series(0.0, index=df.index)
 
-    today = datetime.now().strftime('%Y-%m-%d')
-    start = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
-    prices = {}
+    hists = {}
 
     def _fetch(code):
-        try:
-            hist = ak.stock_zh_a_hist(symbol=code, period='daily',
-                                       start_date=start, end_date=today,
-                                       adjust='qfq')
-            if hist is not None and not hist.empty and len(hist) >= 5:
-                closes = hist['收盘'].astype(float).values
-                return code, closes
-        except Exception:
-            pass
-        return code, None
+        return code, _load_daily_hist(code, end_date)
 
     with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(_fetch, c): c for c in codes}
         for f in as_completed(futures):
-            code, closes = f.result()
-            if closes is not None and len(closes) >= 5:
-                prices[code] = closes
+            code, h = f.result()
+            if h is not None and not h.empty:
+                hists[code] = h
 
     scores = pd.Series(0.0, index=df.index)
     for idx in df.index:
         code = str(df.loc[idx, code_col]).strip().zfill(6)
-        closes = prices.get(code)
-        if closes is None or len(closes) < 5:
+        h = hists.get(code)
+        if h is None or len(h) < 5:
             scores[idx] = 5.0  # 无数据给中性分
             continue
 
+        closes = h['close'].astype(float).values
         current = closes[-1]
         ma5 = closes[-5:].mean()
         ma10 = closes[-10:].mean() if len(closes) >= 10 else ma5
