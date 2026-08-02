@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.6.9 (2026-08-02)
+
+### 修复: 回测/涨停加载进度条"固定30%后突然完成"
+
+**背景**: 回测页与扫描 tab 切换走卡片 JSON 接口, 前端固定显示 30%,
+等待期间进度条不动, 完成后数据一次性出现, 没有循序渐进的真实进度感。
+
+**改动**:
+- `backtest/backtest_engine.py: run_tab_backtest` 增加 `progress_cb(done,total)`,
+  主循环每个交易日开始时回调一次
+- `app.py` 新增 `/api/bt/{tab}/full/stream` (SSE): 未命中缓存时按
+  "回测中 N/M 天" 推送真实 pct (14%→95%), 完成发完整面板数据; 缓存命中秒发 complete;
+  `/full` JSON 端点重构为共用 `_correct_bt_defaults`/`_bt_full_payload` 后保留兜底
+- `static/app.js`:
+  - `loadBacktestTab` 改走 SSE, 进度条与内容区同步显示 "回测中 N/M 天 (NN%)",
+    旧服务端无 stream 端点时自动回退 JSON; 超时放宽到 120s
+  - `callApi` 把涨停 tab 的 cards 请求改为流式端点, 切 tab/刷新显示真实进度
+- `templates/index.html` 资源版本升至 `20260802v5`
+
+**验证**: 打桩确认 20 天回测推送 20 次 progress (14→95 递增)、缓存命中只发
+complete; `python -m pytest` 240 passed。
+
 ## v3.6.8 (2026-08-02)
 
 ### 优化: 回测页打开时后台预取其余 tab + 手动部署修复线上版本

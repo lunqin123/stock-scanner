@@ -320,6 +320,7 @@ def run_tab_backtest(
     fill_slots: bool = _BACKTEST_FILL_SLOTS,
     buy_time: str = 'open',
     strict_ohlcv: bool = None,
+    progress_cb: callable = None,
 ):
     """多 tab 回测主入口 (v3.0: 支持尾盘买)
 
@@ -346,6 +347,8 @@ def run_tab_backtest(
         strict_ohlcv: True=买卖价任一来自 archive/stock_daily 构造数据则跳过该笔
                       (默认 _BACKTEST_STRICT_OHLCV=True, 只统计真实历史 OHLCV);
                       False=保留构造价交易 (标记 data_quality='constructed').
+        progress_cb: 可选回调 progress_cb(done, total), 主循环每个交易日开始时调用一次,
+                     供 SSE 端点推送真实进度 (缓存命中时不调用).
 
     Returns:
         dict: {summary, trades, top5, bottom5, skipped, comparison, generated_at, config}
@@ -428,7 +431,13 @@ def run_tab_backtest(
     records_open, skipped, unbuyable_count = [], [], 0
     total_candidates_scanned = 0  # 填仓模式候选扫描计数
 
-    for d_signal in trade_dates:
+    _total_days = len(trade_dates)
+    for _day_i, d_signal in enumerate(trade_dates, 1):
+        if progress_cb is not None:
+            try:
+                progress_cb(_day_i, _total_days)
+            except Exception:
+                pass
         if buy_time == 'close':
             # ── 策略B: T日尾盘买 → T+1 开盘卖 (隔夜超短线) ──
             d_sell = _next_trading_date(d_signal)

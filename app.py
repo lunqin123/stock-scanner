@@ -1862,13 +1862,23 @@ def api_backtest_tab_full(tab: str,
     if tab not in ALL_TABS:
         return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
 
-    # 2026-07-05: 强制纠正旧前端遗留的过时参数 (浏览器缓存旧 app.js 时 localStorage 迁移不执行)
-    # 旧默认: trend ms=85 sn=3, limit-up ms=80 sn=3, reversal ms=0 sn=3, dtqiaoban ms=75 sn=3
-    # 新默认: 见 TAB_DEFAULT_BT_PARAMS
+    min_score, sell_n, _corrected = _correct_bt_defaults(tab, min_score, sell_n)
+
+    try:
+        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
+                                        capital=capital, use_cache=not force, strategy=strategy)
+        return _bt_full_payload(tab, result, _corrected)
+    except Exception as e:
+        return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
+
+
+def _correct_bt_defaults(tab: str, min_score: float, sell_n: int):
+    """强制纠正旧前端遗留的过时参数 (浏览器缓存旧 app.js 时 localStorage 迁移不执行)。
+    旧默认: trend ms=85 sn=3, limit-up ms=80 sn=3, reversal ms=0 sn=3, dtqiaoban ms=75 sn=3;
+    新默认: 见 TAB_DEFAULT_BT_PARAMS。"""
     _corrected = False
     if tab in TAB_DEFAULT_BT_PARAMS:
         dft = TAB_DEFAULT_BT_PARAMS[tab]
-        # 检测旧默认值组合 (min_score 或 sell_n 与新默认不符, 且等于已知的旧默认)
         old_defaults = {
             'trend':      [{'min_score': 85, 'sell_n': 3}, {'min_score': 85, 'sell_n': 2}],
             'limit-up':   [{'min_score': 80, 'sell_n': 3}, {'min_score': 38, 'sell_n': 3}, {'min_score': 60, 'sell_n': 2}],
@@ -1882,59 +1892,109 @@ def api_backtest_tab_full(tab: str,
                 sell_n = dft['sell_n']
                 _corrected = True
                 break
+    return min_score, sell_n, _corrected
 
+
+def _bt_full_payload(tab: str, result: dict, corrected: bool = False) -> dict:
+    """组装 /api/bt/{tab}/full 统一返回体 (JSON 端点与 SSE 端点共用)"""
     try:
-        result = run_tab_backtest(tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
-                                        capital=capital, use_cache=not force, strategy=strategy)
+        from weight_manager import get_tab_weight_summary
+        weights = get_tab_weight_summary(tab)
+    except Exception:
+        weights = {'factors': [], 'history': []}
+    try:
+        from weight_manager import compute_tab_weights
+        all_tw = compute_tab_weights()
+        pos_weight = next((w['weight'] for w in all_tw if w['tab'] == tab), 0.5)
+        pos_label = next((w['label'] for w in all_tw if w['tab'] == tab), '')
+    except Exception:
+        pos_weight = 0.5
+        pos_label = ''
+    try:
+        from backtest_engine import _detect_available_days
+        days_avail = _detect_available_days(tab)
+    except Exception:
+        days_avail = 0
+    return {
+        "ok": True, "tab": tab,
+        "params_corrected": corrected,
+        "backtest": {
+            "summary": result.get("summary", {}),
+            "summary_30d": result.get("summary_30d", {}),
+            "trades": result.get("trades", []),
+            "top5": result.get("top5", []),
+            "bottom5": result.get("bottom5", []),
+            "comparison": result.get("comparison", {}),
+            "skipped": result.get("skipped", []),
+            "config": result.get("config", {}),
+        },
+        "weights": weights,
+        "tab_info": {
+            "days_available": days_avail,
+            "win_rate": result.get("summary", {}).get("win_rate", 0),
+            "ev": result.get("summary", {}).get("ev", 0),
+            "position_weight": pos_weight,
+            "position_label": pos_label,
+        },
+    }
 
-        # 因子权重 + 调权历史
-        try:
-            from weight_manager import get_tab_weight_summary
-            weights = get_tab_weight_summary(tab)
-        except Exception:
-            weights = {'factors': [], 'history': []}
 
-        # tab 仓位权重
-        try:
-            from weight_manager import compute_tab_weights
-            all_tw = compute_tab_weights()
-            pos_weight = next((w['weight'] for w in all_tw if w['tab'] == tab), 0.5)
-            pos_label = next((w['label'] for w in all_tw if w['tab'] == tab), '')
-        except Exception:
-            pos_weight = 0.5
-            pos_label = ''
+@app.get("/api/bt/{tab}/full/stream")
+async def api_backtest_tab_full_stream(tab: str,
+                                       days: int = Query(30, description="回测天数"),
+                                       top_n: int = Query(3, description="每日 TOP N"),
+                                       min_score: float = Query(50.0, description="最低评分门槛"),
+                                       sell_n: int = Query(3, description="卖出日偏移"),
+                                       capital: float = Query(30000, description="单笔本金"),
+                                       strategy: str = Query(None, description="(已忽略) 历史 preset 名")):
+    """P6: 单 tab 完整回测面板 — SSE 版本, 逐交易日上报真实进度。
+    缓存命中时秒发 complete; 未命中时按 回测中 N/M 天 推送 pct。"""
+    if tab not in ALL_TABS:
+        return JSONResponse({"ok": False, "error": f"未知 tab: {tab}"})
+    min_score, sell_n, _corrected = _correct_bt_defaults(tab, min_score, sell_n)
 
-        # 可用天数
-        try:
-            from backtest_engine import _detect_available_days
-            days_avail = _detect_available_days(tab)
-        except Exception:
-            days_avail = 0
+    async def _generate():
+        q = queue.Queue()
+        holder = {}
 
-        return {
-            "ok": True, "tab": tab,
-            "params_corrected": _corrected,  # 标记是否纠正了旧前端参数
-            "backtest": {
-                "summary": result.get("summary", {}),
-                "summary_30d": result.get("summary_30d", {}),
-                "trades": result.get("trades", []),
-                "top5": result.get("top5", []),
-                "bottom5": result.get("bottom5", []),
-                "comparison": result.get("comparison", {}),
-                "skipped": result.get("skipped", []),
-                "config": result.get("config", {}),
-            },
-            "weights": weights,
-            "tab_info": {
-                "days_available": days_avail,
-                "win_rate": result.get("summary", {}).get("win_rate", 0),
-                "ev": result.get("summary", {}).get("ev", 0),
-                "position_weight": pos_weight,
-                "position_label": pos_label,
-            },
-        }
-    except Exception as e:
-        return JSONResponse({"ok": False, "tab": tab, "error": str(e)[:200]})
+        def _run():
+            try:
+                result = run_tab_backtest(
+                    tab=tab, max_days=days, top_n=top_n, min_score=min_score, sell_n=sell_n,
+                    capital=capital, use_cache=True, strategy=strategy,
+                    progress_cb=lambda i, n: q.put((
+                        "progress", f"回测中 {i}/{n} 天", 10 + int(85 * i / n))))
+                holder['result'] = result
+            except Exception as e:
+                holder['error'] = str(e)
+            finally:
+                q.put(("done", None, None))
+
+        threading.Thread(target=_run, daemon=True).start()
+        while True:
+            try:
+                typ, val, pct = q.get(timeout=0.2)
+                if typ == "done":
+                    break
+                _msg = {'type': 'progress', 'text': val}
+                if pct is not None:
+                    _msg['pct'] = pct
+                yield f"data: {json.dumps(_msg)}\n\n"
+            except queue.Empty:
+                continue
+
+        if holder.get('error'):
+            yield f"data: {json.dumps({'type':'error','text':str(holder['error'])[:200]})}\n\n"
+            return
+        result = holder.get('result') or {}
+        if result.get('error'):
+            yield f"data: {json.dumps({'type':'error','text':str(result['error'])[:200]})}\n\n"
+            return
+        payload = _bt_full_payload(tab, result, _corrected)
+        yield f"data: {json.dumps({'type':'complete','data':payload})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/api/signal/tomorrow")

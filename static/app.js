@@ -115,30 +115,80 @@ async function loadBacktestTab(tab, days, topN, capital) {
     var myToken = _btLoadToken;
     try {
         var ctrl = new AbortController();
-        var tid = setTimeout(function() { ctrl.abort(); }, 60000);
-        // 不走 force: 后端回测缓存 key 已含权重 hash(调权自动失效),
-        // 同一天/同参数/同权重直接命中缓存秒回; 首次计算后即"提前算好"
-        var url = '/api/bt/' + tab + '/full?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
-        if (_btStrategy) url += '&strategy=' + encodeURIComponent(_btStrategy);
+        var tid = setTimeout(function() { ctrl.abort(); }, 120000);
+        // SSE 端点: 逐交易日推送真实进度 (回测中 N/M 天); 缓存命中时秒回
+        var qs = '?days=' + days + '&top_n=' + topN + '&min_score=' + _getMinScore(tab) + '&sell_n=' + _getSellN(tab) + '&capital=' + capital;
+        if (_btStrategy) qs += '&strategy=' + encodeURIComponent(_btStrategy);
+        var url = '/api/bt/' + tab + '/full/stream' + qs;
         var resp = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+        var ct = (resp.headers.get('content-type') || '');
+        var data;
+        if (ct.indexOf('text/event-stream') >= 0 && resp.body) {
+            data = await _readBtStream(resp, contentEl, myToken);
+        } else {
+            // 旧服务端无 stream 端点 → 回退 JSON
+            var resp2 = await fetch('/api/bt/' + tab + '/full' + qs, { signal: ctrl.signal, cache: 'no-store' });
+            data = await resp2.json();
+        }
         clearTimeout(tid);
-        var data = await resp.json();
         if (myToken !== _btLoadToken) return;
         if (!data) {
             contentEl.innerHTML = '<div class="error-text">回测加载失败 - 服务端返回空 (请刷新重试)</div>';
+            hideProgress();
             return;
         }
         contentEl.innerHTML = renderBacktestTabFull(data);
+        hideProgress();
     } catch (e) {
         if (myToken !== _btLoadToken) {
             // token 变了, 不报错(让新请求主导), 但至少 console 一下
             console.warn('[回测] 过期错误被丢弃:', tab, e.message);
             return;
         }
-        var msg = e.name === 'AbortError' ? '请求超时 (60s)' : e.message;
+        var msg = e.name === 'AbortError' ? '请求超时 (120s)' : e.message;
         console.error('[回测] 加载失败:', tab, 'msg=', msg, e);
         contentEl.innerHTML = '<div class="error-text">❌ 加载失败: ' + msg + '</div>';
+        hideProgress();
     }
+}
+
+// 读取回测 SSE 流: progress 事件实时更新进度条与内容区, complete 返回最终数据
+function _readBtStream(resp, contentEl, myToken) {
+    return new Promise(function(resolve, reject) {
+        var reader = resp.body.getReader();
+        var dec = new TextDecoder();
+        var buf = '';
+        function pump() {
+            reader.read().then(function(r) {
+                if (r.done) { reject(new Error('连接中断')); return; }
+                buf += dec.decode(r.value, {stream: true});
+                var parts = buf.split('\n\n');
+                buf = parts.pop() || '';
+                for (var i = 0; i < parts.length; i++) {
+                    var lines = parts[i].split('\n');
+                    for (var j = 0; j < lines.length; j++) {
+                        var line = lines[j];
+                        if (line.indexOf('data: ') !== 0) continue;
+                        var msg;
+                        try { msg = JSON.parse(line.slice(6)); } catch (_) { continue; }
+                        if (msg.type === 'progress') {
+                            var pctTxt = msg.pct != null ? ' (' + Math.round(msg.pct) + '%)' : '';
+                            if (contentEl) contentEl.innerHTML = '<div class="loading">⏳ ' + escapeHtml(msg.text || '回测中...') + pctTxt + '</div>';
+                            showProgress('回测计算中... ' + (msg.text || ''), msg.pct);
+                        } else if (msg.type === 'complete') {
+                            resolve(msg.data);
+                            return;
+                        } else if (msg.type === 'error') {
+                            reject(new Error(msg.text || '回测失败'));
+                            return;
+                        }
+                    }
+                }
+                pump();
+            }).catch(reject);
+        }
+        pump();
+    });
 }
 
 // 后台预加载所有回测 tab 的数据（当前 tab 跳过，其他静默缓存）
@@ -580,17 +630,23 @@ async function callApi(apiUrl, pageKey) {
     const info = PAGES[pageKey] || PAGES['scan-limit'];
     _lastUrl[pageKey] = apiUrl || '';
 
+    var url = apiUrl || info.api;
     // SSE 流式端点 → 走卡片流式加载（scan 板块统一）
-    var isStream = apiUrl && (apiUrl.indexOf('/run') >= 0 || apiUrl.indexOf('fetch-all') >= 0 || (apiUrl.indexOf('/scan/') >= 0 && apiUrl.indexOf('/stream') >= 0));
+    var isStream = url && (url.indexOf('/run') >= 0 || url.indexOf('fetch-all') >= 0 || (url.indexOf('/scan/') >= 0 && url.indexOf('/stream') >= 0));
+    // 涨停 tab 的卡片接口改为流式端点: 进度条显示真实进度 (cards JSON 仅作兼容兜底)
+    if (!isStream && pageKey === 'scan-limit' && url.indexOf('/cards') >= 0) {
+        url = url.replace('/cards', '/stream');
+        isStream = true;
+    }
 
     if (isStream) {
-        await loadCardViewStream(output, pageKey, apiUrl);
+        await loadCardViewStream(output, pageKey, url);
     } else if (info.textApi) {
-        await loadCardView(output, pageKey, apiUrl);
+        await loadCardView(output, pageKey, url);
     } else if (info.streamApi) {
-        await loadTextViewStream(output, pageKey, apiUrl);
+        await loadTextViewStream(output, pageKey, url);
     } else {
-        await loadTextView(output, pageKey, apiUrl);
+        await loadTextView(output, pageKey, url);
     }
     _setCachedPage(pageKey, output.innerHTML);
     // P1.2.2: 胜率徽章已与下方"系统状态"重复,禁用注入
