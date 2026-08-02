@@ -2344,6 +2344,8 @@ def api_market_regime():
 @app.get("/api/dashboard")
 def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
     """市场概览：情绪、涨停数、炸板/跌停汇总、热门板块"""
+    from concurrent.futures import ThreadPoolExecutor
+
     if not refresh:
         cached = daily_get("dashboard_latest")
         if cached:
@@ -2358,14 +2360,28 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             # 缓存不完整, fallthrough 走实时拉取
             print(f"  [dashboard] 缓存字段不全, 自动 refresh (缺: {[k for k in _REQUIRED_FIELDS if cached.get(k) is None]})", file=sys.stderr)
 
-    import akshare as ak
-    import pandas as pd
-    from scanner import fetch_limit_up_pool, detect_market_sentiment
-    from concurrent.futures import ThreadPoolExecutor
     today = _today_trading()
     result = {"ok": True, "date": today}
+    sections = _dashboard_sections(result, today)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = [ex.submit(fn) for _, fn in sections]
+        for f in futs:
+            try:
+                f.result()
+            except Exception:
+                pass  # 各区块内部已捕获异常
 
-    # 并行拉取 (2026-08-01): 各区块互相独立, 串行 ~43s → 并行 ~15-20s
+    result["fetched_at"] = _fetched_at()
+    daily_set("dashboard_latest", result, force=refresh)
+    return result
+
+
+def _dashboard_sections(result: dict, today: str):
+    """市场概览各区块拉取函数: 返回 [(key, callable)], 每个 callable 把结果写入 result。
+    供 JSON 端点(等全部完成)与 SSE 端点(逐块推送)共用。"""
+    import akshare as ak
+    from scanner import fetch_limit_up_pool, detect_market_sentiment
+
     def _sec_sentiment():
         try:
             score, level, detail = detect_market_sentiment(today)
@@ -2472,19 +2488,64 @@ def api_dashboard(refresh: bool = Query(False, description="强制刷新")):
             print(f"  [dashboard] 市场状态失败: {_e}", file=sys.stderr)
             result["regime"] = {"label": "未知", "position_advice": 1.0}
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = [ex.submit(fn) for fn in (
-            _sec_sentiment, _sec_limit_pool, _sec_zb_dt,
-            _sec_premarket, _sec_north, _sec_fundflow, _sec_regime)]
-        for f in futs:
-            try:
-                f.result()
-            except Exception:
-                pass  # 各区块内部已捕获异常
+    return [("sentiment", _sec_sentiment), ("limit", _sec_limit_pool), ("zb_dt", _sec_zb_dt),
+            ("premarket", _sec_premarket), ("north", _sec_north), ("fundflow", _sec_fundflow),
+            ("regime", _sec_regime)]
 
-    result["fetched_at"] = _fetched_at()
-    daily_set("dashboard_latest", result, force=refresh)
-    return result
+
+@app.get("/api/dashboard/stream")
+async def api_dashboard_stream(refresh: bool = Query(False, description="强制刷新")):
+    """市场概览 — SSE 逐区块推送: 哪个区块先拉完先显示, 不再等最慢的"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    _REQUIRED_FIELDS = ('sentiment', 'limit_up_count', 'hot_sectors',
+                        'premarket', 'north_flow', 'market_fund_flow', 'regime',
+                        'zhaban_count', 'dieting_count')
+
+    async def _generate():
+        if not refresh:
+            cached = daily_get("dashboard_latest")
+            if cached and all(cached.get(k) is not None for k in _REQUIRED_FIELDS):
+                yield f"data: {json.dumps({'type':'meta','date':cached.get('date', _today_trading())})}\n\n"
+                yield f"data: {json.dumps({'type':'update','data':cached})}\n\n"
+                await asyncio.sleep(0.03)
+                yield f"data: {json.dumps({'type':'complete','fetched_at':cached.get('fetched_at','')})}\n\n"
+                return
+
+        today = _today_trading()
+        result = {"ok": True, "date": today}
+        q = queue.Queue()
+
+        def _run():
+            sections = _dashboard_sections(result, today)
+            try:
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    futs = [ex.submit(fn) for _, fn in sections]
+                    for f in as_completed(futs):
+                        try:
+                            f.result()
+                        except Exception:
+                            pass  # 各区块内部已捕获异常
+                        q.put(("update", dict(result)))
+            finally:
+                q.put(("done", None))
+
+        threading.Thread(target=_run, daemon=True).start()
+        yield f"data: {json.dumps({'type':'meta','date':today})}\n\n"
+        while True:
+            try:
+                typ, val = q.get(timeout=0.2)
+                if typ == "done":
+                    break
+                yield f"data: {json.dumps({'type':'update','data':val})}\n\n"
+            except queue.Empty:
+                continue
+        result["fetched_at"] = _fetched_at()
+        daily_set("dashboard_latest", result, force=refresh)
+        yield f"data: {json.dumps({'type':'complete','fetched_at':result['fetched_at']})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 # ═══════════════════════════════════════════
