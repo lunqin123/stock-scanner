@@ -379,9 +379,15 @@ const PAGES = {
     'weights':      { title: '⚖️ 权重调整',   api: '/api/weights/tab/limit-up', textApi: '/api/weights/tab/limit-up' },
 };
 
+let _progressShownAt = 0;
+let _progressHideTimer = null;
+const _MIN_PROGRESS_MS = 400;  // 缓存命中/秒回时也保证进度条可见一瞬间，避免同一帧内 show→hide
+
 function showProgress(text, pct) {
     const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
     if (!bar || !fill || !txt) return;
+    clearTimeout(_progressHideTimer);
+    _progressShownAt = performance.now();
     bar.style.display = 'block';
     fill.style.width = (pct || 10) + '%';
     txt.textContent = (pct ? text + ' (' + Math.round(pct) + '%)' : text) || '加载中...';
@@ -389,7 +395,19 @@ function showProgress(text, pct) {
 
 function hideProgress() {
     const bar = _dom.progress();
-    if (bar) bar.style.display = 'none';
+    if (!bar) return;
+    const remain = _MIN_PROGRESS_MS - (performance.now() - _progressShownAt);
+    if (remain > 0) {
+        // 秒回(缓存命中)场景：补到 100% 并停留片刻再隐藏，让用户能看到进度条
+        const fill = _dom.fill(), txt = _dom.txt();
+        if (fill) fill.style.width = '100%';
+        if (txt && txt.textContent.indexOf('%') < 0 && txt.textContent.indexOf('❌') < 0) {
+            txt.textContent += ' (100%)';
+        }
+        _progressHideTimer = setTimeout(() => { bar.style.display = 'none'; }, remain);
+    } else {
+        bar.style.display = 'none';
+    }
 }
 
 function switchPage(page) {
@@ -656,10 +674,8 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
     const token = _pageToken;
     const info = PAGES[pageKey];
     const url = apiUrl || info.streamApi;
-    const bar = _dom.progress(), fill = _dom.fill(), txt = _dom.txt();
-    if (bar) bar.style.display = 'block';
-    if (fill) fill.style.width = '10%';
-    if (txt) txt.textContent = '正在加载...';
+    const fill = _dom.fill(), txt = _dom.txt();
+    showProgress('正在加载...', 10);
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 
     await new Promise(r => setTimeout(r, 40));
@@ -693,7 +709,7 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                             const newW = Math.min(90, curW + step);
                             if (fill) fill.style.width = newW + '%';
                         } else if (msg.type === 'complete') {
-                            if (bar) bar.style.display = 'none';
+                            hideProgress();
                             if (_pageToken !== token) return;
                             output.innerHTML = msg.output
                                 ? renderStyledText(msg.output)
@@ -701,7 +717,7 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                             _setCachedPage(pageKey, output.innerHTML);
                             return;
                         } else if (msg.type === 'error') {
-                            if (bar) bar.style.display = 'none';
+                            hideProgress();
                             if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
                             _setCachedPage(pageKey, output.innerHTML);
@@ -711,11 +727,11 @@ async function loadTextViewStream(output, pageKey, apiUrl) {
                 }
             }
         }
-        if (bar) bar.style.display = 'none';
+        hideProgress();
         if (_pageToken === token) output.innerHTML = '<span class="loading">连接中断</span>';
 
     } catch (err) {
-        if (bar) bar.style.display = 'none';
+        hideProgress();
         if (_pageToken === token) output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
 }
@@ -848,13 +864,10 @@ async function loadCardView(output, pageKey, apiUrl) {
 async function loadCardViewStream(output, pageKey, apiUrl) {
     const token = _pageToken;
     loadProbabilities(pageKey);  // 2026-08-01: 加载回测驱动预测概率
-    const bar = _dom.progress();
     const fill = _dom.fill();
     const txt = _dom.txt();
 
-    bar.style.display = 'block';
-    fill.style.width = '3%';
-    txt.textContent = '正在扫描...';
+    showProgress('正在扫描...', 3);
     output.innerHTML = '<span class="loading">⏳ 正在扫描...</span>';
 
     const STEP_PCT = { '第1步':5, '第2步':10, '第3步':40, '第4步':55, '第5步':65, '第6步':80, '第7步':90 };
@@ -941,7 +954,9 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                         } else if (msg.type === 'complete') {
                             // 先 flush 剩余进度更新
                             flushProgress();
-                            bar.style.display = 'none';
+                            fill.style.width = '100%';
+                            txt.textContent = '加载完成 (100%)';
+                            hideProgress();
 
                             // 使用 RAF 批量渲染卡片
                             const fet = msg.fetched_at || '';
@@ -971,7 +986,7 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                             return;
 
                         } else if (msg.type === 'error') {
-                            bar.style.display = 'none';
+                            hideProgress();
                             if (_pageToken !== token) return;
                             output.innerHTML = `<span class="error-text">❌ ${escapeHtml(msg.text)}</span>`;
                             _setCachedPage(pageKey, output.innerHTML);
@@ -981,11 +996,11 @@ async function loadCardViewStream(output, pageKey, apiUrl) {
                 }
             }
         }
-        bar.style.display = 'none';
+        hideProgress();
         output.innerHTML = '<span class="loading">连接中断</span>';
 
     } catch (err) {
-        bar.style.display = 'none';
+        hideProgress();
         output.innerHTML = `<span class="error-text">❌ 请求失败：</span> ${escapeHtml(err.message)}`;
     }
 }

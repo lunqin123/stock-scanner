@@ -2506,7 +2506,9 @@ async def api_scan_limit_up_stream(refresh: bool = Query(False, description="强
         if not refresh:
             cached = daily_get(_cache_key)
             if cached:
-                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...'})}\n\n"
+                yield f"data: {json.dumps({'type':'progress','text':'📦 使用缓存数据...','pct':90})}\n\n"
+                await asyncio.sleep(0.05)
+                yield f"data: {json.dumps({'type':'progress','text':'✅ 缓存数据就绪','pct':100})}\n\n"
                 await asyncio.sleep(0.03)
                 yield f"data: {json.dumps({'type':'complete','fetched_at':cached.get('fetched_at',''),'stocks':cached.get('stocks',[]),'sentiment':cached.get('sentiment',{}),'date':cached.get('date','')})}\n\n"
                 return
@@ -2710,77 +2712,83 @@ async def api_scan_limit_up_run(principal: float = Query(30000, description="本
     today = _today_trading()
     cache_key = f"limit_up_cards_{int(principal)}_{plan_name or 'default'}"
     async def _generate():
-        data = _scan_from_raw_cache(principal=principal, plan_name=plan_name)
-        if data is None or not data.get('stocks'):
-            # 无缓存→自动降级为全量拉取（后台线程 + 真实进度上报）
-            q = queue.Queue()
-            result_holder = {}
+        # 「运行」优先从 raw 缓存重跑评分；无原始缓存时同一线程内降级全量拉取
+        q = queue.Queue()
+        result_holder = {}
 
-            class _Capture:
-                """拦截 stderr 行推入队列 (无 pct 的文本进度)"""
-                def __init__(self):
-                    self._buf = ""
-                def write(self, text):
-                    self._buf += text
-                    while '\n' in self._buf:
-                        idx = self._buf.index('\n')
-                        line = self._buf[:idx].strip('\r').strip()
-                        self._buf = self._buf[idx+1:]
-                        if line and not line.startswith('\r'):
-                            q.put(("progress", line, None))
-                def flush(self):
-                    pass
-                def reconfigure(self, **kwargs):
-                    pass
+        class _Capture:
+            """拦截 stderr 行推入队列 (无 pct 的文本进度)"""
+            def __init__(self):
+                self._buf = ""
+            def write(self, text):
+                self._buf += text
+                while '\n' in self._buf:
+                    idx = self._buf.index('\n')
+                    line = self._buf[:idx].strip('\r').strip()
+                    self._buf = self._buf[idx+1:]
+                    if line and not line.startswith('\r'):
+                        q.put(("progress", line, None))
+            def flush(self):
+                pass
+            def reconfigure(self, **kwargs):
+                pass
 
-            def _run():
-                cap = _Capture()
-                old_stderr = sys.stderr
-                old_stdout = sys.stdout
-                try:
-                    sys.stderr = cap
-                    sys.stdout = cap
-                    _install_progress_sink(lambda text, pct: q.put(("progress", text, pct)))
+        def _run():
+            cap = _Capture()
+            old_stderr = sys.stderr
+            old_stdout = sys.stdout
+            try:
+                sys.stderr = cap
+                sys.stdout = cap
+                _install_progress_sink(lambda text, pct: q.put(("progress", text, pct)))
+                q.put(("progress", "📊 从缓存重跑评分...", 60))
+                data = _scan_from_raw_cache(principal=principal, plan_name=plan_name)
+                if data is not None and data.get('stocks'):
+                    result_holder['data'] = data
+                    result_holder['from_cache'] = True
+                else:
+                    # 无原始缓存 → 自动降级为全量拉取
+                    q.put(("progress", "📡 无缓存，自动拉取数据...", 60))
                     result_holder['data'] = _scan_limit_up_data(today, principal=principal, plan_name=plan_name)
-                except Exception as e:
-                    result_holder['error'] = str(e)
-                finally:
-                    _clear_progress_sink()
-                    sys.stderr = old_stderr
-                    sys.stdout = old_stdout
-                    q.put(("done", None, None))
+            except Exception as e:
+                result_holder['error'] = str(e)
+            finally:
+                _clear_progress_sink()
+                sys.stderr = old_stderr
+                sys.stdout = old_stdout
+                q.put(("done", None, None))
 
-            threading.Thread(target=_run, daemon=True).start()
-            yield f"data: {json.dumps({'type':'progress','text':'📡 无缓存，自动拉取数据...','pct':5})}\n\n"
-            while True:
-                try:
-                    typ, val, pct = q.get(timeout=0.2)
-                    if typ == "done":
-                        break
-                    _msg = {'type': 'progress', 'text': val}
-                    if pct is not None:
-                        _msg['pct'] = pct
-                    yield f"data: {json.dumps(_msg)}\n\n"
-                except queue.Empty:
-                    continue
+        threading.Thread(target=_run, daemon=True).start()
+        while True:
+            try:
+                typ, val, pct = q.get(timeout=0.2)
+                if typ == "done":
+                    break
+                _msg = {'type': 'progress', 'text': val}
+                if pct is not None:
+                    _msg['pct'] = pct
+                yield f"data: {json.dumps(_msg)}\n\n"
+            except queue.Empty:
+                continue
 
-            data = result_holder.get('data')
-            if data is None or not data.get('stocks'):
-                yield f"data: {json.dumps({'type':'error','text':result_holder.get('error') or '无涨停数据'})}\n\n"
-                return
-            fet = _fetched_at()
-            yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date']})}\n\n"
-            if data.get('sentiment_ok'):
-                from cache import daily_set
-                daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
-        else:
-            fet = _fetched_at()
-            yield f"data: {json.dumps({'type':'progress','text':'📊 从缓存重跑评分...','pct':80})}\n\n"
-            await asyncio.sleep(0.05)
-            yield f"data: {json.dumps({'type':'complete','fetched_at':fet,'stocks':data['stocks'],'sentiment':{'score':data['sentiment_score'],'level':data['sentiment_level']},'date':data['date'],'from_cache':True})}\n\n"
-            if data.get('sentiment_ok'):
-                from cache import daily_set
-                daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
+        data = result_holder.get('data')
+        if data is None or not data.get('stocks'):
+            yield f"data: {json.dumps({'type':'error','text':result_holder.get('error') or '无涨停数据'})}\n\n"
+            return
+        fet = _fetched_at()
+        complete_msg = {
+            'type': 'complete',
+            'fetched_at': fet,
+            'stocks': data['stocks'],
+            'sentiment': {'score': data['sentiment_score'], 'level': data['sentiment_level']},
+            'date': data['date'],
+        }
+        if result_holder.get('from_cache'):
+            complete_msg['from_cache'] = True
+        yield f"data: {json.dumps(complete_msg)}\n\n"
+        if data.get('sentiment_ok'):
+            from cache import daily_set
+            daily_set(cache_key, _make_cache_entry(data['stocks'], data['sentiment_score'], data['sentiment_level'], data['date']), force=True)
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 
